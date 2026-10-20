@@ -1,0 +1,30 @@
+{
+  "id": "com.ostap.asciibystar",
+  "name": "ASCII by Star",
+  "version": "1.1.0",
+  "main": "index.html",
+  "manifestVersion": 5,
+  "host": { "app": "PS", "minVersion": "25.0", "data": { "apiVersion": 2 } },
+  "requiredPermissions": {
+    "localFileSystem": "request",
+    "clipboard": "readAndWrite"
+  },
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "asciiByStarPanel",
+      "label": { "default": "ASCII by Star" },
+      "minimumSize": { "width": 260, "height": 300 },
+      "maximumSize": { "width": 2000, "height": 5000 },
+      "preferredDockedSize": { "width": 320, "height": 820 },
+      "preferredFloatingSize": { "width": 340, "height": 820 },
+      "icons": [
+        { "width": 23, "height": 23, "path": "icons/panel_dark.png", "scale": [1, 2], "theme": ["darkest", "dark", "medium"] },
+        { "width": 23, "height": 23, "path": "icons/panel_light.png", "scale": [1, 2], "theme": ["lightest", "light"] }
+      ]
+    }
+  ],
+  "icons": [
+    { "width": 48, "height": 48, "path": "icons/plugin.png", "scale": [1, 2], "theme": ["all"], "species": ["pluginList"] }
+  ]
+}

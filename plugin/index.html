@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; padding: 8px; color: var(--uxp-host-text-color); background: var(--uxp-host-background-color); font-size: 11px; }
+  .row { display: flex; flex-direction: row; align-items: center; margin-bottom: 5px; }
+  .row > * { margin-right: 4px; }
+  .row > *:last-child { margin-right: 0; }
+  .grow { flex: 1 1 auto; }
+  .label { width: 82px; flex: 0 0 82px; opacity: 0.85; }
+  .val { width: 38px; flex: 0 0 38px; text-align: right; font-variant-numeric: tabular-nums; opacity: 0.85; }
+  input[type=range] { flex: 1 1 auto; }
+  select, input[type=text], textarea { flex: 1 1 auto; font-size: 11px; }
+  textarea { height: 44px; font-family: Menlo, monospace; }
+  .section { border-top: 1px solid var(--uxp-host-border-color); padding-top: 6px; margin-top: 4px; }
+  .head { display: flex; flex-direction: row; align-items: center; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; font-size: 10px; padding: 3px 0 6px 0; cursor: pointer; }
+  .head .chev { margin-right: 6px; width: 10px; opacity: 0.7; }
+  .collapsed .body { display: none; }
+  #previewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; min-height: 120px; position: relative; }
+  #preview { width: 100%; }
+  #previewMsg { position: absolute; padding: 12px; text-align: center; color: #bbb; }
+  #status { font-size: 10px; opacity: 0.75; min-height: 14px; margin: 4px 0; }
+  .swatch { width: 28px; height: 20px; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; flex: 0 0 28px; cursor: pointer; }
+  .hex { width: 64px; flex: 0 0 64px; font-family: Menlo, monospace; }
+  button { font-size: 11px; }
+  .primary { font-weight: bold; }
+  .hidden { display: none; }
+  .editing { background: rgba(80, 160, 255, 0.15); border: 1px solid rgba(80, 160, 255, 0.5); border-radius: 4px; padding: 6px; margin-bottom: 6px; }
+  .hint { font-size: 10px; opacity: 0.65; margin: 0 0 6px 0; }
+  .btnrow button { flex: 1 1 auto; }
+</style>
+</head>
+<body>
+  <div id="previewWrap"><img id="preview" alt=""><div id="previewMsg">Open a document to begin</div></div>
+  <div class="row" style="margin-top:5px">
+    <select id="zoom" style="flex:0 0 90px">
+      <option value="fit" selected>Fit</option>
+      <option value="0.5">50%</option>
+      <option value="1">100%</option>
+      <option value="2">200%</option>
+    </select>
+    <select id="source" class="grow">
+      <option value="merged" selected>Source: Visible (merged)</option>
+      <option value="layer">Source: Active layer</option>
+    </select>
+    <button id="refresh" title="Re-read the document">↻</button>
+  </div>
+  <div id="status"></div>
+
+  <div id="editBox" class="editing hidden">
+    <div id="editLabel" style="margin-bottom:5px"></div>
+    <div class="row btnrow"><button id="updateLayer" class="primary">Update layer</button><button id="stopEdit">Done</button></div>
+  </div>
+
+  <div class="row btnrow">
+    <button id="apply" class="primary">Apply as new layer</button>
+  </div>
+
+  <div class="section" data-section="look">
+    <div class="head"><span class="chev">▾</span>Look</div>
+    <div class="body">
+      <div class="row"><select id="preset" class="grow"></select><button id="resetBtn" title="Reset to defaults">Reset</button></div>
+      <div class="row"><input type="text" id="presetName" placeholder="Preset name"><button id="savePreset">Save</button><button id="deletePreset" title="Delete selected user preset">Delete</button></div>
+      <div class="row btnrow"><button id="exportPresets">Export presets…</button><button id="importPresets">Import…</button></div>
+    </div>
+  </div>
+
+  <div class="section" data-section="chars">
+    <div class="head"><span class="chev">▾</span>Characters</div>
+    <div class="body">
+      <div class="row"><select id="charset" class="grow"></select></div>
+      <div class="row" id="customRow"><textarea id="customChars" placeholder="Type your characters, e.g.  .:-=+*#%@"></textarea></div>
+      <div class="row"><label><input type="checkbox" id="sortByDensity"> Sort by density</label></div>
+      <p class="hint" id="sortHint">Off = your order is the ramp, light → dark ink.</p>
+      <div id="sl-detail"></div>
+      <p class="hint">Shape matching picks characters that follow edges, not just brightness. Best with Blocks, Braille and Lines.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="grid">
+    <div class="head"><span class="chev">▾</span>Grid</div>
+    <div class="body">
+      <div class="row"><span class="label">Size by</span><select id="sizeMode" class="grow"><option value="px">Font size (px)</option><option value="cols">Number of columns</option></select></div>
+      <div id="sl-size"></div>
+      <div id="sl-columns"></div>
+      <div id="sl-spacingX"></div>
+      <div id="sl-lineHeight"></div>
+    </div>
+  </div>
+
+  <div class="section" data-section="tone">
+    <div class="head"><span class="chev">▾</span>Tone</div>
+    <div class="body">
+      <div id="sl-contrast"></div>
+      <div id="sl-brightness"></div>
+      <div id="sl-gamma"></div>
+      <div id="sl-threshold"></div>
+      <div class="row"><span class="label">Dither</span><select id="dither" class="grow">
+        <option value="none">None</option><option value="fs">Floyd–Steinberg</option><option value="atkinson">Atkinson</option><option value="bayer">Ordered (Bayer)</option>
+      </select></div>
+      <div class="row"><label><input type="checkbox" id="invert"> Invert</label></div>
+    </div>
+  </div>
+
+  <div class="section" data-section="color">
+    <div class="head"><span class="chev">▾</span>Colour</div>
+    <div class="body">
+      <div class="row"><span class="label">Text colour</span><select id="colorMode" class="grow">
+        <option value="mono">Single colour</option><option value="original">Original image colours</option><option value="gradient">Gradient map</option>
+      </select></div>
+      <div class="row" id="fgRow"><span class="label">Colour</span><div class="swatch" data-color="fg"></div><input type="text" class="hex" data-hex="fg"><button id="useFg" title="Use Photoshop foreground colour">FG</button></div>
+      <div id="gradRows">
+        <div class="row"><span class="label">Shadows</span><div class="swatch" data-color="g0"></div><input type="text" class="hex" data-hex="g0"></div>
+        <div class="row"><span class="label"><input type="checkbox" id="gradientMid"> Mid</span><div class="swatch" data-color="g1"></div><input type="text" class="hex" data-hex="g1"></div>
+        <div class="row"><span class="label">Highlights</span><div class="swatch" data-color="g2"></div><input type="text" class="hex" data-hex="g2"></div>
+      </div>
+      <div id="origRows"><div id="sl-saturation"></div><div id="sl-colorBoost"></div></div>
+      <div id="sl-glyphOpacity"></div>
+      <div class="row"><span class="label">Background</span><select id="bgMode" class="grow">
+        <option value="solid">Solid colour</option><option value="transparent">Transparent</option><option value="mosaic">Colour mosaic</option>
+      </select></div>
+      <div class="row" id="bgRow"><span class="label">Colour</span><div class="swatch" data-color="bg"></div><input type="text" class="hex" data-hex="bg"><button id="useBg" title="Use Photoshop background colour">BG</button></div>
+      <div id="sl-mosaicAmount"></div>
+    </div>
+  </div>
+
+  <div class="section" data-section="output">
+    <div class="head"><span class="chev">▾</span>Output &amp; export</div>
+    <div class="body">
+      <div class="row"><span class="label">Text font</span><select id="font" class="grow"></select></div>
+      <div class="row btnrow"><button id="textLayer">Create editable text layer</button></div>
+      <p class="hint">Editable text uses the single text colour. Use “Apply as new layer” for colour output.</p>
+      <div class="row btnrow"><button id="exportTxt">.txt</button><button id="exportHtml">.html</button><button id="exportSvg">.svg</button><button id="copyText">Copy</button></div>
+      <div class="row btnrow"><button id="loadLayer">Re-edit selected ASCII by Star layer</button></div>
+    </div>
+  </div>
+
+  <div class="section" data-section="batch">
+    <div class="head"><span class="chev">▾</span>Batch</div>
+    <div class="body">
+      <p class="hint">Applies the current settings to every image in a folder and saves PNGs to an output folder.</p>
+      <div class="row"><label><input type="checkbox" id="batchTxt"> Also save .txt</label></div>
+      <div class="row btnrow"><button id="batch">Batch process folder…</button></div>
+    </div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

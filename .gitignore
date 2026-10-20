@@ -1,0 +1,4 @@
+test/out/
+test/*.psjs
+tools/chars.json
+.DS_Store
