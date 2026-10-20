@@ -51,7 +51,7 @@ async function layerNames(doc) { return findLayers(doc.layers, () => true).map((
 for (const k of Object.keys(SLIDERS)) sliderEls[k] = { input: {}, val: {}, fmt: String, row: __el("row-" + k) };
 atlas = Engine.prepareAtlas(${meta}, __b64(${JSON.stringify(atlasB64)}));
 L("atlas", atlas.n, atlas.cellW, atlas.cellH);
-${process.env.TEST === "depth" ? DEPTH_STEPS : MAIN_STEPS}
+${process.env.TEST ? fs.readFileSync(path.join(__dirname, process.env.TEST + "_steps.js"), "utf8") : MAIN_STEPS}
 L("DONE"); await __flush();
 `;
 fs.writeFileSync(path.join(__dirname, "../test/gf_test.psjs"), out);

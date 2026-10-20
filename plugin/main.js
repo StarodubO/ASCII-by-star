@@ -203,14 +203,16 @@ async function makeImageData(buf, w, h, gray, profile) {
 }
 
 // Renders the grid into a layer, in horizontal strips to keep memory low. Inside executeAsModal.
-async function writeLayer(doc, layer, grid, cs) {
+// scale > 1 renders into a larger document (PNG export at 2x/4x); the grid stays in source-document units.
+async function writeLayer(doc, layer, grid, cs, scale) {
+  scale = scale || 1;
   const docW = doc.width, docH = doc.height, depth = bitDepth(doc), gray = isGray(doc);
   let profile = null;
   try { profile = doc.colorProfileName || null; } catch (e) { profile = null; }
   const stripH = Math.max(1, Math.min(docH, Math.floor(4e6 / docW)));
   for (let y0 = 0; y0 < docH; y0 += stripH) {
     const h = Math.min(stripH, docH - y0);
-    const rgba = Engine.render(grid, cs, atlas, S, { x: 0, y: y0, w: docW, h, scale: 1 });
+    const rgba = Engine.render(grid, cs, atlas, S, { x: 0, y: y0 / scale, w: docW, h, scale });
     const id = await makeImageData(convertOut(rgba, docW * h, depth, gray), docW, h, gray, profile);
     try { await imaging.putPixels({ documentID: doc.id, layerID: layer.id, imageData: id, replace: y0 === 0, targetBounds: { left: 0, top: y0 }, commandName: "ASCII by Star" }); }
     catch (e) { id.dispose(); throw new Error("Writing the layer failed (" + errMsg(e) + ")."); }
@@ -391,6 +393,40 @@ async function exportFile(kind) {
     await file.write(text, { format: formats.utf8 });
     status(`Saved ${file.name}`);
   } catch (e) { console.error(e); status(errMsg(e), true); }
+}
+
+async function exportPNG() {
+  try {
+    const { doc, cs, geo, grid } = await outputGrid();
+    const scale = Number($("pngScale").value) || 1;
+    const W = Math.round(geo.docW * scale), H = Math.round(geo.docH * scale);
+    if (Math.max(W, H) > 30000) return status(`${W} × ${H} px is too large for Photoshop. Pick a smaller PNG scale.`, true);
+    const file = await lfs.getFileForSaving(`${docBaseName(doc)}-ascii${scale > 1 ? "@" + scale + "x" : ""}.png`, { types: ["png"] });
+    if (!file) return;
+    busy = true;
+    status(`Saving ${W} × ${H} PNG…`);
+    const t0 = Date.now();
+    await core.executeAsModal(async () => {
+      // render into a temporary transparent document, save it as PNG, then close it
+      let tmp, layer;
+      try {
+        tmp = await app.documents.add({ width: W, height: H, resolution: (doc.resolution || 72) * scale, mode: "RGBColorMode", fill: "transparent", name: "ASCII by Star export" });
+        layer = tmp.layers[0];
+      } catch (e) {
+        tmp = tmp || (await app.documents.add({ width: W, height: H, resolution: (doc.resolution || 72) * scale, mode: "RGBColorMode", fill: "white", name: "ASCII by Star export" }));
+        const bgLayer = tmp.layers[0];
+        layer = await createLayer(tmp, "ASCII by Star");
+        try { bgLayer.visible = false; } catch (e2) { /* background stays */ }
+      }
+      try {
+        await writeLayer(tmp, layer, grid, cs, scale);
+        await tmp.saveAs.png(file, { compression: 6 }, true);
+      } finally {
+        await tmp.closeWithoutSaving();
+      }
+    }, { commandName: "ASCII by Star PNG export" });
+    status(`Saved ${file.name} · ${W} × ${H} px · ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  } catch (e) { console.error(e); status(errMsg(e), true); } finally { busy = false; }
 }
 
 async function copyText() {
@@ -653,6 +689,9 @@ function buildUI() {
   $("exportHtml").addEventListener("click", () => exportFile("html"));
   $("exportSvg").addEventListener("click", () => exportFile("svg"));
   $("copyText").addEventListener("click", copyText);
+  $("exportPng").addEventListener("click", exportPNG);
+  $("pngScale").addEventListener("change", () => saveJSON("gf:pngScale", $("pngScale").value));
+  setSelect($("pngScale"), loadJSON("gf:pngScale", "1"));
   $("batch").addEventListener("click", runBatch);
 
   $("preset").addEventListener("change", () => applyPreset($("preset").value));

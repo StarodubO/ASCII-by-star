@@ -24,7 +24,7 @@ Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, includi
 - Colour modes: single colour, original image colours (saturation and lift darks), or a 2–3 stop gradient map.
 - Backgrounds: solid, transparent, or a colour mosaic behind the characters.
 - Size the grid by font size (px) or by number of columns.
-- Output: a new pixel layer, an editable text layer (any monospace font), .txt, coloured .html or vector .svg files, or copy to the clipboard.
+- Output: a new pixel layer, an editable text layer (any monospace font), **PNG at 1×, 2× or 4×** (includes glitch signal effects and keeps transparency), .txt, coloured .html or vector .svg files, or copy to the clipboard.
 - Re-edit: select an ASCII by Star layer, click **Re-edit selected…**, adjust, then click **Update layer**.
 - Presets: 21 built-in looks, plus your own presets, which you can import and export.
 - Batch: process a folder of images to PNG (and optionally .txt).
