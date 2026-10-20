@@ -28,7 +28,8 @@ Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, includi
 - Re-edit: select an ASCII by Star layer, click **Re-edit selected…**, adjust, then click **Update layer**.
 - Presets: 21 built-in looks, plus your own presets, which you can import and export.
 - Batch: process a folder of images to PNG (and optionally .txt).
-- Preview zoom (up to 800%): pinch or ⌥/⌘ + scroll on Mac, mouse wheel on Windows, or the Fit, 1:1, − and + buttons. Pan by scrolling, dragging or using the scrollbars. Double-click switches between Fit and 100%.
+- **Live preview window**: a separate document that updates as you change settings. Zoom and pan it with Photoshop's own tools (pinch, Z/H, scroll). The panel shows a quick Fit thumbnail.
+- **Apply quality**: 1× pixel layer (re-editable in place), or a 2×/4× smart object that holds a higher-resolution render, so it stays sharp when scaled up, upsized (Image Size) or exported.
 
 ## Making changes
 | What | Where |

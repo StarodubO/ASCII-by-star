@@ -17,8 +17,7 @@ let S = freshSettings(loadJSON("gf:last", null));
 let src = null; // cached analysis pixels {docId, layerId, scale, docW, docH, w, h, data, stale}
 let busy = false;
 let editing = null; // {docId, layerId, tag, name, sourceLayerId}
-let focus = { x: 0.5, y: 0.5 }; // centre of the zoomed preview, as a fraction of the document
-let zoom = null; // preview scale in output px per document px; null = fit
+let live = null; // live preview window {docId, layerId, sourceDocId, scale}
 let gridCache = { key: null, src: null, grid: null, cs: null, geo: null };
 let userPresets = loadJSON("gf:userPresets", []);
 
@@ -165,8 +164,8 @@ function neededScale(doc) {
   return Math.min(1, Math.max(baseScale(doc), (geo.cols * 4.5) / doc.width, (geo.rows * 4.5) / doc.height));
 }
 
-async function ensureSource(minScale) {
-  const doc = activeDoc();
+async function ensureSource(minScale, forDoc) {
+  const doc = forDoc || sourceDoc();
   if (!doc) { src = null; return false; }
   checkDoc(doc);
   const scale = Math.max(baseScale(doc), Math.min(1, minScale || 0));
@@ -204,7 +203,7 @@ async function makeImageData(buf, w, h, gray, profile) {
 
 // Renders the grid into a layer, in horizontal strips to keep memory low. Inside executeAsModal.
 // scale > 1 renders into a larger document (PNG export at 2x/4x); the grid stays in source-document units.
-async function writeLayer(doc, layer, grid, cs, scale) {
+async function writeLayer(doc, layer, grid, cs, scale, markCorners) {
   scale = scale || 1;
   const docW = doc.width, docH = doc.height, depth = bitDepth(doc), gray = isGray(doc);
   let profile = null;
@@ -213,6 +212,10 @@ async function writeLayer(doc, layer, grid, cs, scale) {
   for (let y0 = 0; y0 < docH; y0 += stripH) {
     const h = Math.min(stripH, docH - y0);
     const rgba = Engine.render(grid, cs, atlas, S, { x: 0, y: y0 / scale, w: docW, h, scale });
+    if (markCorners) { // invisible 1/255 alpha pixels pin the layer bounds to the full canvas
+      if (y0 === 0) rgba[3] = Math.max(rgba[3], 1);
+      if (y0 + h >= docH) rgba[rgba.length - 1] = Math.max(rgba[rgba.length - 1], 1);
+    }
     const id = await makeImageData(convertOut(rgba, docW * h, depth, gray), docW, h, gray, profile);
     try { await imaging.putPixels({ documentID: doc.id, layerID: layer.id, imageData: id, replace: y0 === 0, targetBounds: { left: 0, top: y0 }, commandName: "ASCII by Star" }); }
     catch (e) { id.dispose(); throw new Error("Writing the layer failed (" + errMsg(e) + ")."); }
@@ -242,84 +245,104 @@ async function runPreview() {
 function showPreviewMsg(t) { const m = $("previewMsg"); m.textContent = t; m.classList.remove("hidden"); $("preview").classList.add("hidden"); }
 
 function fitScale() { return src ? Math.min(PREVIEW_MAX / src.docW, PREVIEW_MAX / src.docH) : 1; }
-// The preview box keeps the fitted size; zooming changes which part of the document it shows.
-function currentView() {
-  const docW = src.docW, docH = src.docH, fit = fitScale();
-  const w = Math.max(1, Math.round(docW * fit)), h = Math.max(1, Math.round(docH * fit));
-  if (zoom === null || zoom <= fit * 1.0001) { zoom = null; return { x: 0, y: 0, w, h, scale: fit }; }
-  const vw = w / zoom, vh = h / zoom;
-  const x = Math.max(0, Math.min(docW - vw, focus.x * docW - vw / 2)), y = Math.max(0, Math.min(docH - vh, focus.y * docH - vh / 2));
-  focus = { x: (x + vw / 2) / docW, y: (y + vh / 2) / docH };
-  return { x, y, w, h, scale: zoom };
-}
-function updateZoomLabel() { $("zoomLabel").textContent = zoom === null ? "Fit" : Math.round(zoom * 100) + "%"; }
-// The zoomed preview is a natively scrollable viewport (scrolling works reliably in UXP panels, wheel events may not).
-// A spacer sized like the zoomed image provides the scroll range; only the visible part is rendered and the
-// image is positioned where that part sits inside the spacer.
-const IS_WIN = (() => { try { return require("os").platform() === "win32"; } catch (e) { return false; } })();
-let box = { w: 300, h: 225 }; // CSS size of the visible preview area
-let layoutKey = "", ignoreScrollUntil = 0, lastScroll = { l: -1, t: -1 };
-const zoomRatio = () => (zoom === null ? 1 : zoom / fitScale());
+function docById(id) { try { const ds = app.documents; for (let i = 0; i < ds.length; i++) if (ds[i].id === id) return ds[i]; } catch (e) { /* none open */ } return null; }
+// The document being converted: the active one, unless the live preview window is in front.
+function sourceDoc() { const a = activeDoc(); if (live && a && a.id === live.docId) return docById(live.sourceDocId); return a; }
+const qualityScale = () => Number($("quality").value) || 1;
 
-function layoutPreview(forceScroll) {
-  if (!src) return;
-  const wrap = $("previewWrap"), pv = $("pvScroll"), sp = $("pvSpace");
-  const wrapW = wrap.clientWidth || wrap.getBoundingClientRect().width || 300;
-  const maxH = Math.max(70, (window.innerHeight || 600) * 0.38);
-  const fit = fitScale(), fw = src.docW * fit, fh = src.docH * fit;
-  let bw = Math.max(40, wrapW - 2), bh = (bw * fh) / fw;
-  if (bh > maxH) { bh = maxH; bw = (bh * fw) / fh; }
-  box = { w: Math.round(bw), h: Math.round(bh) };
-  const z = zoomRatio(), key = `${box.w}x${box.h}@${z.toFixed(4)}`;
-  if (key === layoutKey && !forceScroll) return;
-  layoutKey = key;
-  pv.style.width = box.w + "px"; pv.style.height = box.h + "px";
-  sp.style.width = Math.round(box.w * z) + "px"; sp.style.height = Math.round(box.h * z) + "px";
-  const apply = () => {
-    ignoreScrollUntil = Date.now() + 80;
-    pv.scrollLeft = Math.max(0, focus.x * box.w * z - box.w / 2);
-    pv.scrollTop = Math.max(0, focus.y * box.h * z - box.h / 2);
-    lastScroll = { l: pv.scrollLeft, t: pv.scrollTop };
-  };
-  apply(); setTimeout(apply, 0); // again after layout has caught up with the new spacer size
+// Temporary transparent document (live preview, PNG export, smart-object render). Inside executeAsModal.
+async function createScratchDoc(W, H, res, name) {
+  let d = null;
+  try {
+    d = await app.documents.add({ width: W, height: H, resolution: res, mode: "RGBColorMode", fill: "transparent", name });
+    return { doc: d, layer: d.layers[0] };
+  } catch (e) {
+    d = d || (await app.documents.add({ width: W, height: H, resolution: res, mode: "RGBColorMode", fill: "white", name }));
+    const bgLayer = d.layers[0], layer = await createLayer(d, "ASCII by Star");
+    try { bgLayer.visible = false; } catch (e2) { /* background stays */ }
+    return { doc: d, layer };
+  }
 }
-function focusFromScroll() {
-  const pv = $("pvScroll"), z = zoomRatio();
-  lastScroll = { l: pv.scrollLeft, t: pv.scrollTop };
-  focus = { x: (pv.scrollLeft + box.w / 2) / (box.w * z), y: (pv.scrollTop + box.h / 2) / (box.h * z) };
+
+// ---------- live preview window ----------
+// A separate document that mirrors the output at full (or 2x/4x) resolution, so it can be inspected
+// with Photoshop's own zoom and pan.
+let liveTimer = null, liveRunning = false, liveAgain = false;
+function updateLiveBtn() {
+  const b = $("liveBtn");
+  b.textContent = live ? "Close live preview window" : "Open live preview window";
+  b.classList.toggle("primary", !!live);
 }
-function checkScroll() { // works whether or not UXP fires "scroll" events
-  if (zoom === null || Date.now() < ignoreScrollUntil || !src) return;
-  const pv = $("pvScroll");
-  if (pv.scrollLeft !== lastScroll.l || pv.scrollTop !== lastScroll.t) { focusFromScroll(); schedulePreview(0); }
+async function toggleLive() {
+  if (live) {
+    const d = docById(live.docId); live = null; updateLiveBtn();
+    if (d) { try { await core.executeAsModal(() => d.closeWithoutSaving(), { commandName: "Close live preview" }); } catch (e) { /* user can close it */ } }
+    return;
+  }
+  const doc = sourceDoc();
+  try { checkDoc(doc); } catch (e) { return status(e.message, true); }
+  const scale = Math.max(1, Math.min(qualityScale(), Math.floor(8000 / Math.max(doc.width, doc.height)) || 1));
+  busy = true;
+  try {
+    await core.executeAsModal(async () => {
+      const { doc: d, layer } = await createScratchDoc(Math.round(doc.width * scale), Math.round(doc.height * scale), (doc.resolution || 72) * scale, `ASCII by Star live — ${docBaseName(doc)}`);
+      live = { docId: d.id, layerId: layer.id, sourceDocId: doc.id, scale };
+    }, { commandName: "ASCII by Star live preview" });
+  } catch (e) { console.error(e); live = null; status(errMsg(e), true); } finally { busy = false; }
+  updateLiveBtn();
+  if (live) { status(`Live preview open at ${live.scale}× — use Photoshop's zoom (pinch, Z, ⌘+/−) and pan (scroll, H) there.`); scheduleLive(0); }
 }
-function zoomAt(newZoom, fx, fy) {
-  if (!src) return;
-  const v = currentView(), fit = fitScale();
-  const px = v.x + (fx * v.w) / v.scale, py = v.y + (fy * v.h) / v.scale; // document point under the cursor stays put
-  newZoom = Math.min(8, Math.max(fit, newZoom));
-  const vw = v.w / newZoom, vh = v.h / newZoom;
-  focus = { x: (px - fx * vw + vw / 2) / src.docW, y: (py - fy * vh + vh / 2) / src.docH };
-  zoom = newZoom <= fit * 1.0001 ? null : newZoom;
-  currentView(); // clamps focus
-  updateZoomLabel();
-  layoutPreview(true);
-  schedulePreview(0);
+function scheduleLive(delay) { if (!live) return; clearTimeout(liveTimer); liveTimer = setTimeout(runLive, delay === undefined ? 300 : delay); }
+async function runLive() {
+  if (!live) return;
+  if (liveRunning) { liveAgain = true; return; }
+  liveRunning = true;
+  try {
+    const d = docById(live.docId), sd = docById(live.sourceDocId);
+    if (!d || !sd) { live = null; updateLiveBtn(); return; }
+    await ensureSource(neededScale(sd), sd);
+    const cs = currentCharset(), geo = Engine.computeGeometry(src.docW, src.docH, S, atlas), grid = Engine.computeGrid(src, geo, S, cs);
+    const lv = live;
+    busy = true;
+    await core.executeAsModal(async (ctx) => {
+      let sid = null;
+      try { sid = await ctx.hostControl.suspendHistory({ documentID: d.id, name: "Live update" }); } catch (e) { sid = null; }
+      try { await writeLayer(d, findLayerById(d, lv.layerId) || d.layers[0], grid, cs, lv.scale); }
+      finally { if (sid !== null) await ctx.hostControl.resumeHistory(sid, true); }
+    }, { commandName: "ASCII by Star live preview" });
+  } catch (e) {
+    console.error(e);
+    if (/busy|modal/i.test(errMsg(e))) liveAgain = true; else status("Live preview: " + errMsg(e), true);
+  } finally { busy = false; liveRunning = false; }
+  if (liveAgain) { liveAgain = false; scheduleLive(400); }
 }
-function panBy(dx, dy) {
-  if (!src || zoom === null) return;
-  const pv = $("pvScroll"), l = pv.scrollLeft, t = pv.scrollTop;
-  pv.scrollLeft = l - dx; pv.scrollTop = t - dy;
-  if (pv.scrollLeft !== l || pv.scrollTop !== t) focusFromScroll();
-  else { const z = zoomRatio(); focus = { x: focus.x - dx / (box.w * z), y: focus.y - dy / (box.h * z) }; currentView(); layoutPreview(true); }
-  schedulePreview(0);
+
+// Renders at `scale`x into a temporary document, converts it to a smart object, brings it into `doc`
+// and scales it back to document size, so the smart object keeps the extra resolution. Inside executeAsModal.
+async function placeSmartObject(doc, grid, cs, scale, name) {
+  const W = Math.round(doc.width * scale), H = Math.round(doc.height * scale);
+  const { doc: tmp, layer } = await createScratchDoc(W, H, (doc.resolution || 72) * scale, "ASCII by Star render");
+  let placed = null;
+  try {
+    await writeLayer(tmp, layer, grid, cs, scale, true);
+    try { layer.selected = true; } catch (e) { /* only layer */ }
+    await action.batchPlay([{ _obj: "newPlacedLayer" }], {});
+    placed = await tmp.activeLayers[0].duplicate(doc);
+  } finally { await tmp.closeWithoutSaving(); }
+  try { app.activeDocument = doc; } catch (e) { /* already active */ }
+  if (!placed) throw new Error("could not copy the smart object");
+  placed.name = name;
+  await placed.scale(100 / scale, 100 / scale, constants.AnchorPosition.TOPLEFT);
+  const b = placed.bounds;
+  if (Math.round(b.left) || Math.round(b.top)) await placed.translate(-b.left, -b.top);
+  return placed;
 }
 
 async function renderPreview() {
   if (!atlas) return;
   const ok = await ensureSource(0);
   if (!ok) { showPreviewMsg("Open a document to begin"); status(""); return; }
-  // panning/zooming only re-renders the view; the character grid is reused while settings and source are unchanged
+  // the character grid is reused while settings and source are unchanged
   const key = JSON.stringify(S);
   if (gridCache.key !== key || gridCache.src !== src) {
     const cs = currentCharset(), geo = Engine.computeGeometry(src.docW, src.docH, S, atlas);
@@ -327,22 +350,19 @@ async function renderPreview() {
   }
   const { cs, geo, grid } = gridCache;
   const docW = src.docW, docH = src.docH;
-  const view = currentView();
-  layoutPreview(false);
+  const fit = fitScale();
+  const view = { x: 0, y: 0, w: Math.max(1, Math.round(docW * fit)), h: Math.max(1, Math.round(docH * fit)), scale: fit };
   const rgb = Engine.flattenForPreview(Engine.render(grid, cs, atlas, S, view), view.w, view.h);
   const id = await imaging.createImageDataFromBuffer(rgb, { width: view.w, height: view.h, components: 3, chunky: true, colorProfile: "sRGB IEC61966-2.1", colorSpace: "RGB" });
   const b64 = await imaging.encodeImageData({ imageData: id, base64: true });
   id.dispose();
-  const img = $("preview"), z = zoomRatio();
-  img.style.left = Math.round((view.x / docW) * box.w * z) + "px";
-  img.style.top = Math.round((view.y / docH) * box.h * z) + "px";
-  img.style.width = box.w + "px"; img.style.height = box.h + "px";
+  const img = $("preview");
   img.src = "data:image/jpeg;base64," + b64;
   img.classList.remove("hidden");
   $("previewMsg").classList.add("hidden");
-  const lowRes = src.scale < neededScale(activeDoc() || { width: docW, height: docH }) - 1e-6;
-  updateZoomLabel();
-  status(`${geo.cols} × ${geo.rows} chars · ${geo.size.toFixed(1)}px · ${cs.n} glyphs${lowRes ? " · preview sampled at reduced res" : ""}`);
+  const lowRes = src.scale < neededScale(sourceDoc() || { width: docW, height: docH }) - 1e-6;
+  scheduleLive();
+  if (!live) status(`${geo.cols} × ${geo.rows} chars · ${geo.size.toFixed(1)}px · ${cs.n} glyphs${lowRes ? " · preview sampled at reduced res" : ""}`);
 }
 
 // ---------- actions ----------
@@ -350,7 +370,7 @@ function layerName(tag) { return `ASCII by Star · ${charsetInfo().name.replace(
 function rememberLayer(tag, sourceLayer) { saveJSON("gf:layer:" + tag, { settings: S, source: $("source").value, sourceLayerId: sourceLayer }); }
 
 async function applyRaster(update) {
-  const doc = activeDoc();
+  const doc = sourceDoc();
   try { checkDoc(doc); } catch (e) { return status(e.message, true); }
   if (update && (!editing || editing.docId !== doc.id)) return status("The edited layer is in another document. Switch back to it.", true);
   busy = true;
@@ -366,18 +386,30 @@ async function applyRaster(update) {
         const cs = currentCharset();
         const geo = Engine.computeGeometry(doc.width, doc.height, S, atlas);
         const grid = Engine.computeGrid(src, geo, S, cs);
-        let layer, tag;
-        if (update) {
-          layer = findLayerById(doc, editing.layerId);
-          if (!layer) throw new Error("The layer being edited no longer exists.");
-          tag = editing.tag;
-        } else {
-          tag = newTag();
-          layer = await createLayer(doc, layerName(tag));
+        const q = qualityScale();
+        let layer = null, tag;
+        const old = update ? findLayerById(doc, editing.layerId) : null;
+        if (update && !old) throw new Error("The layer being edited no longer exists.");
+        tag = update ? editing.tag : newTag();
+        const name = update ? old.name : layerName(tag);
+        const oldIsSmart = old && /smart/i.test(String(old.kind));
+        if (q > 1 || oldIsSmart) {
+          try {
+            layer = await placeSmartObject(doc, grid, cs, Math.max(1, q), name);
+            if (old) { await layer.move(old, constants.ElementPlacement.PLACEBEFORE); await old.delete(); editing.layerId = layer.id; }
+            info = `${geo.cols} × ${geo.rows} chars · ${q}× smart object`;
+          } catch (e) {
+            console.error(e);
+            layer = null;
+            info = `smart object failed (${errMsg(e)}), made a pixel layer instead`;
+          }
         }
-        await writeLayer(doc, layer, grid, cs);
+        if (!layer) {
+          layer = old || (await createLayer(doc, name));
+          await writeLayer(doc, layer, grid, cs);
+          if (!info) info = `${geo.cols} × ${geo.rows} chars`;
+        }
         rememberLayer(tag, layerId);
-        info = `${geo.cols} × ${geo.rows} chars`;
       } finally {
         await ctx.hostControl.resumeHistory(sid, true);
       }
@@ -389,7 +421,7 @@ async function applyRaster(update) {
 }
 
 async function outputGrid() {
-  const doc = activeDoc();
+  const doc = sourceDoc();
   checkDoc(doc);
   await ensureSource(neededScale(doc));
   const cs = currentCharset();
@@ -456,16 +488,7 @@ async function exportPNG() {
     const t0 = Date.now();
     await core.executeAsModal(async () => {
       // render into a temporary transparent document, save it as PNG, then close it
-      let tmp, layer;
-      try {
-        tmp = await app.documents.add({ width: W, height: H, resolution: (doc.resolution || 72) * scale, mode: "RGBColorMode", fill: "transparent", name: "ASCII by Star export" });
-        layer = tmp.layers[0];
-      } catch (e) {
-        tmp = tmp || (await app.documents.add({ width: W, height: H, resolution: (doc.resolution || 72) * scale, mode: "RGBColorMode", fill: "white", name: "ASCII by Star export" }));
-        const bgLayer = tmp.layers[0];
-        layer = await createLayer(tmp, "ASCII by Star");
-        try { bgLayer.visible = false; } catch (e2) { /* background stays */ }
-      }
+      const { doc: tmp, layer } = await createScratchDoc(W, H, (doc.resolution || 72) * scale, "ASCII by Star export");
       try {
         await writeLayer(tmp, layer, grid, cs, scale);
         await tmp.saveAs.png(file, { compression: 6 }, true);
@@ -486,7 +509,7 @@ async function copyText() {
 }
 
 function loadSelectedLayer() {
-  const doc = activeDoc();
+  const doc = sourceDoc();
   const l = doc && doc.activeLayers && doc.activeLayers[0];
   const m = l && String(l.name).match(TAG_RE);
   if (!m) return status("Select a layer made by ASCII by Star (its name ends in #xxxxxx).", true);
@@ -703,41 +726,12 @@ function buildUI() {
 
   $("source").addEventListener("change", () => { src = null; schedulePreview(0); });
   $("refresh").addEventListener("click", () => { src = null; csCache.key = null; schedulePreview(0); });
-  // preview navigation: pinch / modifier+wheel zooms (plain wheel on Windows); scrolling or dragging pans
-  const wrap = $("previewWrap"), pv = $("pvScroll");
-  if (IS_WIN) $("navHint").textContent = "Wheel: zoom · Shift+wheel / drag: pan";
-  const pointIn = (e) => { const r = pv.getBoundingClientRect(); return { fx: box.w && e.clientX != null ? Math.min(1, Math.max(0, (e.clientX - r.left) / box.w)) : 0.5, fy: box.h && e.clientY != null ? Math.min(1, Math.max(0, (e.clientY - r.top) / box.h)) : 0.5 }; };
-  const inPreview = (e) => { for (let n = e.target; n; n = n.parentNode) if (n === wrap) return true; return false; };
-  let lastWheel = null;
-  const onWheel = (e) => {
-    if (e === lastWheel) return; lastWheel = e;
-    const zoomGesture = e.ctrlKey || e.metaKey || e.altKey || (IS_WIN && !e.shiftKey);
-    if (!zoomGesture) return; // let the viewport scroll natively (pan)
-    if (e.preventDefault) e.preventDefault();
-    const lines = e.deltaMode === 1, d = lines ? e.deltaY * 33 : e.deltaY, pinch = e.ctrlKey && !IS_WIN;
-    const { fx, fy } = pointIn(e);
-    zoomAt((zoom || fitScale()) * Math.exp(-d * (pinch ? 0.01 : 0.002)), fx, fy);
-  };
-  pv.addEventListener("wheel", onWheel);
-  if (typeof document.addEventListener === "function") document.addEventListener("wheel", (e) => { if (inPreview(e)) onWheel(e); });
-  pv.addEventListener("scroll", () => { if (Date.now() >= ignoreScrollUntil) checkScroll(); });
-  let drag = null, usePointer = false;
-  const down = (e, isPointer) => { if (isPointer) usePointer = true; else if (usePointer) return; drag = { x: e.clientX, y: e.clientY }; };
-  const move = (e, isPointer) => { if (!drag || (usePointer && !isPointer)) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY }; if (dx || dy) panBy(dx, dy); };
-  const up = () => { drag = null; };
-  const root = typeof document.addEventListener === "function" ? document : wrap;
-  pv.addEventListener("pointerdown", (e) => down(e, true));
-  pv.addEventListener("mousedown", (e) => down(e, false));
-  root.addEventListener("pointermove", (e) => move(e, true));
-  root.addEventListener("mousemove", (e) => move(e, false));
-  root.addEventListener("pointerup", up);
-  root.addEventListener("mouseup", up);
-  wrap.addEventListener("mouseleave", () => { if (root === wrap) drag = null; });
-  pv.addEventListener("dblclick", (e) => { const { fx, fy } = pointIn(e); if (zoom === null) zoomAt(1, fx, fy); else zoomAt(0, 0.5, 0.5); });
-  $("zoomFit").addEventListener("click", () => zoomAt(0, 0.5, 0.5));
-  $("zoom1").addEventListener("click", () => zoomAt(1, 0.5, 0.5));
-  $("zoomIn").addEventListener("click", () => zoomAt((zoom || fitScale()) * 1.5, 0.5, 0.5));
-  $("zoomOut").addEventListener("click", () => zoomAt((zoom || fitScale()) / 1.5, 0.5, 0.5));
+  $("liveBtn").addEventListener("click", toggleLive);
+  setSelect($("quality"), loadJSON("gf:quality", "1"));
+  $("quality").addEventListener("change", async () => {
+    saveJSON("gf:quality", $("quality").value);
+    if (live) { await toggleLive(); await toggleLive(); } // reopen the live window at the new resolution
+  });
 
   $("apply").addEventListener("click", () => applyRaster(false));
   $("updateLayer").addEventListener("click", () => applyRaster(true));
@@ -853,7 +847,7 @@ function fitLayout(force) {
   if (!H) return;
   const top = $("top");
   if (!force && H === lastH && top.offsetHeight === lastTop) return;
-  layoutPreview(false);
+  $("preview").style.maxHeight = Math.max(70, Math.round(H * 0.38)) + "px";
   lastH = H; lastTop = top.offsetHeight;
   $("scroller").style.height = Math.max(60, H - top.offsetHeight) + "px";
 }
@@ -861,7 +855,10 @@ function fitLayout(force) {
 // ---------- Photoshop events ----------
 let staleTimer = null;
 function onPsEvent(evt, desc) {
+  if (live && evt === "close" && !docById(live.docId)) { live = null; updateLiveBtn(); }
   if (busy) return;
+  const a = activeDoc();
+  if (live && a && a.id === live.docId) return; // looking at the live window doesn't change the source
   const ref = desc && desc._target && desc._target[0] && desc._target[0]._ref;
   if (evt === "select" && ref === "layer" && $("source").value !== "layer") return;
   if (src) src.stale = true;
@@ -875,7 +872,6 @@ async function init() {
   window.addEventListener("resize", () => fitLayout(true));
   $("preview").addEventListener("load", () => fitLayout(true));
   setInterval(() => fitLayout(false), 400);
-  setInterval(checkScroll, 100);
   fitLayout(true);
   try { atlas = await loadAtlas(); }
   catch (e) { console.error(e); showPreviewMsg("Failed to load glyph atlas: " + errMsg(e)); return; }

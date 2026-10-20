@@ -22,9 +22,7 @@
   .head .chev { margin-right: 6px; width: 10px; opacity: 0.7; }
   .collapsed .body { display: none; }
   #previewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; min-height: 80px; position: relative; overflow: hidden; }
-  #pvScroll { overflow: auto; position: relative; }
-  #pvSpace { position: relative; }
-  #preview { position: absolute; left: 0; top: 0; }
+  #preview { max-width: 100%; }
   #previewMsg { position: absolute; padding: 12px; text-align: center; color: #bbb; }
   #status { font-size: 10px; opacity: 0.75; min-height: 14px; margin: 4px 0; }
   .swatch { width: 28px; height: 20px; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; flex: 0 0 28px; cursor: pointer; }
@@ -38,19 +36,14 @@
   .btnrow { flex-wrap: wrap; }
   .btnrow button { flex: 1 1 auto; margin-bottom: 4px; }
   .zbtn { flex: 0 0 auto; min-width: 30px; }
-  #previewWrap { cursor: grab; }
+
 </style>
 </head>
 <body>
  <div id="top">
-  <div id="previewWrap"><div id="pvScroll"><div id="pvSpace"><img id="preview" alt=""></div></div><div id="previewMsg">Open a document to begin</div></div>
-  <div class="row" style="margin-top:5px">
-    <button id="zoomFit" class="zbtn" title="Fit the whole image">Fit</button>
-    <button id="zoom1" class="zbtn" title="100%">1:1</button>
-    <button id="zoomOut" class="zbtn" title="Zoom out">−</button>
-    <button id="zoomIn" class="zbtn" title="Zoom in">+</button>
-    <span id="zoomLabel" class="val" style="text-align:left;margin-left:2px">Fit</span>
-    <span class="hint grow" style="margin:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis"><span id="navHint">Pinch or ⌥+scroll: zoom · scroll/drag: pan</span></span>
+  <div id="previewWrap"><img id="preview" alt=""><div id="previewMsg">Open a document to begin</div></div>
+  <div class="row btnrow" style="margin-top:5px">
+    <button id="liveBtn" title="Opens a separate document that updates live. Zoom and pan it with Photoshop's own tools.">Open live preview window</button>
   </div>
   <div class="row">
     <select id="source" class="grow">
@@ -66,8 +59,13 @@
     <div class="row btnrow"><button id="updateLayer" class="primary">Update layer</button><button id="stopEdit">Done</button></div>
   </div>
 
-  <div class="row btnrow">
-    <button id="apply" class="primary">Apply as new layer</button>
+  <div class="row">
+    <button id="apply" class="primary grow">Apply as new layer</button>
+    <select id="quality" style="flex:0 0 118px" title="2× and 4× place a smart object holding a higher-resolution render: sharp when scaled up, upsized or exported">
+      <option value="1">1× pixel layer</option>
+      <option value="2">2× smart object</option>
+      <option value="4">4× smart object</option>
+    </select>
   </div>
 
   </div>
