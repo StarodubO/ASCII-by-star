@@ -34,6 +34,12 @@
   .fontItem { padding: 4px 6px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
   .fontItem.sel { background: rgba(80, 160, 255, 0.35); }
   .fontNote { padding: 4px 6px; font-size: 10px; opacity: 0.6; }
+  .fontMore { padding: 6px; font-size: 11px; text-align: center; cursor: pointer; opacity: 0.8; }
+  .picker { display: flex; flex-direction: row; align-items: center; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; padding: 3px 6px; cursor: pointer; }
+  .picker > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #fontChev { margin-left: 6px; opacity: 0.7; }
+  #fontList { max-height: 220px; }
+  #version { text-align: center; font-size: 10px; opacity: 0.5; margin-top: 12px; }
   .subhead { font-size: 10px; opacity: 0.7; margin: 8px 0 4px 0; text-transform: uppercase; letter-spacing: 0.4px; }
   .editing { background: rgba(80, 160, 255, 0.15); border: 1px solid rgba(80, 160, 255, 0.5); border-radius: 4px; padding: 6px; margin-bottom: 6px; }
   .hint { font-size: 10px; opacity: 0.65; margin: 0 0 6px 0; }
@@ -88,9 +94,11 @@
     <div class="head"><span class="chev">▾</span>Characters</div>
     <div class="body">
       <div class="row"><select id="charset" class="grow"></select></div>
-      <div class="row"><span class="label">Font</span><b id="fontCurrent" class="grow" style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Built-in (Menlo)</b></div>
-      <div class="row"><input type="text" id="fontSearch" placeholder="Type to search installed fonts…"><button id="fontFromLayer" title="Use the font of the selected text layer (pick it with Photoshop's font menu first)">From text layer</button></div>
-      <div id="fontList"></div>
+      <div class="row"><span class="label">Font</span><div id="fontPicker" class="picker grow" title="Click to choose a font"><span id="fontCurrent" class="grow">Built-in (Menlo)</span><span id="fontChev">▾</span></div></div>
+      <div id="fontPanel" class="hidden">
+        <div class="row"><input type="text" id="fontSearch" placeholder="Search (optional)…"><button id="fontFromLayer" title="Use the font of the selected text layer (pick it with Photoshop's font menu first)">From text layer</button></div>
+        <div id="fontList"></div>
+      </div>
       <p class="hint" id="fontHint">Any installed font works, including your own. Photoshop draws its characters once (a few seconds), then they're cached.</p>
       <div class="row" id="customRow"><textarea id="customChars" placeholder="Type your characters, e.g.  .:-=+*#%@"></textarea></div>
       <div class="row"><label><input type="checkbox" id="sortByDensity"> Sort by density</label></div>
@@ -229,6 +237,7 @@
     </div>
   </div>
 
+  <div id="version">ASCII by Star</div>
  </div>
   <script src="main.js"></script>
 </body>

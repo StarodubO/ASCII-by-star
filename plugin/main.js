@@ -881,8 +881,12 @@ function buildUI() {
     $("fontSearch").value = ""; fillFontSelect(); syncUI(); buildPresetSelect(); fitLayout(true);
     status("All settings reset to defaults"); schedulePreview(0);
   });
+  $("fontPicker").addEventListener("click", () => openFontPanel(!fontOpen));
+  $("fontList").addEventListener("scroll", checkFontScroll);
+  setInterval(checkFontScroll, 200); // UXP may not fire scroll events
   $("fontList").addEventListener("click", (e) => {
     let n = e.target;
+    if (n && n.className === "fontMore") return appendFonts();
     while (n && n !== $("fontList") && !(n.getAttribute && n.getAttribute("data-ps") !== null)) n = n.parentNode;
     if (!n || n === $("fontList")) return;
     const v = n.getAttribute("data-ps"), f = allFonts.find((x) => x.ps === v);
@@ -1006,28 +1010,61 @@ async function loadFonts() {
   fillFontSelect();
   return allFonts.length;
 }
-// Live-filtered font list; each name is drawn in its own typeface when UXP can resolve it.
-let fontFilterTimer = null;
+// Font picker: hidden until clicked; lists every installed font (recent first) and adds more as you scroll.
+let fontFilterTimer = null, fontMatches = [], fontShown = 0, fontOpen = false;
+const FONT_PAGE = 60;
+function fontMatchList() {
+  const q = $("fontSearch").value.trim().toLowerCase(), recent = loadJSON("gf:recentFonts", []);
+  if (q) return allFonts.filter((f) => f.name.toLowerCase().includes(q) || f.ps.toLowerCase().includes(q));
+  const rec = recent.map((ps) => allFonts.find((f) => f.ps === ps)).filter(Boolean);
+  return rec.concat(allFonts.filter((f) => !recent.includes(f.ps)));
+}
+function fontItem(ps, name, family) {
+  const d = document.createElement("div");
+  d.className = "fontItem" + ((ps || "") === (S.font || "") ? " sel" : "");
+  d.setAttribute("data-ps", ps);
+  if (ps) d.style.fontFamily = `'${ps}', '${family || name}'`;
+  d.textContent = name;
+  return d;
+}
+function appendFonts() {
+  const box = $("fontList"), more = box.querySelector(".fontMore, .fontNote");
+  if (more) box.removeChild(more);
+  const next = fontMatches.slice(fontShown, fontShown + FONT_PAGE);
+  for (const f of next) box.appendChild(fontItem(f.ps, f.name, f.family));
+  fontShown += next.length;
+  const note = document.createElement("div");
+  if (fontShown < fontMatches.length) { note.className = "fontMore"; note.textContent = `Scroll for more · ${fontMatches.length - fontShown} left`; }
+  else { note.className = "fontNote"; note.textContent = fontMatches.length ? `${fontMatches.length} fonts` : "No installed font matches"; }
+  box.appendChild(note);
+}
 function fillFontSelect() {
-  const box = $("fontList"), q = $("fontSearch").value.trim().toLowerCase();
-  const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-  const recent = loadJSON("gf:recentFonts", []);
-  let list;
-  if (q) list = allFonts.filter((f) => f.name.toLowerCase().includes(q) || f.ps.toLowerCase().includes(q));
-  else list = recent.map((ps) => allFonts.find((f) => f.ps === ps)).filter(Boolean).concat(allFonts.filter((f) => !recent.includes(f.ps) && /mono|menlo|courier|consol|monaco|code|terminal|typewriter/i.test(f.name)));
-  const total = list.length;
-  list = list.slice(0, 120);
-  let html = `<div class="fontItem${S.font ? "" : " sel"}" data-ps="">Built-in (Menlo, fastest)</div>`;
-  for (const f of list) html += `<div class="fontItem${f.ps === S.font ? " sel" : ""}" data-ps="${esc(f.ps)}" style="font-family:'${esc(f.ps)}','${esc(f.family || f.name)}'">${esc(f.name)}</div>`;
-  if (!total) html += `<div class="fontNote">No installed font matches “${esc(q)}”</div>`;
-  else if (total > list.length) html += `<div class="fontNote">${total - list.length} more — keep typing to narrow down</div>`;
-  else if (!q) html += `<div class="fontNote">Recent and monospace fonts · type to search all ${allFonts.length}</div>`;
-  box.innerHTML = html;
   $("fontCurrent").textContent = S.font ? S.fontName || S.font : "Built-in (Menlo)";
+  if (!fontOpen) return;
+  const box = $("fontList");
+  while (box.firstChild) box.removeChild(box.firstChild);
+  box.appendChild(fontItem("", "Built-in (Menlo, fastest)"));
+  fontMatches = fontMatchList(); fontShown = 0;
+  appendFonts();
+  box.scrollTop = 0;
+}
+function openFontPanel(open) {
+  fontOpen = open;
+  $("fontPanel").classList.toggle("hidden", !open);
+  $("fontChev").textContent = open ? "▴" : "▾";
+  if (open) fillFontSelect();
+  fitLayout(true);
+}
+function checkFontScroll() {
+  if (!fontOpen || fontShown >= fontMatches.length) return;
+  const box = $("fontList");
+  if (box.scrollTop + box.clientHeight >= box.scrollHeight - 60) appendFonts();
 }
 function setFont(ps, name) {
   S.font = ps || ""; S.fontName = ps ? name || ps : "";
   if (ps) saveJSON("gf:recentFonts", [ps].concat(loadJSON("gf:recentFonts", []).filter((x) => x !== ps)).slice(0, 8));
+  $("fontSearch").value = "";
+  openFontPanel(false);
   fillFontSelect(); schedulePreview(0);
 }
 
@@ -1066,6 +1103,10 @@ async function init() {
   $("preview").addEventListener("load", () => fitLayout(true));
   setInterval(() => fitLayout(false), 400);
   fitLayout(true);
+  try {
+    const mf = JSON.parse(await (await (await lfs.getPluginFolder()).getEntry("manifest.json")).read({ format: formats.utf8 }));
+    $("version").textContent = `ASCII by Star · version ${mf.version}`;
+  } catch (e) { /* footer keeps the plain name */ }
   try { baseAtlas = atlas = await loadAtlas(); baseAtlas.id = "builtin"; }
   catch (e) { console.error(e); showPreviewMsg("Failed to load glyph atlas: " + errMsg(e)); return; }
   try { await action.addNotificationListener(["select", "open", "close"], onPsEvent); } catch (e) { console.error(e); }
