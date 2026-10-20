@@ -511,7 +511,39 @@ const SLIDERS = {
   colorBoost: ["Lift darks", 0, 1, 0.01, pct],
   glyphOpacity: ["Text opacity", 0, 1, 0.01, pct],
   mosaicAmount: ["Mosaic", 0, 1, 0.01, pct],
+  gPixelSort: ["Pixel sort", 0, 1, 0.01, pct],
+  gSlices: ["Slice shift", 0, 1, 0.01, pct],
+  gSliceSize: ["Slice height", 0.05, 1, 0.01, pct],
+  gBlocks: ["Datamosh", 0, 1, 0.01, pct],
+  gBlockSize: ["Block size", 0, 1, 0.01, pct],
+  gWave: ["Wave", 0, 1, 0.01, pct],
+  gWaveFreq: ["Wave freq", 1, 40, 0.5, (v) => v.toFixed(1)],
+  gMelt: ["Melt", 0, 1, 0.01, pct],
+  gBitCrush: ["Bit crush", 0, 1, 0.01, pct],
+  gCorrupt: ["Corrupt", 0, 1, 0.01, pct],
+  gRowShift: ["Row shift", 0, 1, 0.01, pct],
+  gStutter: ["Stutter", 0, 1, 0.01, pct],
+  gRgbSplit: ["RGB split", 0, 1, 0.01, pct],
+  gInterlace: ["Interlace", 0, 1, 0.01, pct],
+  gTracking: ["VHS tracking", 0, 1, 0.01, pct],
+  gScanlines: ["Scanlines", 0, 1, 0.01, pct],
+  gNoise: ["Noise", 0, 1, 0.01, pct],
 };
+const GLITCH_KEYS = Object.keys(Engine.DEFAULTS).filter((k) => /^g[A-Z]/.test(k));
+
+function randomGlitch() {
+  const r = Math.random, pick = (p, max) => (r() < p ? Math.round(r() * max * 100) / 100 : 0);
+  for (const k of GLITCH_KEYS) S[k] = Engine.DEFAULTS[k];
+  Object.assign(S, {
+    glitchOn: true, glitchSeed: Math.floor(r() * 99999) + 1,
+    gPixelSort: pick(0.4, 0.6), gSortDir: r() < 0.5 ? "h" : "v", gSlices: pick(0.6, 0.6), gSliceSize: 0.2 + r() * 0.6,
+    gBlocks: pick(0.4, 0.5), gBlockSize: r(), gWave: pick(0.2, 0.2), gWaveFreq: 2 + Math.round(r() * 20),
+    gMelt: pick(0.2, 0.5), gBitCrush: pick(0.25, 0.7), gChannelSwap: r() < 0.2 ? ["rbg", "grb", "gbr", "brg", "bgr"][Math.floor(r() * 5)] : "none",
+    gCorrupt: pick(0.5, 0.4), gRowShift: pick(0.5, 0.5), gStutter: pick(0.3, 0.4),
+    gRgbSplit: pick(0.6, 0.5), gInterlace: pick(0.25, 0.4), gTracking: pick(0.4, 0.6), gScanlines: pick(0.5, 0.6), gNoise: pick(0.4, 0.3),
+  });
+  syncUI(); schedulePreview(0);
+}
 const sliderEls = {};
 
 function buildUI() {
@@ -536,10 +568,17 @@ function buildUI() {
   bindSelect("dither", "dither");
   bindSelect("colorMode", "colorMode");
   bindSelect("bgMode", "bgMode");
+  bindSelect("gSortDir", "gSortDir");
+  bindSelect("gChannelSwap", "gChannelSwap");
+  $("glitchSeed").addEventListener("change", () => { const v = parseInt($("glitchSeed").value, 10); if (v > 0) S.glitchSeed = v; syncUI(); schedulePreview(0); });
+  $("glitchReseed").addEventListener("click", () => { S.glitchSeed = Math.floor(Math.random() * 99999) + 1; syncUI(); schedulePreview(0); });
+  $("glitchReset").addEventListener("click", () => { for (const k of GLITCH_KEYS) S[k] = Engine.DEFAULTS[k]; syncUI(); schedulePreview(0); });
+  $("glitchRandom").addEventListener("click", randomGlitch);
   const bindCheck = (id, key) => $(id).addEventListener("change", () => { S[key] = $(id).checked; refreshVisibility(); schedulePreview(); });
   bindCheck("sortByDensity", "sortByDensity");
   bindCheck("invert", "invert");
   bindCheck("serpentine", "serpentine");
+  bindCheck("glitchOn", "glitchOn");
   bindCheck("gradientMid", "gradientMid");
   $("customChars").addEventListener("input", () => { S.customChars = $("customChars").value; schedulePreview(120); });
 
@@ -619,6 +658,10 @@ function syncUI() {
   setSelect($("bgMode"), S.bgMode);
   $("sortByDensity").checked = !!S.sortByDensity;
   $("invert").checked = !!S.invert;
+  $("glitchOn").checked = !!S.glitchOn;
+  $("glitchSeed").value = String(S.glitchSeed);
+  setSelect($("gSortDir"), S.gSortDir);
+  setSelect($("gChannelSwap"), S.gChannelSwap);
   $("serpentine").checked = !!S.serpentine;
   $("gradientMid").checked = !!S.gradientMid;
   if ($("customChars").value !== S.customChars) $("customChars").value = S.customChars;
@@ -640,6 +683,7 @@ function refreshVisibility() {
   show(sliderEls.ditherStrength.row, S.dither !== "none");
   show($("serpRow"), !!Engine.DIFFUSION[S.dither]);
   show($("ditherHint"), S.dither !== "none");
+  show($("glitchBody"), !!S.glitchOn);
 }
 
 async function loadFonts() {

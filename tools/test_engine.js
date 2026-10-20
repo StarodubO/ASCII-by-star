@@ -39,6 +39,8 @@ function writePNG(file, w, h, rgba) {
   fs.writeFileSync(file, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ih), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]));
 }
 
+module.exports = { readPNG, writePNG };
+if (require.main === module) {
 const meta = JSON.parse(fs.readFileSync(path.join(__dirname, "../plugin/atlas.json")));
 const atlas = E.prepareAtlas(meta, fs.readFileSync(path.join(__dirname, "../plugin/atlas.bin")));
 const src = readPNG(process.argv[2]);
@@ -64,4 +66,5 @@ for (const p of PRESETS) {
     writePNG(path.join(outDir, "preview_fit.png"), pw, ph, prev);
   }
   console.log(p.id.padEnd(16), `${geo.cols}x${geo.rows}`, ms + "ms");
+}
 }

@@ -47,6 +47,13 @@ const DEFAULTS = {
   bg: "#0b0b0b",
   mosaicAmount: 0.35,
   glyphOpacity: 1,
+  // glitch (everything is inert unless glitchOn is true)
+  glitchOn: false,
+  glitchSeed: 1,
+  gPixelSort: 0, gSortDir: "h", gSlices: 0, gSliceSize: 0.4, gBlocks: 0, gBlockSize: 0.35,
+  gWave: 0, gWaveFreq: 6, gMelt: 0, gBitCrush: 0, gChannelSwap: "none",
+  gCorrupt: 0, gRowShift: 0, gStutter: 0,
+  gRgbSplit: 0, gInterlace: 0, gTracking: 0, gScanlines: 0, gNoise: 0,
 };
 
 // ---------- atlas ----------
@@ -128,6 +135,7 @@ function inkFromBright(s) {
 // ---------- analysis: source -> grid of glyphs ----------
 // src: {w, h, data: Uint8Array RGBA} covering the whole document at any resolution.
 function computeGrid(src, geo, s, cs) {
+  if (s.glitchOn) src = glitchSource(src, s);
   const { cols, rows, cellW, cellH, docW, docH } = geo;
   const sx = src.w / docW, sy = src.h / docH, d = src.data, sw = src.w;
   const cells = cols * rows;
@@ -178,7 +186,8 @@ function computeGrid(src, geo, s, cs) {
       alpha[ci] = tn ? clamp255(ta / tn) : 0;
     }
   }
-  return selectGlyphs({ cols, rows, ink, sub, rgb, alpha, geo }, s, cs);
+  const grid = selectGlyphs({ cols, rows, ink, sub, rgb, alpha, geo }, s, cs);
+  return s.glitchOn ? glitchGrid(grid, cs, s) : grid;
 }
 
 // ---------- dithering ----------
@@ -308,6 +317,149 @@ function selectGlyphs(g, s, cs) {
   return { cols, rows, geo: g.geo, glyph, color, rgb, alpha, ink };
 }
 
+
+// ---------- glitch ----------
+// All effects are deterministic for a given seed and defined in document-relative units,
+// so the preview, the full-resolution apply (rendered in strips) and batch all match.
+function hash3(seed, a, b) {
+  let h = (Math.imul(seed | 0, 0x9e3779b1) ^ Math.imul(a | 0, 0x85ebca77) ^ Math.imul(b | 0, 0xc2b2ae3d)) | 0;
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d); h = Math.imul(h ^ (h >>> 12), 0x297a2d39); h ^= h >>> 15;
+  return (h >>> 0) / 4294967296;
+}
+function rng(seed) { let i = 0; return () => hash3(seed, 7919, i++); }
+
+function shiftRowRGBA(d, W, y, off) {
+  off = Math.round(off) % W; if (!off) return;
+  const row = d.slice(y * W * 4, (y + 1) * W * 4);
+  for (let x = 0; x < W; x++) { const sx = (((x - off) % W) + W) % W; d.set(row.subarray(sx * 4, sx * 4 + 4), (y * W + x) * 4); }
+}
+
+const SWAPS = { rbg: [0, 2, 1], grb: [1, 0, 2], gbr: [1, 2, 0], brg: [2, 0, 1], bgr: [2, 1, 0] };
+
+function glitchSource(src, s) {
+  const W = src.w, H = src.h, d = new Uint8Array(src.data), seed = s.glitchSeed | 0;
+  const sw = SWAPS[s.gChannelSwap];
+  if (sw || s.gBitCrush > 0) {
+    const L = Math.max(2, Math.round(32 - s.gBitCrush * 30)), q = 255 / (L - 1);
+    for (let o = 0; o < d.length; o += 4) {
+      let r = d[o], g = d[o + 1], b = d[o + 2];
+      if (sw) { const c = [r, g, b]; r = c[sw[0]]; g = c[sw[1]]; b = c[sw[2]]; }
+      if (s.gBitCrush > 0) { r = Math.round(r / q) * q; g = Math.round(g / q) * q; b = Math.round(b / q) * q; }
+      d[o] = r; d[o + 1] = g; d[o + 2] = b;
+    }
+  }
+  if (s.gBlocks > 0) {
+    // datamosh-style macroblock corruption: copy, drag (smear) or invert blocks
+    const nb = Math.round(8 + (1 - s.gBlockSize) * 56), bs = Math.max(2, Math.round(W / nb)), ref = new Uint8Array(d);
+    for (let by = 0; by * bs < H; by++) for (let bx = 0; bx < nb; bx++) {
+      if (hash3(seed, bx, by) >= s.gBlocks * 0.35) continue;
+      const mode = Math.floor(hash3(seed + 1, bx, by) * 3);
+      const dx = Math.round((hash3(seed + 2, bx, by) * 6 - 3) * bs), dy = Math.round((hash3(seed + 3, bx, by) * 4 - 2) * bs);
+      for (let y = by * bs; y < Math.min(H, (by + 1) * bs); y++) for (let x = bx * bs; x < Math.min(W, (bx + 1) * bs); x++) {
+        const o = (y * W + x) * 4;
+        let so;
+        if (mode === 0) so = (Math.min(H - 1, Math.max(0, y + dy)) * W + Math.min(W - 1, Math.max(0, x + dx))) * 4;
+        else if (mode === 1) so = (by * bs * W + x) * 4; // drag the block's first row down
+        else { d[o] = 255 - ref[o]; d[o + 1] = 255 - ref[o + 1]; d[o + 2] = 255 - ref[o + 2]; continue; }
+        d[o] = ref[so]; d[o + 1] = ref[so + 1]; d[o + 2] = ref[so + 2]; d[o + 3] = ref[so + 3];
+      }
+    }
+  }
+  if (s.gSlices > 0) {
+    const r = rng(seed + 11), n = Math.round(4 + s.gSlices * 40);
+    for (let k = 0; k < n; k++) {
+      const y0 = Math.floor(r() * H), h = Math.max(1, Math.round(r() * s.gSliceSize * 0.12 * H)), off = (r() * 2 - 1) * s.gSlices * 0.3 * W;
+      for (let y = y0; y < Math.min(H, y0 + h); y++) shiftRowRGBA(d, W, y, off);
+    }
+  }
+  if (s.gWave > 0) {
+    const ph = hash3(seed, 3, 5) * Math.PI * 2;
+    for (let y = 0; y < H; y++) shiftRowRGBA(d, W, y, s.gWave * 0.06 * W * Math.sin((y / H) * Math.PI * 2 * s.gWaveFreq + ph));
+  }
+  if (s.gMelt > 0) {
+    const bands = 240;
+    for (let b = 0; b < bands; b++) {
+      if (hash3(seed + 21, b, 0) >= s.gMelt * 0.6) continue;
+      const x0 = Math.floor((b / bands) * W), x1 = Math.max(x0 + 1, Math.floor(((b + 1) / bands) * W));
+      const y0 = Math.floor(hash3(seed + 22, b, 0) * H), len = Math.floor(hash3(seed + 23, b, 0) * s.gMelt * 0.6 * H);
+      for (let x = x0; x < x1; x++) { const so = (y0 * W + x) * 4; for (let y = y0 + 1; y < Math.min(H, y0 + len); y++) d.copyWithin((y * W + x) * 4, so, so + 4); }
+    }
+  }
+  if (s.gPixelSort > 0) {
+    // sort runs of pixels brighter than a threshold, along rows or columns
+    const t = (1 - s.gPixelSort) * 255, vertical = s.gSortDir === "v";
+    const len = vertical ? H : W, lines = vertical ? W : H, idx = (line, i) => (vertical ? i * W + line : line * W + i) * 4;
+    const lum = (o) => 0.2126 * d[o] + 0.7152 * d[o + 1] + 0.0722 * d[o + 2];
+    for (let line = 0; line < lines; line++) {
+      let i = 0;
+      while (i < len) {
+        while (i < len && lum(idx(line, i)) < t) i++;
+        const start = i;
+        while (i < len && lum(idx(line, i)) >= t) i++;
+        if (i - start > 1) {
+          const px = [];
+          for (let k = start; k < i; k++) { const o = idx(line, k); px.push([lum(o), d[o], d[o + 1], d[o + 2], d[o + 3]]); }
+          px.sort((a, b) => a[0] - b[0]);
+          for (let k = start; k < i; k++) { const o = idx(line, k), p = px[k - start]; d[o] = p[1]; d[o + 1] = p[2]; d[o + 2] = p[3]; d[o + 3] = p[4]; }
+        }
+      }
+    }
+  }
+  return { w: W, h: H, data: d };
+}
+
+function glitchGrid(grid, cs, s) {
+  const { cols, rows, glyph, color } = grid, seed = s.glitchSeed | 0;
+  if (s.gStutter > 0) for (let r = 1; r < rows; r++) if (hash3(seed + 31, r, 0) < s.gStutter * 0.3) {
+    glyph.copyWithin(r * cols, (r - 1) * cols, r * cols); color.copyWithin(r * cols * 3, (r - 1) * cols * 3, r * cols * 3);
+  }
+  if (s.gRowShift > 0) for (let r = 0; r < rows; r++) if (hash3(seed + 32, r, 0) < s.gRowShift * 0.4) {
+    const k = ((Math.round((hash3(seed + 33, r, 0) * 2 - 1) * s.gRowShift * cols * 0.3) % cols) + cols) % cols;
+    if (!k) continue;
+    const g = glyph.slice(r * cols, (r + 1) * cols), c = color.slice(r * cols * 3, (r + 1) * cols * 3);
+    for (let x = 0; x < cols; x++) { const sx = (x - k + cols) % cols; glyph[r * cols + x] = g[sx]; color.set(c.subarray(sx * 3, sx * 3 + 3), (r * cols + x) * 3); }
+  }
+  if (s.gCorrupt > 0 && cs.n > 1) for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    if (hash3(seed + 34, c, r) < s.gCorrupt * 0.3) glyph[r * cols + c] = 1 + Math.floor(hash3(seed + 35, c, r) * (cs.n - 1));
+  }
+  return grid;
+}
+
+// Row-local effects on the rendered RGBA (safe for strip rendering): positions are evaluated in document coordinates.
+function glitchOutput(out, view, geo, s) {
+  const W = view.w, H = view.h, sc = view.scale, seed = s.glitchSeed | 0, docW = geo.docW, docH = geo.docH;
+  const docY = (y) => view.y + (y + 0.5) / sc;
+  const row = new Uint8ClampedArray(W * 4);
+  const bands = [];
+  if (s.gTracking > 0) { const r = rng(seed + 41), n = Math.ceil(s.gTracking * 6); for (let i = 0; i < n; i++) bands.push({ y: r() * docH, h: (0.01 + r() * 0.05) * docH, off: (r() * 2 - 1) * s.gTracking * 0.08 * docW }); }
+  const split = Math.round(s.gRgbSplit * 0.015 * docW * sc), inter = s.gInterlace * 0.012 * docW * sc;
+  const scanP = Math.max(2, docH / 360), scanK = s.gScanlines * 0.55, noiseK = s.gNoise * 90;
+  for (let y = 0; y < H; y++) {
+    const dy = docY(y);
+    let off = 0, bandK = 0;
+    if (inter && Math.floor(dy / Math.max(1, docH / 540)) & 1) off += inter;
+    for (const b of bands) { const t = Math.abs(dy - b.y) / b.h; if (t < 1) { bandK = Math.max(bandK, 1 - t); off += b.off * (1 - t) * (0.6 + 0.4 * hash3(seed + 42, Math.floor(dy), 0)); } }
+    off = Math.round(off * sc);
+    if (off || split) {
+      row.set(out.subarray(y * W * 4, (y + 1) * W * 4));
+      const px = (x) => Math.min(W - 1, Math.max(0, x)) * 4;
+      for (let x = 0; x < W; x++) {
+        const o = (y * W + x) * 4, c = px(x - off), r = px(x - off - split), b = px(x - off + split);
+        out[o] = row[r]; out[o + 1] = row[c + 1]; out[o + 2] = row[b + 2]; out[o + 3] = Math.max(row[r + 3], row[c + 3], row[b + 3]);
+      }
+    }
+    const dark = scanK && Math.floor(dy / scanP) & 1 ? 1 - scanK : 1;
+    if (dark !== 1 || noiseK || bandK) {
+      const ny = Math.floor(dy);
+      for (let x = 0, o = y * W * 4; x < W; x++, o += 4) {
+        let n = 0;
+        if (noiseK || bandK) n = (hash3(seed + 43, Math.floor(view.x + (x + 0.5) / sc), ny) - 0.5) * (noiseK + bandK * 120);
+        out[o] = out[o] * dark + n; out[o + 1] = out[o + 1] * dark + n; out[o + 2] = out[o + 2] * dark + n;
+      }
+    }
+  }
+}
+
 // ---------- rendering ----------
 function resampleGlyph(atlas, g, tw, th) {
   const sw = atlas.cellW, sh = atlas.cellH, src = atlas.data, off = g * sw * sh;
@@ -416,6 +568,7 @@ function render(grid, cs, atlas, s, view) {
       }
     }
   }
+  if (s.glitchOn) glitchOutput(out, view, geo, s);
   return new Uint8Array(out.buffer);
 }
 

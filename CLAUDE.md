@@ -12,3 +12,6 @@ Photoshop UXP plugin (manifest v5, id `com.ostap.asciibystar`, PS ≥ 25). The u
 - Font list: use batchPlay `get fontList`. Walking `app.fonts` takes about 30 s.
 - Build and install: `tools/package.sh --install`. Headless Photoshop tests: `node tools/build_test.js`, then `open -a "Adobe Photoshop 2026" test/gf_test.psjs`. The log lands in the UXP PluginData temp folder. A syntax error in a .psjs leaves a dialog open in Photoshop that blocks later scripts.
 - No screen or accessibility access from the shell. Ask the user for screenshots of the panel.
+- Glitch: three stages in engine.js. `glitchSource` runs on the analysis image, `glitchGrid` on the character grid, and `glitchOutput` on the rendered RGBA (row-local only, so strip rendering matches). Everything is gated by `s.glitchOn` and seeded by `s.glitchSeed`, with sizes in document-relative units. Never add an effect that moves pixels vertically in `glitchOutput`.
+- Before shipping engine changes: render all looks with `node tools/test_engine.js test/dahlia.png <dir>` and compare md5s with the previous build (unrelated looks must be byte-identical). Then `node tools/ui_smoke.js`: it checks that every element id main.js uses exists in index.html and that the UI builds. The "no atlas" error is expected.
+

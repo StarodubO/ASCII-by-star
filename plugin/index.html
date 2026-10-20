@@ -30,6 +30,7 @@
   button { font-size: 11px; }
   .primary { font-weight: bold; }
   .hidden { display: none; }
+  .subhead { font-size: 10px; opacity: 0.7; margin: 8px 0 4px 0; text-transform: uppercase; letter-spacing: 0.4px; }
   .editing { background: rgba(80, 160, 255, 0.15); border: 1px solid rgba(80, 160, 255, 0.5); border-radius: 4px; padding: 6px; margin-bottom: 6px; }
   .hint { font-size: 10px; opacity: 0.65; margin: 0 0 6px 0; }
   .btnrow { flex-wrap: wrap; }
@@ -157,6 +158,42 @@
       </select></div>
       <div class="row" id="bgRow"><span class="label">Colour</span><div class="swatch" data-color="bg"></div><input type="text" class="hex" data-hex="bg"><button id="useBg" title="Use Photoshop background colour">BG</button></div>
       <div id="sl-mosaicAmount"></div>
+    </div>
+  </div>
+
+  <div class="section" data-section="glitch">
+    <div class="head"><span class="chev">▾</span>Glitch</div>
+    <div class="body">
+      <div class="row"><label class="grow"><input type="checkbox" id="glitchOn"> Enable glitch</label><button id="glitchRandom" title="Random glitch recipe">Randomize</button></div>
+      <div id="glitchBody">
+        <div class="row"><span class="label">Seed</span><input type="text" id="glitchSeed" style="width:60px;flex:0 0 60px"><button id="glitchReseed" title="New random seed">New seed</button><button id="glitchReset" title="Set all glitch effects to 0">Clear</button></div>
+        <p class="hint">The seed fixes the random pattern, so the preview, the applied layer and batch output all match.</p>
+        <div class="subhead">Image (before characters)</div>
+        <div id="sl-gPixelSort"></div>
+        <div class="row"><span class="label">Sort along</span><select id="gSortDir" class="grow"><option value="h">Rows (horizontal)</option><option value="v">Columns (vertical)</option></select></div>
+        <div id="sl-gSlices"></div>
+        <div id="sl-gSliceSize"></div>
+        <div id="sl-gBlocks"></div>
+        <div id="sl-gBlockSize"></div>
+        <div id="sl-gWave"></div>
+        <div id="sl-gWaveFreq"></div>
+        <div id="sl-gMelt"></div>
+        <div id="sl-gBitCrush"></div>
+        <div class="row"><span class="label">Channel swap</span><select id="gChannelSwap" class="grow">
+          <option value="none">None</option><option value="rbg">R B G</option><option value="grb">G R B</option><option value="gbr">G B R</option><option value="brg">B R G</option><option value="bgr">B G R</option>
+        </select></div>
+        <div class="subhead">Characters</div>
+        <div id="sl-gCorrupt"></div>
+        <div id="sl-gRowShift"></div>
+        <div id="sl-gStutter"></div>
+        <div class="subhead">Signal (on the final image)</div>
+        <div id="sl-gRgbSplit"></div>
+        <div id="sl-gInterlace"></div>
+        <div id="sl-gTracking"></div>
+        <div id="sl-gScanlines"></div>
+        <div id="sl-gNoise"></div>
+        <p class="hint">Signal effects apply to pixel layers and batch PNGs. Text layers and .txt/.html/.svg exports keep the image and character glitches.</p>
+      </div>
     </div>
   </div>
 
