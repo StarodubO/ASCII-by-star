@@ -27,6 +27,7 @@ function saveJSON(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } ca
 function freshSettings(over) {
   const s = JSON.parse(JSON.stringify(Engine.DEFAULTS));
   if (over) for (const k of Object.keys(s)) if (over[k] !== undefined) s[k] = JSON.parse(JSON.stringify(over[k]));
+  if (s.dither === "bayer") s.dither = "bayer4"; // renamed in 1.2
   return s;
 }
 function status(msg, isErr) { const el = $("status"); el.textContent = msg || ""; el.style.color = isErr ? "#ff7070" : ""; }
@@ -505,6 +506,7 @@ const SLIDERS = {
   brightness: ["Brightness", -1, 1, 0.01, (v) => (v > 0 ? "+" : "") + Math.round(v * 100)],
   gamma: ["Gamma", 0.2, 3, 0.01, (v) => v.toFixed(2)],
   threshold: ["Threshold", 0, 1, 0.01, pct],
+  ditherStrength: ["Dither amount", 0, 1.5, 0.01, pct],
   saturation: ["Saturation", 0, 3, 0.01, pct],
   colorBoost: ["Lift darks", 0, 1, 0.01, pct],
   glyphOpacity: ["Text opacity", 0, 1, 0.01, pct],
@@ -537,6 +539,7 @@ function buildUI() {
   const bindCheck = (id, key) => $(id).addEventListener("change", () => { S[key] = $(id).checked; refreshVisibility(); schedulePreview(); });
   bindCheck("sortByDensity", "sortByDensity");
   bindCheck("invert", "invert");
+  bindCheck("serpentine", "serpentine");
   bindCheck("gradientMid", "gradientMid");
   $("customChars").addEventListener("input", () => { S.customChars = $("customChars").value; schedulePreview(120); });
 
@@ -616,6 +619,7 @@ function syncUI() {
   setSelect($("bgMode"), S.bgMode);
   $("sortByDensity").checked = !!S.sortByDensity;
   $("invert").checked = !!S.invert;
+  $("serpentine").checked = !!S.serpentine;
   $("gradientMid").checked = !!S.gradientMid;
   if ($("customChars").value !== S.customChars) $("customChars").value = S.customChars;
   document.querySelectorAll(".swatch").forEach((el) => { el.style.backgroundColor = getColor(el.dataset.color); });
@@ -633,6 +637,9 @@ function refreshVisibility() {
   show($("origRows"), S.colorMode === "original");
   show($("bgRow"), S.bgMode !== "transparent");
   show(sliderEls.mosaicAmount.row, S.bgMode === "mosaic");
+  show(sliderEls.ditherStrength.row, S.dither !== "none");
+  show($("serpRow"), !!Engine.DIFFUSION[S.dither]);
+  show($("ditherHint"), S.dither !== "none");
 }
 
 async function loadFonts() {

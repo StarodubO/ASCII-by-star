@@ -106,8 +106,34 @@
       <div id="sl-gamma"></div>
       <div id="sl-threshold"></div>
       <div class="row"><span class="label">Dither</span><select id="dither" class="grow">
-        <option value="none">None</option><option value="fs">Floyd–Steinberg</option><option value="atkinson">Atkinson</option><option value="bayer">Ordered (Bayer)</option>
+        <option value="none">None</option>
+        <option value="" disabled>— Error diffusion —</option>
+        <option value="fs">Floyd–Steinberg</option>
+        <option value="falsefs">False Floyd–Steinberg</option>
+        <option value="atkinson">Atkinson</option>
+        <option value="jjn">Jarvis–Judice–Ninke</option>
+        <option value="stucki">Stucki</option>
+        <option value="burkes">Burkes</option>
+        <option value="sierra3">Sierra</option>
+        <option value="sierra2">Two-row Sierra</option>
+        <option value="sierralite">Sierra Lite</option>
+        <option value="" disabled>— Ordered —</option>
+        <option value="bayer2">Bayer 2×2</option>
+        <option value="bayer4">Bayer 4×4</option>
+        <option value="bayer8">Bayer 8×8</option>
+        <option value="" disabled>— Halftone screens —</option>
+        <option value="dot4">Round dot 4×4</option>
+        <option value="dot8">Round dot 8×8</option>
+        <option value="hlines">Horizontal lines</option>
+        <option value="vlines">Vertical lines</option>
+        <option value="dlines">Diagonal lines</option>
+        <option value="" disabled>— Noise —</option>
+        <option value="bluenoise">Blue noise</option>
+        <option value="whitenoise">White noise</option>
       </select></div>
+      <div id="sl-ditherStrength"></div>
+      <div class="row" id="serpRow"><label><input type="checkbox" id="serpentine"> Serpentine scan (fewer streaks)</label></div>
+      <p class="hint" id="ditherHint">Dithering works per character, so it shows most with small sets such as Binary, Dots or Blocks.</p>
       <div class="row"><label><input type="checkbox" id="invert"> Invert</label></div>
     </div>
   </div>

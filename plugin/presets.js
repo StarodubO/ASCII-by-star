@@ -15,6 +15,8 @@ const PRESETS = [
   { id: "halftone", name: "Dot Halftone", settings: { charset: "dots", size: 9, colorMode: "mono", fg: "#111111", bg: "#ffffff", dither: "fs" } },
   { id: "neon", name: "Neon", settings: { charset: "bourke", size: 11, colorMode: "gradient", gradient: ["#12002a", "#ff00c8", "#00f0ff"], gradientMid: true, bg: "#07000f", contrast: 1.2 } },
   { id: "gameboy", name: "Game Boy", settings: { charset: "shademix", size: 12, detail: 0.5, colorMode: "gradient", gradient: ["#0f380f", "#8bac0f", "#e0f8d0"], gradientMid: true, bg: "#0f380f" } },
+  { id: "newsprint", name: "Newsprint Screen", settings: { charset: "dots", size: 7, colorMode: "mono", fg: "#151515", bg: "#f4f0e6", dither: "dot8", ditherStrength: 1 } },
+  { id: "retro8", name: "Retro Ordered", settings: { charset: "shade", size: 9, colorMode: "gradient", gradient: ["#1b1035", "#e8457c", "#ffd36e"], gradientMid: true, bg: "#1b1035", dither: "bayer8" } },
   { id: "typewriter", name: "Typewriter", settings: { charset: "alnum", size: 10, colorMode: "mono", fg: "#2b2420", bg: "#efe6d2", detail: 0.4 } },
 ];
 

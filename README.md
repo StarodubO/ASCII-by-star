@@ -14,13 +14,14 @@ Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, includi
 ## Features
 - 63 character sets: classic ASCII ramps, blocks, Braille, box drawing, katakana "Matrix", runes, symbols, or type your own.
 - Shape matching: picks characters that follow edges, not just brightness.
-- Tone controls: contrast, brightness, gamma, threshold, invert. Dithering: Floyd–Steinberg, Atkinson, Bayer.
+- Tone controls: contrast, brightness, gamma, threshold, invert.
+- 21 dithering modes: error diffusion (Floyd–Steinberg, False FS, Atkinson, Jarvis–Judice–Ninke, Stucki, Burkes, Sierra, Two-row Sierra, Sierra Lite), ordered Bayer 2×2, 4×4 and 8×8, halftone screens (round dot, line screens) and blue or white noise. Also a strength slider and serpentine scanning.
 - Colour modes: single colour, original image colours (saturation and lift darks), or a 2–3 stop gradient map.
 - Backgrounds: solid, transparent, or a colour mosaic behind the characters.
 - Size the grid by font size (px) or by number of columns.
 - Output: a new pixel layer, an editable text layer (any monospace font), .txt, coloured .html or vector .svg files, or copy to the clipboard.
 - Re-edit: select an ASCII by Star layer, click **Re-edit selected…**, adjust, then click **Update layer**.
-- Presets: 16 built-in looks, plus your own presets, which you can import and export.
+- Presets: 18 built-in looks, plus your own presets, which you can import and export.
 - Batch: process a folder of images to PNG (and optionally .txt).
 - Preview: fit, 50%, 100% or 200% zoom. Click the preview to choose the zoom focus.
 

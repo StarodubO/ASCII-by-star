@@ -33,7 +33,9 @@ const DEFAULTS = {
   gamma: 1,
   threshold: 0,
   invert: false,
-  dither: "none", // none | fs | atkinson | bayer
+  dither: "none", // see DITHERS
+  ditherStrength: 1,
+  serpentine: false,
   detail: 0, // 0 = pure tone matching, 1 = pure shape matching
   colorMode: "mono", // mono | original | gradient
   fg: "#e8e8e8",
@@ -179,7 +181,52 @@ function computeGrid(src, geo, s, cs) {
   return selectGlyphs({ cols, rows, ink, sub, rgb, alpha, geo }, s, cs);
 }
 
-const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+// ---------- dithering ----------
+// Error-diffusion kernels: [divisor, [[dx, dy, weight], ...]]
+const DIFFUSION = {
+  fs: [16, [[1, 0, 7], [-1, 1, 3], [0, 1, 5], [1, 1, 1]]],
+  falsefs: [8, [[1, 0, 3], [0, 1, 3], [1, 1, 2]]],
+  atkinson: [8, [[1, 0, 1], [2, 0, 1], [-1, 1, 1], [0, 1, 1], [1, 1, 1], [0, 2, 1]]],
+  jjn: [48, [[1, 0, 7], [2, 0, 5], [-2, 1, 3], [-1, 1, 5], [0, 1, 7], [1, 1, 5], [2, 1, 3], [-2, 2, 1], [-1, 2, 3], [0, 2, 5], [1, 2, 3], [2, 2, 1]]],
+  stucki: [42, [[1, 0, 8], [2, 0, 4], [-2, 1, 2], [-1, 1, 4], [0, 1, 8], [1, 1, 4], [2, 1, 2], [-2, 2, 1], [-1, 2, 2], [0, 2, 4], [1, 2, 2], [2, 2, 1]]],
+  burkes: [32, [[1, 0, 8], [2, 0, 4], [-2, 1, 2], [-1, 1, 4], [0, 1, 8], [1, 1, 4], [2, 1, 2]]],
+  sierra3: [32, [[1, 0, 5], [2, 0, 3], [-2, 1, 2], [-1, 1, 4], [0, 1, 5], [1, 1, 4], [2, 1, 2], [-1, 2, 2], [0, 2, 3], [1, 2, 2]]],
+  sierra2: [16, [[1, 0, 4], [2, 0, 3], [-2, 1, 1], [-1, 1, 2], [0, 1, 3], [1, 1, 2], [2, 1, 1]]],
+  sierralite: [4, [[1, 0, 2], [-1, 1, 1], [0, 1, 1]]],
+};
+
+function bayerMatrix(n) {
+  let m = [[0]];
+  while (m.length < n) {
+    const k = m.length, next = [];
+    for (let y = 0; y < k * 2; y++) { next.push([]); for (let x = 0; x < k * 2; x++) next[y].push(4 * m[y % k][x % k] + [0, 2, 3, 1][(y >= k) * 2 + (x >= k)]); }
+    m = next;
+  }
+  return { n, t: m.flat().map((v) => (v + 0.5) / (n * n)) };
+}
+// round-dot halftone screen: cells ranked by a spot function so dots grow from the centre
+function dotScreen(n) {
+  const cells = [];
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const u = ((x + 0.5) / n) * 2 - 1, v = ((y + 0.5) / n) * 2 - 1;
+    cells.push({ i: y * n + x, s: Math.cos(Math.PI * u) + Math.cos(Math.PI * v) + 1e-3 * (x + y * n) });
+  }
+  cells.sort((a, b) => b.s - a.s);
+  const t = new Array(n * n);
+  cells.forEach((c, rank) => { t[c.i] = (rank + 0.5) / (n * n); });
+  return { n, t };
+}
+const lineScreen = (fn) => ({ n: 4, t: Array.from({ length: 16 }, (_, i) => (fn(i % 4, Math.floor(i / 4)) + 0.5) / 4) });
+const ORDERED = {
+  bayer2: bayerMatrix(2), bayer4: bayerMatrix(4), bayer8: bayerMatrix(8),
+  dot4: dotScreen(4), dot8: dotScreen(8),
+  hlines: lineScreen((x, y) => y), vlines: lineScreen((x) => x), dlines: lineScreen((x, y) => (x + y) % 4),
+};
+ORDERED.bayer = ORDERED.bayer4; // settings saved by v1.0
+function noiseThreshold(kind, c, r) {
+  if (kind === "bluenoise") { const v = 52.9829189 * ((0.06711056 * c + 0.00583715 * r) % 1); return v - Math.floor(v); } // interleaved gradient noise
+  let h = (c * 374761393 + r * 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
 
 function gradientAt(stops, t) {
   if (stops.length === 1) return stops[0];
@@ -195,44 +242,46 @@ function selectGlyphs(g, s, cs) {
   const glyph = new Int16Array(cells), color = new Uint8Array(cells * 3);
   const work = Float32Array.from(ink);
   const dither = s.dither, detail = clamp01(s.detail), thr = s.threshold;
+  const strength = s.ditherStrength === undefined ? 1 : Math.max(0, s.ditherStrength);
+  const kernel = DIFFUSION[dither], ordered = ORDERED[dither], noise = dither === "bluenoise" || dither === "whitenoise";
   const { n, level, vec, lut } = cs;
   const step = n > 1 ? 1 / (n - 1) : 1;
   const cache = detail > 0 ? new Map() : null;
   const tw = (1 - detail) * 9, swt = detail;
-  const diffuse = (c, r, e, w) => { if (c >= 0 && c < cols && r < rows) work[r * cols + c] += e * w; };
 
   for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
+    const rev = kernel && s.serpentine && (r & 1);
+    for (let k = 0; k < cols; k++) {
+      const c = rev ? cols - 1 - k : k;
       const ci = r * cols + c, orig = ink[ci];
       let v = work[ci];
-      if (dither === "bayer") v += ((BAYER4[(r & 3) * 4 + (c & 3)] + 0.5) / 16 - 0.5) * step;
+      if (ordered) v += (ordered.t[(r % ordered.n) * ordered.n + (c % ordered.n)] - 0.5) * step * strength;
+      else if (noise) v += (noiseThreshold(dither, c, r) - 0.5) * step * strength;
       if (thr > 0 && orig <= thr) { glyph[ci] = -1; continue; }
       let gi;
       if (!cache) gi = lut[clamp255(v * 255)];
       else {
         const delta = v - orig, b = ci * 9;
         let key = 0;
-        for (let k = 0; k < 9; k++) key = key * 8 + Math.min(7, Math.max(0, Math.round((sub[b + k] + delta) * 7)));
+        for (let q = 0; q < 9; q++) key = key * 8 + Math.min(7, Math.max(0, Math.round((sub[b + q] + delta) * 7)));
         gi = cache.get(key);
         if (gi === undefined) {
           let bd = Infinity; gi = 0;
           for (let i = 0; i < n; i++) {
             const dt = v - level[i];
             let dist = tw * dt * dt;
-            for (let k = 0; k < 9; k++) { const dk = sub[b + k] + delta - vec[i * 9 + k]; dist += swt * dk * dk; }
+            for (let q = 0; q < 9; q++) { const dk = sub[b + q] + delta - vec[i * 9 + q]; dist += swt * dk * dk; }
             if (dist < bd) { bd = dist; gi = i; }
           }
           cache.set(key, gi);
         }
       }
       glyph[ci] = gi;
-      if (dither === "fs" || dither === "atkinson") {
-        const e = v - level[gi];
-        if (dither === "fs") {
-          diffuse(c + 1, r, e, 7 / 16); diffuse(c - 1, r + 1, e, 3 / 16); diffuse(c, r + 1, e, 5 / 16); diffuse(c + 1, r + 1, e, 1 / 16);
-        } else {
-          diffuse(c + 1, r, e, 1 / 8); diffuse(c + 2, r, e, 1 / 8); diffuse(c - 1, r + 1, e, 1 / 8);
-          diffuse(c, r + 1, e, 1 / 8); diffuse(c + 1, r + 1, e, 1 / 8); diffuse(c, r + 2, e, 1 / 8);
+      if (kernel) {
+        const e = ((v - level[gi]) * strength) / kernel[0];
+        for (const [dx, dy, w] of kernel[1]) {
+          const x = rev ? c - dx : c + dx, y = r + dy;
+          if (x >= 0 && x < cols && y < rows) work[y * cols + x] += e * w;
         }
       }
     }
@@ -455,5 +504,5 @@ function toSVG(grid, cs, s) {
   return parts.join("\n");
 }
 
-const Engine = { resampleGlyph, DEFAULTS, prepareAtlas, buildCharset, computeGeometry, computeGrid, render, flattenForPreview, gridLines, toText, toHTML, toSVG, hexToRgb, rgbToHex, luma };
+const Engine = { DIFFUSION, ORDERED, resampleGlyph, DEFAULTS, prepareAtlas, buildCharset, computeGeometry, computeGrid, render, flattenForPreview, gridLines, toText, toHTML, toSVG, hexToRgb, rgbToHex, luma };
 if (typeof module !== "undefined") module.exports = Engine;
