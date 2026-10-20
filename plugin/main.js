@@ -253,6 +253,46 @@ function currentView() {
   return { x, y, w, h, scale: zoom };
 }
 function updateZoomLabel() { $("zoomLabel").textContent = zoom === null ? "Fit" : Math.round(zoom * 100) + "%"; }
+// The zoomed preview is a natively scrollable viewport (scrolling works reliably in UXP panels, wheel events may not).
+// A spacer sized like the zoomed image provides the scroll range; only the visible part is rendered and the
+// image is positioned where that part sits inside the spacer.
+const IS_WIN = (() => { try { return require("os").platform() === "win32"; } catch (e) { return false; } })();
+let box = { w: 300, h: 225 }; // CSS size of the visible preview area
+let layoutKey = "", ignoreScrollUntil = 0, lastScroll = { l: -1, t: -1 };
+const zoomRatio = () => (zoom === null ? 1 : zoom / fitScale());
+
+function layoutPreview(forceScroll) {
+  if (!src) return;
+  const wrap = $("previewWrap"), pv = $("pvScroll"), sp = $("pvSpace");
+  const wrapW = wrap.clientWidth || wrap.getBoundingClientRect().width || 300;
+  const maxH = Math.max(70, (window.innerHeight || 600) * 0.38);
+  const fit = fitScale(), fw = src.docW * fit, fh = src.docH * fit;
+  let bw = Math.max(40, wrapW - 2), bh = (bw * fh) / fw;
+  if (bh > maxH) { bh = maxH; bw = (bh * fw) / fh; }
+  box = { w: Math.round(bw), h: Math.round(bh) };
+  const z = zoomRatio(), key = `${box.w}x${box.h}@${z.toFixed(4)}`;
+  if (key === layoutKey && !forceScroll) return;
+  layoutKey = key;
+  pv.style.width = box.w + "px"; pv.style.height = box.h + "px";
+  sp.style.width = Math.round(box.w * z) + "px"; sp.style.height = Math.round(box.h * z) + "px";
+  const apply = () => {
+    ignoreScrollUntil = Date.now() + 80;
+    pv.scrollLeft = Math.max(0, focus.x * box.w * z - box.w / 2);
+    pv.scrollTop = Math.max(0, focus.y * box.h * z - box.h / 2);
+    lastScroll = { l: pv.scrollLeft, t: pv.scrollTop };
+  };
+  apply(); setTimeout(apply, 0); // again after layout has caught up with the new spacer size
+}
+function focusFromScroll() {
+  const pv = $("pvScroll"), z = zoomRatio();
+  lastScroll = { l: pv.scrollLeft, t: pv.scrollTop };
+  focus = { x: (pv.scrollLeft + box.w / 2) / (box.w * z), y: (pv.scrollTop + box.h / 2) / (box.h * z) };
+}
+function checkScroll() { // works whether or not UXP fires "scroll" events
+  if (zoom === null || Date.now() < ignoreScrollUntil || !src) return;
+  const pv = $("pvScroll");
+  if (pv.scrollLeft !== lastScroll.l || pv.scrollTop !== lastScroll.t) { focusFromScroll(); schedulePreview(0); }
+}
 function zoomAt(newZoom, fx, fy) {
   if (!src) return;
   const v = currentView(), fit = fitScale();
@@ -261,13 +301,17 @@ function zoomAt(newZoom, fx, fy) {
   const vw = v.w / newZoom, vh = v.h / newZoom;
   focus = { x: (px - fx * vw + vw / 2) / src.docW, y: (py - fy * vh + vh / 2) / src.docH };
   zoom = newZoom <= fit * 1.0001 ? null : newZoom;
+  currentView(); // clamps focus
   updateZoomLabel();
+  layoutPreview(true);
   schedulePreview(0);
 }
-function panBy(dx, dy, rect) {
-  if (!src || zoom === null || !rect.width) return;
-  const v = currentView(), k = v.w / rect.width / v.scale; // document px per screen px
-  focus = { x: focus.x - (dx * k) / src.docW, y: focus.y - (dy * k) / src.docH };
+function panBy(dx, dy) {
+  if (!src || zoom === null) return;
+  const pv = $("pvScroll"), l = pv.scrollLeft, t = pv.scrollTop;
+  pv.scrollLeft = l - dx; pv.scrollTop = t - dy;
+  if (pv.scrollLeft !== l || pv.scrollTop !== t) focusFromScroll();
+  else { const z = zoomRatio(); focus = { x: focus.x - dx / (box.w * z), y: focus.y - dy / (box.h * z) }; currentView(); layoutPreview(true); }
   schedulePreview(0);
 }
 
@@ -284,11 +328,15 @@ async function renderPreview() {
   const { cs, geo, grid } = gridCache;
   const docW = src.docW, docH = src.docH;
   const view = currentView();
+  layoutPreview(false);
   const rgb = Engine.flattenForPreview(Engine.render(grid, cs, atlas, S, view), view.w, view.h);
   const id = await imaging.createImageDataFromBuffer(rgb, { width: view.w, height: view.h, components: 3, chunky: true, colorProfile: "sRGB IEC61966-2.1", colorSpace: "RGB" });
   const b64 = await imaging.encodeImageData({ imageData: id, base64: true });
   id.dispose();
-  const img = $("preview");
+  const img = $("preview"), z = zoomRatio();
+  img.style.left = Math.round((view.x / docW) * box.w * z) + "px";
+  img.style.top = Math.round((view.y / docH) * box.h * z) + "px";
+  img.style.width = box.w + "px"; img.style.height = box.h + "px";
   img.src = "data:image/jpeg;base64," + b64;
   img.classList.remove("hidden");
   $("previewMsg").classList.add("hidden");
@@ -655,27 +703,38 @@ function buildUI() {
 
   $("source").addEventListener("change", () => { src = null; schedulePreview(0); });
   $("refresh").addEventListener("click", () => { src = null; csCache.key = null; schedulePreview(0); });
-  // preview navigation: pinch (trackpad) or mouse wheel zooms, two-finger scroll or drag pans, double-click toggles fit
-  const wrap = $("previewWrap");
-  const pointIn = (e) => { const r = $("preview").getBoundingClientRect(); return { r, fx: r.width ? Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) : 0.5, fy: r.height ? Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) : 0.5 }; };
-  wrap.addEventListener("wheel", (e) => {
+  // preview navigation: pinch / modifier+wheel zooms (plain wheel on Windows); scrolling or dragging pans
+  const wrap = $("previewWrap"), pv = $("pvScroll");
+  if (IS_WIN) $("navHint").textContent = "Wheel: zoom · Shift+wheel / drag: pan";
+  const pointIn = (e) => { const r = pv.getBoundingClientRect(); return { fx: box.w && e.clientX != null ? Math.min(1, Math.max(0, (e.clientX - r.left) / box.w)) : 0.5, fy: box.h && e.clientY != null ? Math.min(1, Math.max(0, (e.clientY - r.top) / box.h)) : 0.5 }; };
+  const inPreview = (e) => { for (let n = e.target; n; n = n.parentNode) if (n === wrap) return true; return false; };
+  let lastWheel = null;
+  const onWheel = (e) => {
+    if (e === lastWheel) return; lastWheel = e;
+    const zoomGesture = e.ctrlKey || e.metaKey || e.altKey || (IS_WIN && !e.shiftKey);
+    if (!zoomGesture) return; // let the viewport scroll natively (pan)
     if (e.preventDefault) e.preventDefault();
-    const { r, fx, fy } = pointIn(e);
-    const lines = e.deltaMode === 1, pinch = e.ctrlKey || e.metaKey;
-    const mouseWheel = lines || (e.deltaX === 0 && Math.abs(e.deltaY) >= 50 && Number.isInteger(e.deltaY));
-    if (pinch || mouseWheel || e.altKey) {
-      const d = lines ? e.deltaY * 33 : e.deltaY;
-      zoomAt((zoom || fitScale()) * Math.exp(-d * (pinch ? 0.01 : 0.0025)), fx, fy);
-    } else panBy(-e.deltaX, -e.deltaY, r);
-  });
-  let drag = null;
-  wrap.addEventListener("mousedown", (e) => { drag = { x: e.clientX, y: e.clientY, r: $("preview").getBoundingClientRect() }; if (e.preventDefault) e.preventDefault(); });
-  const dragRoot = typeof document.addEventListener === "function" ? document : wrap;
-  dragRoot.addEventListener("mousemove", (e) => { if (!drag) return; panBy(e.clientX - drag.x, e.clientY - drag.y, drag.r); drag.x = e.clientX; drag.y = e.clientY; });
-  dragRoot.addEventListener("mouseup", () => { drag = null; });
-  wrap.addEventListener("mouseleave", () => { if (dragRoot === wrap) drag = null; });
-  wrap.addEventListener("dblclick", (e) => { const { fx, fy } = pointIn(e); if (zoom === null) zoomAt(1, fx, fy); else { zoom = null; updateZoomLabel(); schedulePreview(0); } });
-  $("zoomFit").addEventListener("click", () => { zoom = null; updateZoomLabel(); schedulePreview(0); });
+    const lines = e.deltaMode === 1, d = lines ? e.deltaY * 33 : e.deltaY, pinch = e.ctrlKey && !IS_WIN;
+    const { fx, fy } = pointIn(e);
+    zoomAt((zoom || fitScale()) * Math.exp(-d * (pinch ? 0.01 : 0.002)), fx, fy);
+  };
+  pv.addEventListener("wheel", onWheel);
+  if (typeof document.addEventListener === "function") document.addEventListener("wheel", (e) => { if (inPreview(e)) onWheel(e); });
+  pv.addEventListener("scroll", () => { if (Date.now() >= ignoreScrollUntil) checkScroll(); });
+  let drag = null, usePointer = false;
+  const down = (e, isPointer) => { if (isPointer) usePointer = true; else if (usePointer) return; drag = { x: e.clientX, y: e.clientY }; };
+  const move = (e, isPointer) => { if (!drag || (usePointer && !isPointer)) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY }; if (dx || dy) panBy(dx, dy); };
+  const up = () => { drag = null; };
+  const root = typeof document.addEventListener === "function" ? document : wrap;
+  pv.addEventListener("pointerdown", (e) => down(e, true));
+  pv.addEventListener("mousedown", (e) => down(e, false));
+  root.addEventListener("pointermove", (e) => move(e, true));
+  root.addEventListener("mousemove", (e) => move(e, false));
+  root.addEventListener("pointerup", up);
+  root.addEventListener("mouseup", up);
+  wrap.addEventListener("mouseleave", () => { if (root === wrap) drag = null; });
+  pv.addEventListener("dblclick", (e) => { const { fx, fy } = pointIn(e); if (zoom === null) zoomAt(1, fx, fy); else zoomAt(0, 0.5, 0.5); });
+  $("zoomFit").addEventListener("click", () => zoomAt(0, 0.5, 0.5));
   $("zoom1").addEventListener("click", () => zoomAt(1, 0.5, 0.5));
   $("zoomIn").addEventListener("click", () => zoomAt((zoom || fitScale()) * 1.5, 0.5, 0.5));
   $("zoomOut").addEventListener("click", () => zoomAt((zoom || fitScale()) / 1.5, 0.5, 0.5));
@@ -794,7 +853,7 @@ function fitLayout(force) {
   if (!H) return;
   const top = $("top");
   if (!force && H === lastH && top.offsetHeight === lastTop) return;
-  $("preview").style.maxHeight = Math.max(70, Math.round(H * 0.38)) + "px";
+  layoutPreview(false);
   lastH = H; lastTop = top.offsetHeight;
   $("scroller").style.height = Math.max(60, H - top.offsetHeight) + "px";
 }
@@ -816,6 +875,7 @@ async function init() {
   window.addEventListener("resize", () => fitLayout(true));
   $("preview").addEventListener("load", () => fitLayout(true));
   setInterval(() => fitLayout(false), 400);
+  setInterval(checkScroll, 100);
   fitLayout(true);
   try { atlas = await loadAtlas(); }
   catch (e) { console.error(e); showPreviewMsg("Failed to load glyph atlas: " + errMsg(e)); return; }

@@ -22,7 +22,9 @@
   .head .chev { margin-right: 6px; width: 10px; opacity: 0.7; }
   .collapsed .body { display: none; }
   #previewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; min-height: 80px; position: relative; overflow: hidden; }
-  #preview { max-width: 100%; max-height: 38vh; }
+  #pvScroll { overflow: auto; position: relative; }
+  #pvSpace { position: relative; }
+  #preview { position: absolute; left: 0; top: 0; }
   #previewMsg { position: absolute; padding: 12px; text-align: center; color: #bbb; }
   #status { font-size: 10px; opacity: 0.75; min-height: 14px; margin: 4px 0; }
   .swatch { width: 28px; height: 20px; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; flex: 0 0 28px; cursor: pointer; }
@@ -41,14 +43,14 @@
 </head>
 <body>
  <div id="top">
-  <div id="previewWrap"><img id="preview" alt=""><div id="previewMsg">Open a document to begin</div></div>
+  <div id="previewWrap"><div id="pvScroll"><div id="pvSpace"><img id="preview" alt=""></div></div><div id="previewMsg">Open a document to begin</div></div>
   <div class="row" style="margin-top:5px">
     <button id="zoomFit" class="zbtn" title="Fit the whole image">Fit</button>
     <button id="zoom1" class="zbtn" title="100%">1:1</button>
     <button id="zoomOut" class="zbtn" title="Zoom out">−</button>
     <button id="zoomIn" class="zbtn" title="Zoom in">+</button>
     <span id="zoomLabel" class="val" style="text-align:left;margin-left:2px">Fit</span>
-    <span class="hint grow" style="margin:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Pinch/scroll to zoom · drag to pan</span>
+    <span class="hint grow" style="margin:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis"><span id="navHint">Pinch or ⌥+scroll: zoom · scroll/drag: pan</span></span>
   </div>
   <div class="row">
     <select id="source" class="grow">
