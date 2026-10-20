@@ -7,6 +7,8 @@ const Engine = require("./engine.js");
 const { CHARSETS } = require("./charsets.js");
 const { PRESETS } = require("./presets.js");
 const setupInk = require("./inkui.js");
+const { makeSlider, SLIDER_HTML } = require("./slider.js");
+const { enhanceAllSelects } = require("./dropdown.js");
 
 const $ = (id) => document.getElementById(id);
 // Layers made by the plugin end in "ASCII by Star" (older versions used a "#xxxxxx" tag).
@@ -42,7 +44,7 @@ function errMsg(e) {
   if (/modal/i.test(m)) return "Photoshop is busy (a dialog or tool is active). Finish it and try again.";
   return m;
 }
-function setSelect(el, v) { for (const o of el.options) o.selected = o.value === String(v); el.value = String(v); }
+function setSelect(el, v) { for (const o of el.options) o.selected = o.value === String(v); el.value = String(v); if (el.ddUpdate) el.ddUpdate(); }
 function activeDoc() { try { return app.activeDocument || null; } catch (e) { return null; } }
 function bitDepth(doc) { const b = String(doc.bitsPerChannel); return b.includes("32") ? 32 : b.includes("16") ? 16 : 8; }
 function isGray(doc) { return /gray/i.test(String(doc.mode)); }
@@ -234,6 +236,12 @@ async function createLayer(doc, name) {
   return await doc.createLayer({ name });
 }
 
+const TEXT_MODE_HINTS = {
+  ramp: "Each character is one brightness step. Characters with a similar amount of ink (like ABC) look alike, so one wins; use ones that differ (.:-=+*#%@), or turn Sort by density off to give each an equal share in your order.",
+  words: "Separate words or letter pairs with spaces, e.g.  · oo OK WOW ###. Each one covers as many cells as it has letters; darker areas get the inkier ones.",
+  phrase: "Your text is written over the image again and again, like a typed page. Light areas stay empty (Tone ▸ Threshold empties more), and the image shows through the letters' shade and colour.",
+};
+
 // ---------- custom fonts ----------
 // UXP can't draw text, so characters in an installed font are rendered by Photoshop itself: one text layer
 // per character in a scratch document, read back and cropped into an atlas like the built-in one.
@@ -241,7 +249,14 @@ async function createLayer(doc, name) {
 const fontAtlases = new Map();
 let fontBuild = null; // {key, promise}
 function charsetString() { const info = charsetInfo(); return info.id === "custom" ? S.customChars : info.chars; }
-function fontKey() { const set = new Set(Array.from(" " + charsetString()).filter((c) => c !== "\n" && c !== "\r" && c !== "\t")); return { chars: Array.from(set), key: S.font + "|" + Array.from(set).join("") }; }
+// The font to draw with: the chosen one, or Menlo drawn by Photoshop when the text has characters the
+// built-in atlas lacks (lowercase Cyrillic, other scripts, emoji…), so nothing typed is dropped.
+function effectiveFont() {
+  if (S.font) return S.font;
+  if (baseAtlas) for (const ch of Array.from(charsetString())) if (ch > " " && !baseAtlas.index.has(ch)) return "Menlo-Regular";
+  return "";
+}
+function fontKey() { const set = new Set(Array.from(" " + charsetString()).filter((c) => c !== "\n" && c !== "\r" && c !== "\t")); return { chars: Array.from(set), key: effectiveFont() + "|" + Array.from(set).join("") }; }
 function hashStr(t) { let h = 0x811c9dc5; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(16); }
 
 async function loadCachedFontAtlas(key) {
@@ -309,14 +324,15 @@ async function buildFontAtlas(fontPS, chars, key) {
 // Makes `atlas` match the chosen font and character set; renders the font first if needed.
 async function readyAtlas() {
   if (!baseAtlas) return;
-  if (!S.font) { atlas = baseAtlas; return; }
+  const font = effectiveFont();
+  if (!font) { atlas = baseAtlas; return; }
   const { chars, key } = fontKey();
   if (!fontAtlases.has(key)) {
     let a = await loadCachedFontAtlas(key);
     if (!a) {
-      if (!fontBuild || fontBuild.key !== key) fontBuild = { key, promise: buildFontAtlas(S.font, chars, key) };
+      if (!fontBuild || fontBuild.key !== key) fontBuild = { key, promise: buildFontAtlas(font, chars, key) };
       try { a = await fontBuild.promise; }
-      catch (e) { console.error(e); status(`Couldn't render ${S.fontName || S.font}: ${errMsg(e)}. Using the built-in font.`, true); atlas = baseAtlas; return; }
+      catch (e) { console.error(e); status(`Couldn't render ${S.fontName || font}: ${errMsg(e)}. Using the built-in font.`, true); atlas = baseAtlas; return; }
       finally { if (fontBuild && fontBuild.key === key) fontBuild = null; }
     }
     fontAtlases.set(key, a);
@@ -816,6 +832,17 @@ const SLIDERS = {
   gTracking: ["VHS tracking", 0, 1, 0.01, pct],
   gScanlines: ["Scanlines", 0, 1, 0.01, pct],
   gNoise: ["Noise", 0, 1, 0.01, pct],
+  shadowAngle: ["Light angle", -180, 180, 1, (v) => Math.round(v) + "°"],
+  dropOpacity: ["Opacity", 0, 1, 0.01, pct],
+  dropDistance: ["Distance", 0, 1, 0.01, pct],
+  dropSize: ["Softness", 0, 1.5, 0.01, pct],
+  longOpacity: ["Opacity", 0, 1, 0.01, pct],
+  longLength: ["Length", 0.1, 6, 0.05, pct],
+  longFade: ["Fade out", 0, 1, 0.01, pct],
+  offOpacity: ["Opacity", 0, 1, 0.01, pct],
+  offDistance: ["Distance", 0, 1, 0.01, pct],
+  glowOpacity: ["Strength", 0, 1, 0.01, pct],
+  glowSize: ["Size", 0.05, 2, 0.01, pct],
 };
 const GLITCH_KEYS = Object.keys(Engine.DEFAULTS).filter((k) => /^g[A-Z]/.test(k));
 
@@ -837,9 +864,9 @@ const sliderEls = {};
 function buildUI() {
   for (const [key, [label, min, max, step, fmt]] of Object.entries(SLIDERS)) {
     const host = $("sl-" + key);
-    host.innerHTML = `<div class="row"><span class="label" title="Double-click to reset">${label}</span><input type="range" min="${min}" max="${max}" step="${step}"><span class="val"></span></div>`;
-    const input = host.querySelector("input"), val = host.querySelector(".val");
-    input.addEventListener("input", () => { S[key] = parseFloat(input.value); val.textContent = fmt(S[key]); schedulePreview(); });
+    host.innerHTML = `<div class="row"><span class="label" title="Double-click to reset">${label}</span>${SLIDER_HTML}<span class="val"></span></div>`;
+    const val = host.querySelector(".val");
+    const input = makeSlider(host.querySelector(".slider"), min, max, step, (v) => { S[key] = v; val.textContent = fmt(v); schedulePreview(); });
     host.querySelector(".label").addEventListener("dblclick", () => { S[key] = Engine.DEFAULTS[key]; syncUI(); schedulePreview(); });
     sliderEls[key] = { input, val, fmt, row: host };
   }
@@ -852,6 +879,7 @@ function buildUI() {
 
   const bindSelect = (id, key, after) => $(id).addEventListener("change", () => { S[key] = $(id).value; if (after) after(); refreshVisibility(); schedulePreview(); });
   bindSelect("charset", "charset");
+  bindSelect("textMode", "textMode");
   bindSelect("sizeMode", "sizeMode");
   bindSelect("dither", "dither");
   bindSelect("colorMode", "colorMode");
@@ -869,6 +897,9 @@ function buildUI() {
   bindCheck("glitchOn", "glitchOn");
   bindCheck("gradientMid", "gradientMid");
   bindCheck("keepAlpha", "keepAlpha");
+  bindCheck("phraseShade", "phraseShade");
+  bindCheck("phraseWrap", "phraseWrap");
+  for (const k of ["dropOn", "longOn", "offOn", "glowOn", "glowTextColor"]) bindCheck(k, k);
   $("customChars").addEventListener("input", () => { S.customChars = $("customChars").value; schedulePreview(120); });
 
   document.querySelectorAll(".swatch").forEach((el) => el.addEventListener("click", () => pickColor(el.dataset.color)));
@@ -948,9 +979,10 @@ function buildUI() {
   buildPresetSelect();
 }
 
-function getColor(k) { return k === "fg" ? S.fg : k === "bg" ? S.bg : S.gradient[Number(k[1])]; }
+// colour keys: g0..g2 are the gradient stops, anything else is a setting name (fg, bg, dropColor, …)
+function getColor(k) { return /^g\d$/.test(k) ? S.gradient[Number(k[1])] : S[k]; }
 function setColor(k, hex) {
-  if (k === "fg") S.fg = hex; else if (k === "bg") S.bg = hex; else S.gradient[Number(k[1])] = hex;
+  if (/^g\d$/.test(k)) S.gradient[Number(k[1])] = hex; else S[k] = hex;
   syncUI(); schedulePreview(0);
 }
 // Photoshop's colour picker; resolves to the chosen "#rrggbb", or null when cancelled.
@@ -983,7 +1015,10 @@ function syncUI() {
   setSelect($("gChannelSwap"), S.gChannelSwap);
   $("serpentine").checked = !!S.serpentine; if ($("serpentine").syncChecked) $("serpentine").syncChecked();
   $("gradientMid").checked = !!S.gradientMid; if ($("gradientMid").syncChecked) $("gradientMid").syncChecked();
-  $("keepAlpha").checked = !!S.keepAlpha; if ($("keepAlpha").syncChecked) $("keepAlpha").syncChecked();
+  $("keepAlpha").checked = !!S.keepAlpha;
+  setSelect($("textMode"), S.textMode);
+  for (const k of ["phraseShade", "phraseWrap"]) { $(k).checked = !!S[k]; if ($(k).syncChecked) $(k).syncChecked(); }
+  for (const k of ["dropOn", "longOn", "offOn", "glowOn", "glowTextColor"]) { $(k).checked = !!S[k]; if ($(k).syncChecked) $(k).syncChecked(); } if ($("keepAlpha").syncChecked) $("keepAlpha").syncChecked();
   if ($("customChars").value !== S.customChars) $("customChars").value = S.customChars;
   if (allFonts.length) fillFontSelect();
   document.querySelectorAll(".swatch").forEach((el) => { el.style.backgroundColor = getColor(el.dataset.color); });
@@ -993,7 +1028,12 @@ function syncUI() {
 function refreshVisibility() {
   const show = (el, on) => el.classList.toggle("hidden", !on);
   show($("customRow"), S.charset === "custom");
-  show($("sortHint"), !S.sortByDensity);
+  const custom = S.charset === "custom", mode = custom ? S.textMode : "ramp";
+  show($("textModeRows"), custom);
+  show($("phraseRows"), mode === "phrase");
+  show($("sortRow"), mode === "ramp");
+  show($("sortHint"), mode === "ramp" && !S.sortByDensity);
+  $("textModeHint").textContent = TEXT_MODE_HINTS[mode] || "";
   show(sliderEls.size.row, S.sizeMode === "px");
   show(sliderEls.columns.row, S.sizeMode === "cols");
   show($("fgRow"), S.colorMode === "mono");
@@ -1001,6 +1041,9 @@ function refreshVisibility() {
   show($("origRows"), S.colorMode === "original");
   show($("bgRow"), S.bgMode !== "transparent");
   show($("keepAlphaRow"), S.bgMode !== "transparent");
+  show($("dropRows"), !!S.dropOn); show($("longRows"), !!S.longOn); show($("offRows"), !!S.offOn); show($("glowRows"), !!S.glowOn);
+  show($("glowColorRow"), !S.glowTextColor);
+  show(sliderEls.shadowAngle.row, !!(S.dropOn || S.longOn || S.offOn));
   show(sliderEls.mosaicAmount.row, S.bgMode === "mosaic");
   show(sliderEls.ditherStrength.row, S.dither !== "none");
   show($("serpRow"), !!Engine.DIFFUSION[S.dither]);
@@ -1090,22 +1133,6 @@ function onCheck(el, fn) {
   el.syncChecked = () => { last = el.checked; };
 }
 
-// The mouse wheel scrolls the settings, never a control under the pointer: a dropdown or slider releases
-// focus once it has been used, and wheel events over closed dropdowns and sliders scroll the panel instead.
-function guardWheel() {
-  const scrollerOf = (el) => { for (let n = el; n; n = n.parentNode) if (n.id === "scroller" || n.id === "inkScroller") return n; return null; };
-  document.querySelectorAll("select, input[type=range]").forEach((el) => {
-    el.addEventListener("change", () => setTimeout(() => { try { el.blur(); } catch (e) { /* not focusable */ } }, 0));
-    el.addEventListener("wheel", (e) => {
-      const sc = scrollerOf(el);
-      if (!sc) return;
-      e.preventDefault(); e.stopPropagation();
-      try { el.blur(); } catch (e2) { /* not focusable */ }
-      sc.scrollTop += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-    }, { passive: false });
-  });
-}
-
 // ---------- layout ----------
 // UXP panels don't scroll on their own: give the settings area an explicit height
 // (panel height minus the pinned preview block) whenever the panel size changes.
@@ -1149,10 +1176,10 @@ function onPsEvent(evt, desc) {
 }
 
 async function init() {
+  enhanceAllSelects(() => fitLayout(true)); // before any "change" listener is added
   buildUI();
   syncUI();
   ink = setupInk({ $, loadJSON, saveJSON, errMsg, toRGBA8, makeImageData, convertOut, createLayer, findLayers, findLayerById, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck });
-  guardWheel();
   $("tabAscii").addEventListener("click", () => showTab("ascii"));
   $("tabInk").addEventListener("click", () => showTab("ink"));
   showTab(tab);

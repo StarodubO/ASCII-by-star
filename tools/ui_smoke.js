@@ -6,7 +6,7 @@ const els = {};
 const mk = (id) => ({ id, value: "", checked: false, textContent: "", innerHTML: "", style: {}, dataset: {}, options: [], classList: { add() {}, remove() {}, toggle() {} },
   addEventListener() {}, querySelector(sel) { return mk(id + sel); }, querySelectorAll() { return []; }, getBoundingClientRect() { return { left: 0, top: 0, width: 1, height: 1 }; }, offsetHeight: 100 });
 for (const id of ids) els[id] = mk(id);
-global.document = { getElementById: (id) => { if (!els[id]) throw new Error("missing element #" + id); return els[id]; }, querySelectorAll: () => [], documentElement: {}, addEventListener() {} };
+global.document = { getElementById: (id) => { if (!els[id]) throw new Error("missing element #" + id); return els[id]; }, querySelectorAll: () => [], createElement: (t) => mk("new-" + t), documentElement: {}, addEventListener() {} };
 global.window = { innerHeight: 800, addEventListener() {} };
 global.localStorage = { getItem: () => null, setItem() {} };
 global.navigator = {};

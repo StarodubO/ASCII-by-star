@@ -21,6 +21,9 @@ const PRESETS = [
   { id: "vhs", name: "VHS Dream", settings: { charset: "bourke", size: 10, colorMode: "original", saturation: 1.4, colorBoost: 0.45, bg: "#05030a", glitchOn: true, glitchSeed: 1987, gWave: 0.04, gWaveFreq: 3, gRgbSplit: 0.55, gInterlace: 0.25, gTracking: 0.7, gScanlines: 0.45, gNoise: 0.2 } },
   { id: "datamosh", name: "Datamosh", settings: { charset: "shademix", size: 10, detail: 0.4, colorMode: "original", saturation: 1.3, bg: "#000000", glitchOn: true, glitchSeed: 31337, gPixelSort: 0.5, gSortDir: "v", gBlocks: 0.55, gBlockSize: 0.45, gMelt: 0.35, gStutter: 0.25, gChannelSwap: "brg" } },
   { id: "typewriter", name: "Typewriter", settings: { charset: "alnum", size: 10, colorMode: "mono", fg: "#2b2420", bg: "#efe6d2", detail: 0.4 } },
+  { id: "riso", name: "Riso Offset", settings: { charset: "bourke", size: 12, colorMode: "mono", fg: "#1f3a93", bg: "#f3eee2", offOn: true, offColor: "#ff4f79", offOpacity: 0.9, offDistance: 0.12 } },
+  { id: "longshadow", name: "Long Shadow", settings: { charset: "standard", size: 14, colorMode: "mono", fg: "#fff4e0", bg: "#e8553d", contrast: 1.2, longOn: true, longColor: "#8f2a1a", longOpacity: 0.85, longLength: 1.6, longFade: 0.5 } },
+  { id: "neonglow", name: "Neon Glow", settings: { charset: "bourke", size: 12, colorMode: "gradient", gradient: ["#12002a", "#ff00c8", "#00f0ff"], gradientMid: true, bg: "#07000f", contrast: 1.2, glowOn: true, glowOpacity: 0.9, glowSize: 0.5 } },
 ];
 
 if (typeof module !== "undefined") module.exports = { PRESETS };

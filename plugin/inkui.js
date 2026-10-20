@@ -6,6 +6,7 @@ const { app, core, action, imaging, constants } = require("photoshop");
 const uxp = require("uxp");
 const lfs = uxp.storage.localFileSystem, formats = uxp.storage.formats;
 const Ink = require("./ink.js");
+const { makeSlider, SLIDER_HTML } = require("./slider.js");
 
 const INK_RE = /\s*Ink Bleed$/;
 const ORDER = ["bleed", "pool", "gaps", "paper"]; // bottom to top inside the group
@@ -526,9 +527,9 @@ module.exports = function setupInk(h) {
   function build() {
     for (const [key, [label, min, max, step, fmt, tip]] of Object.entries(SLIDERS)) {
       const host = $("isl-" + key);
-      host.innerHTML = `<div class="row" title="${tip}"><span class="label" title="${tip} Double-click to reset.">${label}</span><input type="range" min="${min}" max="${max}" step="${step}"><span class="val"></span></div>`;
-      const input = host.querySelector("input"), val = host.querySelector(".val"), px = fmt === "px";
-      input.addEventListener("input", () => { I[key] = parseFloat(input.value); val.textContent = px ? fmtPx(I[key]) : fmt(I[key]); schedule(); });
+      host.innerHTML = `<div class="row" title="${tip}"><span class="label" title="${tip} Double-click to reset.">${label}</span>${SLIDER_HTML}<span class="val"></span></div>`;
+      const val = host.querySelector(".val"), px = fmt === "px";
+      const input = makeSlider(host.querySelector(".slider"), min, max, step, (v) => { I[key] = v; val.textContent = px ? fmtPx(v) : fmt(v); schedule(); });
       host.querySelector(".label").addEventListener("dblclick", () => {
         const p = Ink.PAPERS.find((x) => x.id === I.paper) || Ink.PAPERS[0];
         I[key] = p.s[key] !== undefined ? p.s[key] : Ink.DEFAULTS[key]; sync(); schedule();

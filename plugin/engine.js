@@ -22,6 +22,9 @@ const clamp255 = (v) => (v < 0 ? 0 : v > 255 ? 255 : Math.round(v));
 const DEFAULTS = {
   charset: "bourke",
   customChars: " .:-=+*#%@",
+  textMode: "ramp", // custom text: ramp (one character per brightness step) | words | phrase (written out, repeating)
+  phraseShade: true, // phrase: letters fade with the image
+  phraseWrap: true, // phrase: carry on where the previous line stopped (off: every line starts the text again)
   sortByDensity: true,
   font: "", // PostScript name of an installed font; "" = built-in Menlo atlas
   fontName: "",
@@ -50,6 +53,13 @@ const DEFAULTS = {
   keepAlpha: true, // the background only covers the source's opaque parts
   mosaicAmount: 0.35,
   glyphOpacity: 1,
+  // shadows: drawn between the background and the characters. Sizes are fractions of the font size, so they
+  // scale with it; the light angle follows Photoshop (135° = light from the top left, shadow falls down-right).
+  shadowAngle: 135,
+  dropOn: false, dropColor: "#000000", dropOpacity: 0.6, dropDistance: 0.15, dropSize: 0.3,
+  longOn: false, longColor: "#000000", longOpacity: 0.4, longLength: 1.5, longFade: 1,
+  offOn: false, offColor: "#ff2a6d", offOpacity: 1, offDistance: 0.12,
+  glowOn: false, glowTextColor: true, glowColor: "#ffffff", glowOpacity: 0.8, glowSize: 0.4,
   // glitch (everything is inert unless glitchOn is true)
   glitchOn: false,
   glitchSeed: 1,
@@ -112,8 +122,9 @@ function buildCharset(atlas, str, sortByDensity) {
     for (let i = 0; i < n; i++) { const d = Math.abs(level[i] - v / 255); if (d < bd) { bd = d; best = i; } }
     lut[v] = best;
   }
-  const chars = Array.from(glyphs, (g) => atlas.chars[g]);
-  return { n, glyphs, cov, level, vec, lut, chars };
+  const chars = Array.from(glyphs, (g) => atlas.chars[g]), charIndex = new Map();
+  chars.forEach((ch, i) => { if (!charIndex.has(ch)) charIndex.set(ch, i); });
+  return { n, glyphs, cov, level, vec, lut, chars, charIndex };
 }
 
 // ---------- geometry ----------
@@ -248,10 +259,63 @@ function gradientAt(stops, t) {
   return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
 }
 
+// Custom text used as words or as a phrase instead of a per-character brightness ramp.
+//   words:  space-separated words (or letter pairs); each covers as many cells as it has letters. Ordered by
+//           ink, they split the tones evenly; left to right, each spot gets the word that matches its cells.
+//   phrase: the text written out over and over in reading order; light cells stay empty and (phraseShade)
+//           letters fade with the image.
+function selectText(g, s, cs) {
+  const { cols, rows, ink } = g, cells = cols * rows, glyph = new Int16Array(cells).fill(-1);
+  const at = (ch) => (cs.charIndex.has(ch) ? cs.charIndex.get(ch) : -1);
+  let shade = null;
+  if (s.textMode === "phrase") {
+    const seq = Array.from(String(s.customChars || "").replace(/[\r\t]/g, "").replace(/\n+/g, " ")).map(at).filter((i) => i >= 0);
+    const thr = Math.max(s.threshold, 0.04);
+    if (s.phraseShade) shade = new Float32Array(cells);
+    let k = 0;
+    for (let r = 0; r < rows; r++) {
+      if (!s.phraseWrap) k = 0;
+      for (let c = 0; c < cols && seq.length; c++) {
+        const ci = r * cols + c, v = ink[ci];
+        if (v <= thr) continue;
+        glyph[ci] = seq[k++ % seq.length];
+        if (shade) shade[ci] = Math.pow(clamp01(v * 1.1), 0.8);
+      }
+    }
+  } else {
+    const words = Array.from(new Set(String(s.customChars || "").split(/\s+/).filter(Boolean)))
+      .map((w) => Array.from(w).map(at).filter((i) => i >= 0)).filter((w) => w.length)
+      .map((w) => ({ w, d: w.reduce((a, i) => a + cs.cov[i], 0) / w.length }))
+      .sort((a, b) => a.d - b.d);
+    // every word gets an equal share of the tones, lightest ink first, so all of them show up
+    words.forEach((x, i) => { x.level = (i + 1) / words.length; });
+    const lightest = words.length ? words[0].level : 1;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols;) {
+        const v0 = ink[r * cols + c];
+        if (v0 <= s.threshold || v0 < lightest / 2) { c++; continue; } // lighter than any word: leave empty
+        let best = null, be = Infinity;
+        for (const x of words) {
+          if (c + x.w.length > cols) continue;
+          let m = 0;
+          for (let j = 0; j < x.w.length; j++) m += ink[r * cols + c + j];
+          const e = Math.abs(x.level - m / x.w.length);
+          if (e < be) { be = e; best = x; }
+        }
+        if (!best) { c++; continue; }
+        for (let j = 0; j < best.w.length; j++) glyph[r * cols + c + j] = best.w[j];
+        c += best.w.length;
+      }
+    }
+  }
+  return { cols, rows, geo: g.geo, glyph, color: cellColors(g, s), rgb: g.rgb, alpha: g.alpha, ink, shade };
+}
+
 function selectGlyphs(g, s, cs) {
+  if (s.charset === "custom" && (s.textMode === "words" || s.textMode === "phrase")) return selectText(g, s, cs);
   const { cols, rows, ink, sub, rgb, alpha } = g;
   const cells = cols * rows;
-  const glyph = new Int16Array(cells), color = new Uint8Array(cells * 3);
+  const glyph = new Int16Array(cells);
   const work = Float32Array.from(ink);
   const dither = s.dither, detail = clamp01(s.detail), thr = s.threshold;
   const strength = s.ditherStrength === undefined ? 1 : Math.max(0, s.ditherStrength);
@@ -299,7 +363,12 @@ function selectGlyphs(g, s, cs) {
     }
   }
 
-  // colours
+  return { cols, rows, geo: g.geo, glyph, color: cellColors(g, s), rgb, alpha, ink };
+}
+
+// Glyph colour per cell: one colour, the image's own colours, or a gradient map of the ink.
+function cellColors(g, s) {
+  const { rgb, ink } = g, cells = g.cols * g.rows, color = new Uint8Array(cells * 3);
   const fg = hexToRgb(s.fg);
   const stops = (s.gradientMid ? s.gradient : [s.gradient[0], s.gradient[2]]).map(hexToRgb);
   const sat = s.saturation, boostExp = 1 - clamp01(s.colorBoost) * 0.75;
@@ -317,7 +386,7 @@ function selectGlyphs(g, s, cs) {
     } else { [cr, cg, cb] = fg; }
     color[ci * 3] = clamp255(cr); color[ci * 3 + 1] = clamp255(cg); color[ci * 3 + 2] = clamp255(cb);
   }
-  return { cols, rows, geo: g.geo, glyph, color, rgb, alpha, ink };
+  return color;
 }
 
 
@@ -413,16 +482,16 @@ function glitchSource(src, s) {
 
 function glitchGrid(grid, cs, s) {
   const { cols, rows, glyph, color } = grid, seed = s.glitchSeed | 0;
-  const alpha = grid.alpha; // moves with the glyphs, so a kept transparency follows the glitch
+  const alpha = grid.alpha, shade = grid.shade || new Float32Array(cols * rows); // move with the glyphs
   if (s.gStutter > 0) for (let r = 1; r < rows; r++) if (hash3(seed + 31, r, 0) < s.gStutter * 0.3) {
     glyph.copyWithin(r * cols, (r - 1) * cols, r * cols); color.copyWithin(r * cols * 3, (r - 1) * cols * 3, r * cols * 3);
-    alpha.copyWithin(r * cols, (r - 1) * cols, r * cols);
+    alpha.copyWithin(r * cols, (r - 1) * cols, r * cols); shade.copyWithin(r * cols, (r - 1) * cols, r * cols);
   }
   if (s.gRowShift > 0) for (let r = 0; r < rows; r++) if (hash3(seed + 32, r, 0) < s.gRowShift * 0.4) {
     const k = ((Math.round((hash3(seed + 33, r, 0) * 2 - 1) * s.gRowShift * cols * 0.3) % cols) + cols) % cols;
     if (!k) continue;
-    const g = glyph.slice(r * cols, (r + 1) * cols), c = color.slice(r * cols * 3, (r + 1) * cols * 3), al = alpha.slice(r * cols, (r + 1) * cols);
-    for (let x = 0; x < cols; x++) { const sx = (x - k + cols) % cols; glyph[r * cols + x] = g[sx]; alpha[r * cols + x] = al[sx]; color.set(c.subarray(sx * 3, sx * 3 + 3), (r * cols + x) * 3); }
+    const g = glyph.slice(r * cols, (r + 1) * cols), c = color.slice(r * cols * 3, (r + 1) * cols * 3), al = alpha.slice(r * cols, (r + 1) * cols), sh = shade.slice(r * cols, (r + 1) * cols);
+    for (let x = 0; x < cols; x++) { const sx = (x - k + cols) % cols; glyph[r * cols + x] = g[sx]; alpha[r * cols + x] = al[sx]; shade[r * cols + x] = sh[sx]; color.set(c.subarray(sx * 3, sx * 3 + 3), (r * cols + x) * 3); }
   }
   if (s.gCorrupt > 0 && cs.n > 1) for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
     if (hash3(seed + 34, c, r) < s.gCorrupt * 0.3) glyph[r * cols + c] = 1 + Math.floor(hash3(seed + 35, c, r) * (cs.n - 1));
@@ -510,10 +579,121 @@ function blendPx(out, o, r, g, b, a) {
   out[o + 3] = oa * 255;
 }
 
+// ---------- shadows ----------
+const hasShadow = (s) => s.dropOn || s.longOn || s.offOn || s.glowOn;
+function blurField(a, w, h, sigma) { // three box passes ≈ Gaussian, edges clamped
+  if (sigma < 0.4) return a;
+  const wIdeal = Math.sqrt((12 * sigma * sigma) / 3 + 1);
+  let wl = Math.floor(wIdeal); if (wl % 2 === 0) wl--;
+  const m = Math.round((12 * sigma * sigma - 3 * wl * wl - 12 * wl - 9) / (-4 * wl - 4)), tmp = new Float32Array(w * h);
+  for (let pass = 0; pass < 3; pass++) {
+    const r = ((pass < m ? wl : wl + 2) - 1) >> 1, inv = 1 / (2 * r + 1);
+    for (let y = 0; y < h; y++) {
+      const row = y * w; let acc = 0;
+      for (let k = -r; k <= r; k++) acc += a[row + Math.min(w - 1, Math.max(0, k))];
+      for (let x = 0; x < w; x++) { tmp[row + x] = acc * inv; acc += a[row + Math.min(w - 1, x + r + 1)] - a[row + Math.max(0, x - r)]; }
+    }
+    for (let x = 0; x < w; x++) {
+      let acc = 0;
+      for (let k = -r; k <= r; k++) acc += tmp[Math.min(h - 1, Math.max(0, k)) * w + x];
+      for (let y = 0; y < h; y++) { a[y * w + x] = acc * inv; acc += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x]; }
+    }
+  }
+  return a;
+}
+function shiftField(a, w, h, dx, dy) { // bilinear translate, empty outside
+  const out = new Float32Array(w * h), ix = Math.floor(dx), iy = Math.floor(dy), fx = dx - ix, fy = dy - iy;
+  const g = (x, y) => (x >= 0 && y >= 0 && x < w && y < h ? a[y * w + x] : 0);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const sx = x - ix, sy = y - iy;
+    out[y * w + x] = (g(sx, sy) * (1 - fx) + g(sx - 1, sy) * fx) * (1 - fy) + (g(sx, sy - 1) * (1 - fx) + g(sx - 1, sy - 1) * fx) * fy;
+  }
+  return out;
+}
+// Long shadow: every glyph pixel casts a trail `len` px long along (dx, dy). One sweep along the dominant
+// axis carries the trail forward, losing 1/len per px travelled: the result is 1 at the glyph, 0 at the end.
+function extrude(a, w, h, dx, dy, len) {
+  const S = Float32Array.from(a);
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const sx = Math.sign(dx) || 1, slope = dy / Math.abs(dx), dec = Math.hypot(1, slope) / len;
+    for (let k = 1; k < w; k++) {
+      const x = sx > 0 ? k : w - 1 - k, px = x - sx;
+      for (let y = 0; y < h; y++) {
+        const fy = y - slope, iy = Math.floor(fy), f = fy - iy;
+        const prev = (iy >= 0 && iy < h ? S[iy * w + px] : 0) * (1 - f) + (iy + 1 >= 0 && iy + 1 < h ? S[(iy + 1) * w + px] : 0) * f;
+        const v = prev - dec, i = y * w + x;
+        if (v > S[i]) S[i] = v;
+      }
+    }
+  } else {
+    const sy = Math.sign(dy) || 1, slope = dx / Math.abs(dy), dec = Math.hypot(1, slope) / len;
+    for (let k = 1; k < h; k++) {
+      const y = sy > 0 ? k : h - 1 - k, py = y - sy;
+      for (let x = 0; x < w; x++) {
+        const fx = x - slope, ix = Math.floor(fx), f = fx - ix;
+        const prev = (ix >= 0 && ix < w ? S[py * w + ix] : 0) * (1 - f) + (ix + 1 >= 0 && ix + 1 < w ? S[py * w + ix + 1] : 0) * f;
+        const v = prev - dec, i = y * w + x;
+        if (v > S[i]) S[i] = v;
+      }
+    }
+  }
+  return S;
+}
+// Renders the characters alone over an area grown by the shadows' reach, builds the shadows from their
+// coverage, and stacks background, shadows and characters. Strip-safe: every strip sees the same neighbourhood.
+function renderWithShadows(grid, cs, atlas, s, view) {
+  const sc = view.scale, F = grid.geo.size * sc, W = view.w, H = view.h;
+  const reach = Math.max(s.longOn ? s.longLength : 0, s.dropOn ? s.dropDistance + 1.6 * s.dropSize : 0, s.offOn ? s.offDistance : 0, s.glowOn ? 1.6 * s.glowSize : 0);
+  const M = Math.ceil(reach * F) + 2, EW = W + 2 * M, EH = H + 2 * M;
+  const off = { dropOn: false, longOn: false, offOn: false, glowOn: false, glitchOn: false };
+  const G = render(grid, cs, atlas, Object.assign({}, s, off, { bgMode: "transparent", keepAlpha: false }), { x: view.x - M / sc, y: view.y - M / sc, w: EW, h: EH, scale: sc });
+  const out = new Uint8ClampedArray(render(grid, cs, atlas, Object.assign({}, s, off, { _noGlyphs: true }), view).buffer);
+  const A = new Float32Array(EW * EH);
+  for (let i = 0; i < A.length; i++) A[i] = G[i * 4 + 3] / 255;
+  const ang = (s.shadowAngle * Math.PI) / 180, dx = -Math.cos(ang), dy = Math.sin(ang); // where shadows fall
+  const layers = []; // [alpha field, rgb or per-pixel rgb fn, opacity], bottom first
+  if (s.longOn) {
+    const L = Math.max(1, s.longLength * F), S = extrude(A, EW, EH, dx, dy, L), fade = clamp01(s.longFade);
+    for (let i = 0; i < S.length; i++) S[i] = S[i] > 0 ? fade * S[i] + (1 - fade) * Math.min(1, S[i] * L) : 0;
+    layers.push([S, hexToRgb(s.longColor), s.longOpacity]);
+  }
+  if (s.dropOn) layers.push([blurField(shiftField(A, EW, EH, dx * s.dropDistance * F, dy * s.dropDistance * F), EW, EH, (s.dropSize * F) / 2), hexToRgb(s.dropColor), s.dropOpacity]);
+  if (s.offOn) layers.push([shiftField(A, EW, EH, dx * s.offDistance * F, dy * s.offDistance * F), hexToRgb(s.offColor), s.offOpacity]);
+  if (s.glowOn) {
+    const sig = (s.glowSize * F) / 2, B = blurField(Float32Array.from(A), EW, EH, sig);
+    let col = hexToRgb(s.glowColor);
+    if (s.glowTextColor) { // the characters' own colours, spread with the glow
+      const R = new Float32Array(EW * EH), Gc = new Float32Array(EW * EH), Bc = new Float32Array(EW * EH);
+      for (let i = 0; i < A.length; i++) { R[i] = G[i * 4] * A[i]; Gc[i] = G[i * 4 + 1] * A[i]; Bc[i] = G[i * 4 + 2] * A[i]; }
+      blurField(R, EW, EH, sig); blurField(Gc, EW, EH, sig); blurField(Bc, EW, EH, sig);
+      col = (i) => (B[i] > 1e-4 ? [R[i] / B[i], Gc[i] / B[i], Bc[i] / B[i]] : [0, 0, 0]);
+    }
+    for (let i = 0; i < B.length; i++) B[i] = Math.min(1, B[i] * 2);
+    layers.push([B, col, s.glowOpacity]);
+  }
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const o = (y * W + x) * 4, e = (y + M) * EW + x + M;
+      for (const [f, col, op] of layers) {
+        const a = f[e] * op;
+        if (a <= 0.002) continue;
+        const c = typeof col === "function" ? col(e) : col;
+        blendPx(out, o, c[0], c[1], c[2], Math.min(1, a));
+      }
+      const ga = G[e * 4 + 3];
+      if (ga) blendPx(out, o, G[e * 4], G[e * 4 + 1], G[e * 4 + 2], ga / 255);
+    }
+  }
+  if (s.glitchOn) glitchOutput(out, view, grid.geo, s);
+  return new Uint8Array(out.buffer);
+}
+
 // view: {x, y} top-left in document px, {w, h} output px, scale = output px per document px.
 // Returns straight-alpha RGBA Uint8Array.
 function render(grid, cs, atlas, s, view) {
-  const { cols, rows, geo, glyph, color, rgb, alpha } = grid;
+  if (hasShadow(s)) return renderWithShadows(grid, cs, atlas, s, view);
+  const noGlyphs = !!s._noGlyphs; // background only (shadows are stacked between it and the characters)
+  const { cols, rows, geo, glyph, color, rgb, alpha, shade } = grid;
   const sc = view.scale, W = view.w, H = view.h;
   const out = new Uint8ClampedArray(W * H * 4);
   const bg = hexToRgb(s.bg), op = clamp01(s.glyphOpacity);
@@ -557,17 +737,17 @@ function render(grid, cs, atlas, s, view) {
           for (let y = ya; y < ye; y++) for (let x = xa, o = (y * W + xa) * 4; x < xe; x++, o += 4) { out[o] = mr; out[o + 1] = mg; out[o + 2] = mb; out[o + 3] = ma; }
         }
         const gi = glyph[ci];
-        if (gi < 0 || cs.cov[gi] <= 0) continue;
+        if (noGlyphs || gi < 0 || cs.cov[gi] <= 0) continue;
         let bm = cache.get(gi);
         if (!bm) { bm = resampleGlyph(atlas, cs.glyphs[gi], igw, igh); cache.set(gi, bm); }
         const gx = Math.round(ox + (cw - igw) / 2), gy = Math.round(oy + (ch - igh) / 2);
-        const cr = color[ci * 3], cg = color[ci * 3 + 1], cb = color[ci * 3 + 2];
+        const cr = color[ci * 3], cg = color[ci * 3 + 1], cb = color[ci * 3 + 2], opc = shade ? op * shade[ci] : op;
         const ya = Math.max(0, gy), ye = Math.min(H, gy + igh), xa = Math.max(0, gx), xe = Math.min(W, gx + igw);
         for (let y = ya; y < ye; y++) {
           const brow = (y - gy) * igw - gx;
           for (let x = xa, o = (y * W + xa) * 4; x < xe; x++, o += 4) {
             const a = bm[brow + x];
-            if (a) blendPx(out, o, cr, cg, cb, (a / 255) * op);
+            if (a) blendPx(out, o, cr, cg, cb, (a / 255) * opc);
           }
         }
       }
@@ -587,7 +767,7 @@ function render(grid, cs, atlas, s, view) {
         const ci = r * cols + c;
         if (mosaic) { const m = mosaicColor(ci); out[o] = m[0]; out[o + 1] = m[1]; out[o + 2] = m[2]; out[o + 3] = masked ? alpha[ci] : 255; }
         const gi = glyph[ci];
-        if (gi >= 0) blendPx(out, o, color[ci * 3], color[ci * 3 + 1], color[ci * 3 + 2], cs.cov[gi] * areaK);
+        if (gi >= 0 && !noGlyphs) blendPx(out, o, color[ci * 3], color[ci * 3 + 1], color[ci * 3 + 2], cs.cov[gi] * areaK * (shade ? shade[ci] : 1));
       }
     }
   }

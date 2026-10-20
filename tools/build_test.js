@@ -1,9 +1,9 @@
 // Builds test/gf_test.psjs: plugin code + DOM shims + an integration test sequence.
 const fs = require("fs"), path = require("path");
 const P = (f) => path.join(__dirname, "../plugin", f);
-const wrap = (name, file) => `(function(){ const module = { exports: {} }; ${fs.readFileSync(P(file), "utf8").replace('require("./ink.js")', "__mods.ink")}\n__mods[${JSON.stringify(name)}] = module.exports; })();\n`;
+const wrap = (name, file) => `(function(){ const module = { exports: {} }; ${fs.readFileSync(P(file), "utf8").replace('require("./ink.js")', "__mods.ink").replace(/const \{ makeSlider, SLIDER_HTML \} = require\("\.\/slider\.js"\);/, "const { makeSlider, SLIDER_HTML } = __mods.slider;")}\n__mods[${JSON.stringify(name)}] = module.exports; })();\n`;
 let main = fs.readFileSync(P("main.js"), "utf8")
-  .replace('require("./engine.js")', '__mods.engine').replace('require("./charsets.js")', '__mods.charsets').replace('require("./presets.js")', '__mods.presets').replace('require("./inkui.js")', '__mods.inkui')
+  .replace('require("./engine.js")', '__mods.engine').replace('require("./charsets.js")', '__mods.charsets').replace('require("./presets.js")', '__mods.presets').replace('require("./inkui.js")', '__mods.inkui').replace('const { makeSlider, SLIDER_HTML } = require("./slider.js");', 'const { makeSlider, SLIDER_HTML } = __mods.slider;').replace('const { enhanceAllSelects } = require("./dropdown.js");', 'const { enhanceAllSelects } = __mods.dropdown;')
   .replace(/\ninit\(\);\s*$/, "\n");
 const atlasB64 = fs.readFileSync(P("atlas.bin")).toString("base64");
 const meta = fs.readFileSync(P("atlas.json"), "utf8");
@@ -24,7 +24,7 @@ function __el(id) {
 const document = { getElementById: __el, querySelectorAll: () => [] };
 const __ls = new Map();
 const localStorage = { getItem: (k) => (__ls.has(k) ? __ls.get(k) : null), setItem: (k, v) => __ls.set(k, String(v)) };
-${wrap("engine", "engine.js")}${wrap("charsets", "charsets.js")}${wrap("presets", "presets.js")}${wrap("ink", "ink.js")}${wrap("inkui", "inkui.js")}
+${wrap("engine", "engine.js")}${wrap("charsets", "charsets.js")}${wrap("presets", "presets.js")}${wrap("slider", "slider.js")}${wrap("dropdown", "dropdown.js")}${wrap("ink", "ink.js")}${wrap("inkui", "inkui.js")}
 ${main}
 function __b64(s) {
   const T = new Uint8Array(128); const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
