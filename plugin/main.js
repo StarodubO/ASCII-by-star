@@ -388,9 +388,10 @@ function loadSelectedLayer() {
   syncUI();
   $("editLabel").textContent = "Editing: " + l.name;
   $("editBox").classList.remove("hidden");
+  fitLayout(true);
   schedulePreview(0);
 }
-function stopEditing() { editing = null; $("editBox").classList.add("hidden"); src = null; schedulePreview(0); }
+function stopEditing() { editing = null; $("editBox").classList.add("hidden"); fitLayout(true); src = null; schedulePreview(0); }
 
 async function runBatch() {
   try {
@@ -653,6 +654,20 @@ async function loadFonts() {
   return list.length;
 }
 
+// ---------- layout ----------
+// UXP panels don't scroll on their own: give the settings area an explicit height
+// (panel height minus the pinned preview block) whenever the panel size changes.
+let lastH = -1, lastTop = -1;
+function fitLayout(force) {
+  const H = window.innerHeight || document.documentElement.clientHeight || 0;
+  if (!H) return;
+  const top = $("top");
+  if (!force && H === lastH && top.offsetHeight === lastTop) return;
+  $("preview").style.maxHeight = Math.max(70, Math.round(H * 0.38)) + "px";
+  lastH = H; lastTop = top.offsetHeight;
+  $("scroller").style.height = Math.max(60, H - top.offsetHeight) + "px";
+}
+
 // ---------- Photoshop events ----------
 let staleTimer = null;
 function onPsEvent(evt, desc) {
@@ -667,6 +682,10 @@ function onPsEvent(evt, desc) {
 async function init() {
   buildUI();
   syncUI();
+  window.addEventListener("resize", () => fitLayout(true));
+  $("preview").addEventListener("load", () => fitLayout(true));
+  setInterval(() => fitLayout(false), 400);
+  fitLayout(true);
   try { atlas = await loadAtlas(); }
   catch (e) { console.error(e); showPreviewMsg("Failed to load glyph atlas: " + errMsg(e)); return; }
   try { await action.addNotificationListener(["select", "open", "close"], onPsEvent); } catch (e) { console.error(e); }

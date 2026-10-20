@@ -1,7 +1,7 @@
 {
   "id": "com.ostap.asciibystar",
   "name": "ASCII by Star",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "main": "index.html",
   "manifestVersion": 5,
   "host": { "app": "PS", "minVersion": "25.0", "data": { "apiVersion": 2 } },
