@@ -6,6 +6,7 @@ const formats = uxp.storage.formats;
 const Engine = require("./engine.js");
 const { CHARSETS } = require("./charsets.js");
 const { PRESETS } = require("./presets.js");
+const setupInk = require("./inkui.js");
 
 const $ = (id) => document.getElementById(id);
 // Layers made by the plugin end in "ASCII by Star" (older versions used a "#xxxxxx" tag).
@@ -23,6 +24,8 @@ let editing = null; // {docId, layerId, tag, name, sourceLayerId}
 let live = null; // live preview window {docId, layerId, sourceDocId, scale}
 let gridCache = { key: null, src: null, grid: null, cs: null, geo: null };
 let userPresets = loadJSON("gf:userPresets", []);
+let tab = loadJSON("gf:tab", "ascii"); // "ascii" | "ink"
+let ink = null; // the Ink bleed tab (inkui.js)
 
 // ---------- utils ----------
 function loadJSON(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
@@ -99,7 +102,8 @@ async function capture(ctx, doc, layerId, scale, ownHistory) {
     for (const l of hidden) l.visible = false;
   }
   try {
-    const opts = { documentID: doc.id, componentSize: 8, applyAlpha: false };
+    // native depth: Photoshop 27 fails ("Could not create a new document") when asked to convert 16/32-bit to 8
+    const opts = { documentID: doc.id, applyAlpha: false };
     if (layerId !== null) opts.layerID = layerId;
     if (scale < 1) opts.targetSize = { width: aw, height: ah };
     let res;
@@ -265,7 +269,7 @@ async function buildFontAtlas(fontPS, chars, key) {
   busy = true;
   try {
     await core.executeAsModal(async () => {
-      const tmp = await app.documents.add({ width: W, height: H, resolution: 72, mode: "RGBColorMode", fill: "white", name: "ASCII by Star font" });
+      const tmp = await app.documents.add({ width: W, height: H, resolution: 72, mode: "RGBColorMode", depth: 8, fill: "white", name: "ASCII by Star font" });
       try {
         const black = new app.SolidColor(); black.rgb.hexValue = "000000";
         for (let i = 0; i < chars.length; i++) {
@@ -276,7 +280,7 @@ async function buildFontAtlas(fontPS, chars, key) {
           const b = layer.boundsNoEffects;
           boxes.push(b && b.right > b.left ? { l: b.left, r: b.right } : null);
         }
-        const res = await imaging.getPixels({ documentID: tmp.id, componentSize: 8, applyAlpha: true });
+        const res = await imaging.getPixels({ documentID: tmp.id, applyAlpha: true });
         pixels = await res.imageData.getData({ chunky: true }); comps = res.imageData.components; res.imageData.dispose();
       } finally { await tmp.closeWithoutSaving(); }
     }, { commandName: "ASCII by Star font" });
@@ -328,6 +332,7 @@ function schedulePreview(delay) {
   pvTimer = setTimeout(runPreview, delay === undefined ? 40 : delay);
 }
 async function runPreview() {
+  if (tab !== "ascii") return; // rendered again when the tab is shown
   if (pvRunning) { pvAgain = true; return; }
   pvRunning = true;
   try { await renderPreview(); } catch (e) { console.error(e); status(errMsg(e), true); }
@@ -342,14 +347,15 @@ function docById(id) { try { const ds = app.documents; for (let i = 0; i < ds.le
 function sourceDoc() { const a = activeDoc(); if (live && a && a.id === live.docId) return docById(live.sourceDocId); return a; }
 const qualityScale = () => Number($("quality").value) || 1;
 
-// Temporary transparent document (live preview, PNG export, smart-object render). Inside executeAsModal.
+// Temporary transparent 8-bit document (live preview, PNG export, smart-object render). Inside executeAsModal.
+// The depth is explicit because new documents otherwise inherit whatever the user last picked.
 async function createScratchDoc(W, H, res, name) {
   let d = null;
   try {
-    d = await app.documents.add({ width: W, height: H, resolution: res, mode: "RGBColorMode", fill: "transparent", name });
+    d = await app.documents.add({ width: W, height: H, resolution: res, mode: "RGBColorMode", depth: 8, fill: "transparent", name });
     return { doc: d, layer: d.layers[0] };
   } catch (e) {
-    d = d || (await app.documents.add({ width: W, height: H, resolution: res, mode: "RGBColorMode", fill: "white", name }));
+    d = d || (await app.documents.add({ width: W, height: H, resolution: res, mode: "RGBColorMode", depth: 8, fill: "white", name }));
     const bgLayer = d.layers[0], layer = await createLayer(d, "ASCII by Star");
     try { bgLayer.visible = false; } catch (e2) { /* background stays */ }
     return { doc: d, layer };
@@ -856,12 +862,13 @@ function buildUI() {
   $("glitchReseed").addEventListener("click", () => { S.glitchSeed = Math.floor(Math.random() * 99999) + 1; syncUI(); schedulePreview(0); });
   $("glitchReset").addEventListener("click", () => { for (const k of GLITCH_KEYS) S[k] = Engine.DEFAULTS[k]; syncUI(); schedulePreview(0); });
   $("glitchRandom").addEventListener("click", randomGlitch);
-  const bindCheck = (id, key) => $(id).addEventListener("change", () => { S[key] = $(id).checked; refreshVisibility(); schedulePreview(); });
+  const bindCheck = (id, key) => onCheck($(id), (v) => { S[key] = v; refreshVisibility(); schedulePreview(); });
   bindCheck("sortByDensity", "sortByDensity");
   bindCheck("invert", "invert");
   bindCheck("serpentine", "serpentine");
   bindCheck("glitchOn", "glitchOn");
   bindCheck("gradientMid", "gradientMid");
+  bindCheck("keepAlpha", "keepAlpha");
   $("customChars").addEventListener("input", () => { S.customChars = $("customChars").value; schedulePreview(120); });
 
   document.querySelectorAll(".swatch").forEach((el) => el.addEventListener("click", () => pickColor(el.dataset.color)));
@@ -946,17 +953,19 @@ function setColor(k, hex) {
   if (k === "fg") S.fg = hex; else if (k === "bg") S.bg = hex; else S.gradient[Number(k[1])] = hex;
   syncUI(); schedulePreview(0);
 }
+// Photoshop's colour picker; resolves to the chosen "#rrggbb", or null when cancelled.
+async function askColor(hex) {
+  const [r, g, b] = Engine.hexToRgb(hex);
+  const res = await core.executeAsModal(() => action.batchPlay([{ _obj: "showColorPicker", context: "ASCII by Star", color: { _obj: "RGBColor", red: r, grain: g, blue: b } }], {}), { commandName: "ASCII by Star colour" });
+  const d = res && res[0];
+  const c = d && (d.RGBFloatColor || d.color);
+  if (!c || c.red === undefined) return null;
+  const ch = (v) => Math.max(0, Math.min(255, Math.round(v)));
+  return Engine.rgbToHex(ch(c.red), ch(c.grain !== undefined ? c.grain : c.green), ch(c.blue));
+}
 async function pickColor(k) {
-  const [r, g, b] = Engine.hexToRgb(getColor(k));
-  try {
-    const res = await core.executeAsModal(() => action.batchPlay([{ _obj: "showColorPicker", context: "ASCII by Star", color: { _obj: "RGBColor", red: r, grain: g, blue: b } }], {}), { commandName: "ASCII by Star colour" });
-    const d = res && res[0];
-    const c = d && (d.RGBFloatColor || d.color);
-    if (c && c.red !== undefined) {
-      const ch = (v) => Math.max(0, Math.min(255, Math.round(v)));
-      setColor(k, Engine.rgbToHex(ch(c.red), ch(c.grain !== undefined ? c.grain : c.green), ch(c.blue)));
-    }
-  } catch (e) { console.error(e); status("Colour picker unavailable — type a hex value instead.", true); }
+  try { const v = await askColor(getColor(k)); if (v) setColor(k, v); }
+  catch (e) { console.error(e); status("Colour picker unavailable — type a hex value instead.", true); }
 }
 
 function syncUI() {
@@ -966,14 +975,15 @@ function syncUI() {
   setSelect($("dither"), S.dither);
   setSelect($("colorMode"), S.colorMode);
   setSelect($("bgMode"), S.bgMode);
-  $("sortByDensity").checked = !!S.sortByDensity;
-  $("invert").checked = !!S.invert;
-  $("glitchOn").checked = !!S.glitchOn;
+  $("sortByDensity").checked = !!S.sortByDensity; if ($("sortByDensity").syncChecked) $("sortByDensity").syncChecked();
+  $("invert").checked = !!S.invert; if ($("invert").syncChecked) $("invert").syncChecked();
+  $("glitchOn").checked = !!S.glitchOn; if ($("glitchOn").syncChecked) $("glitchOn").syncChecked();
   $("glitchSeed").value = String(S.glitchSeed);
   setSelect($("gSortDir"), S.gSortDir);
   setSelect($("gChannelSwap"), S.gChannelSwap);
-  $("serpentine").checked = !!S.serpentine;
-  $("gradientMid").checked = !!S.gradientMid;
+  $("serpentine").checked = !!S.serpentine; if ($("serpentine").syncChecked) $("serpentine").syncChecked();
+  $("gradientMid").checked = !!S.gradientMid; if ($("gradientMid").syncChecked) $("gradientMid").syncChecked();
+  $("keepAlpha").checked = !!S.keepAlpha; if ($("keepAlpha").syncChecked) $("keepAlpha").syncChecked();
   if ($("customChars").value !== S.customChars) $("customChars").value = S.customChars;
   if (allFonts.length) fillFontSelect();
   document.querySelectorAll(".swatch").forEach((el) => { el.style.backgroundColor = getColor(el.dataset.color); });
@@ -990,6 +1000,7 @@ function refreshVisibility() {
   show($("gradRows"), S.colorMode === "gradient");
   show($("origRows"), S.colorMode === "original");
   show($("bgRow"), S.bgMode !== "transparent");
+  show($("keepAlphaRow"), S.bgMode !== "transparent");
   show(sliderEls.mosaicAmount.row, S.bgMode === "mosaic");
   show(sliderEls.ditherStrength.row, S.dither !== "none");
   show($("serpRow"), !!Engine.DIFFUSION[S.dither]);
@@ -1068,24 +1079,65 @@ function setFont(ps, name) {
   fillFontSelect(); schedulePreview(0);
 }
 
+// Checkbox toggles. Some UXP builds don't send "change" for clicks on the label text, so clicks are
+// watched too and the state is read after the click has landed; `fn` only runs when the value changed.
+function onCheck(el, fn) {
+  let last = el.checked;
+  const check = () => setTimeout(() => { if (el.checked !== last) { last = el.checked; fn(last); } }, 0);
+  el.addEventListener("change", check);
+  el.addEventListener("click", check);
+  if (el.parentNode && el.parentNode.tagName === "LABEL") el.parentNode.addEventListener("click", check);
+  el.syncChecked = () => { last = el.checked; };
+}
+
+// The mouse wheel scrolls the settings, never a control under the pointer: a dropdown or slider releases
+// focus once it has been used, and wheel events over closed dropdowns and sliders scroll the panel instead.
+function guardWheel() {
+  const scrollerOf = (el) => { for (let n = el; n; n = n.parentNode) if (n.id === "scroller" || n.id === "inkScroller") return n; return null; };
+  document.querySelectorAll("select, input[type=range]").forEach((el) => {
+    el.addEventListener("change", () => setTimeout(() => { try { el.blur(); } catch (e) { /* not focusable */ } }, 0));
+    el.addEventListener("wheel", (e) => {
+      const sc = scrollerOf(el);
+      if (!sc) return;
+      e.preventDefault(); e.stopPropagation();
+      try { el.blur(); } catch (e2) { /* not focusable */ }
+      sc.scrollTop += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    }, { passive: false });
+  });
+}
+
 // ---------- layout ----------
 // UXP panels don't scroll on their own: give the settings area an explicit height
 // (panel height minus the pinned preview block) whenever the panel size changes.
 let lastH = -1, lastTop = -1;
 function fitLayout(force) {
-  const H = window.innerHeight || document.documentElement.clientHeight || 0;
+  const H = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0;
   if (!H) return;
-  const top = $("top");
+  const isInk = tab === "ink", top = $(isInk ? "inkTop" : "top");
   if (!force && H === lastH && top.offsetHeight === lastTop) return;
-  $("preview").style.maxHeight = Math.max(70, Math.round(H * 0.38)) + "px";
+  $(isInk ? "inkPreview" : "preview").style.maxHeight = Math.max(70, Math.round(H * 0.38)) + "px";
   lastH = H; lastTop = top.offsetHeight;
-  $("scroller").style.height = Math.max(60, H - top.offsetHeight) + "px";
+  $(isInk ? "inkScroller" : "scroller").style.height = Math.max(60, H - ($("tabs").offsetHeight || 0) - top.offsetHeight) + "px";
+}
+
+function showTab(t) {
+  tab = t === "ink" ? "ink" : "ascii";
+  saveJSON("gf:tab", tab);
+  $("tabAscii").classList.toggle("on", tab === "ascii");
+  $("tabInk").classList.toggle("on", tab === "ink");
+  $("asciiTool").classList.toggle("hidden", tab !== "ascii");
+  $("inkTool").classList.toggle("hidden", tab !== "ink");
+  fitLayout(true);
+  if (!ink) return;
+  if (tab === "ink") ink.activate();
+  else { ink.deactivate(); if (src) src.stale = true; schedulePreview(0); }
 }
 
 // ---------- Photoshop events ----------
 let staleTimer = null;
 function onPsEvent(evt, desc) {
   if (live && evt === "close" && !docById(live.docId)) { live = null; updateLiveBtn(); }
+  if (tab === "ink") { if (src) src.stale = true; if (ink) ink.onPsEvent(evt, desc); return; }
   if (busy) return;
   const a = activeDoc();
   if (live && a && a.id === live.docId) return; // looking at the live window doesn't change the source
@@ -1099,6 +1151,11 @@ function onPsEvent(evt, desc) {
 async function init() {
   buildUI();
   syncUI();
+  ink = setupInk({ $, loadJSON, saveJSON, errMsg, toRGBA8, makeImageData, convertOut, createLayer, findLayers, findLayerById, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck });
+  guardWheel();
+  $("tabAscii").addEventListener("click", () => showTab("ascii"));
+  $("tabInk").addEventListener("click", () => showTab("ink"));
+  showTab(tab);
   window.addEventListener("resize", () => fitLayout(true));
   $("preview").addEventListener("load", () => fitLayout(true));
   setInterval(() => fitLayout(false), 400);
@@ -1110,7 +1167,7 @@ async function init() {
   try { baseAtlas = atlas = await loadAtlas(); baseAtlas.id = "builtin"; }
   catch (e) { console.error(e); showPreviewMsg("Failed to load glyph atlas: " + errMsg(e)); return; }
   try { await action.addNotificationListener(["select", "open", "close"], onPsEvent); } catch (e) { console.error(e); }
-  schedulePreview(0);
+  if (tab !== "ink") schedulePreview(0); // the ink tab started its own preview in showTab
   setTimeout(() => loadFonts(), 300);
 }
 init();

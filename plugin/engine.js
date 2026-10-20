@@ -47,6 +47,7 @@ const DEFAULTS = {
   colorBoost: 0, // lifts dark original colours so glyphs stay visible
   bgMode: "solid", // solid | transparent | mosaic
   bg: "#0b0b0b",
+  keepAlpha: true, // the background only covers the source's opaque parts
   mosaicAmount: 0.35,
   glyphOpacity: 1,
   // glitch (everything is inert unless glitchOn is true)
@@ -412,14 +413,16 @@ function glitchSource(src, s) {
 
 function glitchGrid(grid, cs, s) {
   const { cols, rows, glyph, color } = grid, seed = s.glitchSeed | 0;
+  const alpha = grid.alpha; // moves with the glyphs, so a kept transparency follows the glitch
   if (s.gStutter > 0) for (let r = 1; r < rows; r++) if (hash3(seed + 31, r, 0) < s.gStutter * 0.3) {
     glyph.copyWithin(r * cols, (r - 1) * cols, r * cols); color.copyWithin(r * cols * 3, (r - 1) * cols * 3, r * cols * 3);
+    alpha.copyWithin(r * cols, (r - 1) * cols, r * cols);
   }
   if (s.gRowShift > 0) for (let r = 0; r < rows; r++) if (hash3(seed + 32, r, 0) < s.gRowShift * 0.4) {
     const k = ((Math.round((hash3(seed + 33, r, 0) * 2 - 1) * s.gRowShift * cols * 0.3) % cols) + cols) % cols;
     if (!k) continue;
-    const g = glyph.slice(r * cols, (r + 1) * cols), c = color.slice(r * cols * 3, (r + 1) * cols * 3);
-    for (let x = 0; x < cols; x++) { const sx = (x - k + cols) % cols; glyph[r * cols + x] = g[sx]; color.set(c.subarray(sx * 3, sx * 3 + 3), (r * cols + x) * 3); }
+    const g = glyph.slice(r * cols, (r + 1) * cols), c = color.slice(r * cols * 3, (r + 1) * cols * 3), al = alpha.slice(r * cols, (r + 1) * cols);
+    for (let x = 0; x < cols; x++) { const sx = (x - k + cols) % cols; glyph[r * cols + x] = g[sx]; alpha[r * cols + x] = al[sx]; color.set(c.subarray(sx * 3, sx * 3 + 3), (r * cols + x) * 3); }
   }
   if (s.gCorrupt > 0 && cs.n > 1) for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
     if (hash3(seed + 34, c, r) < s.gCorrupt * 0.3) glyph[r * cols + c] = 1 + Math.floor(hash3(seed + 35, c, r) * (cs.n - 1));
@@ -510,13 +513,29 @@ function blendPx(out, o, r, g, b, a) {
 // view: {x, y} top-left in document px, {w, h} output px, scale = output px per document px.
 // Returns straight-alpha RGBA Uint8Array.
 function render(grid, cs, atlas, s, view) {
-  const { cols, rows, geo, glyph, color, rgb } = grid;
+  const { cols, rows, geo, glyph, color, rgb, alpha } = grid;
   const sc = view.scale, W = view.w, H = view.h;
   const out = new Uint8ClampedArray(W * H * 4);
   const bg = hexToRgb(s.bg), op = clamp01(s.glyphOpacity);
   const mosaic = s.bgMode === "mosaic", mAmt = clamp01(s.mosaicAmount);
-  if (s.bgMode !== "transparent") {
+  // keep the source's transparency: the background fades out where the source is transparent
+  let masked = false;
+  if (s.keepAlpha && alpha) for (let i = 0; i < alpha.length && !masked; i++) masked = alpha[i] < 255;
+  if (s.bgMode !== "transparent" && !masked) {
     for (let o = 0; o < out.length; o += 4) { out[o] = bg[0]; out[o + 1] = bg[1]; out[o + 2] = bg[2]; out[o + 3] = 255; }
+  } else if (s.bgMode === "solid") {
+    // cell coverage, interpolated between cell centres in document space (strip-safe, follows the silhouette)
+    const xi = new Int32Array(W * 2), xf = new Float32Array(W), yi = new Int32Array(H * 2), yf = new Float32Array(H);
+    for (let x = 0; x < W; x++) { const u = (view.x + (x + 0.5) / sc) / geo.cellW - 0.5, i = Math.floor(u); xi[x * 2] = Math.max(0, Math.min(cols - 1, i)); xi[x * 2 + 1] = Math.max(0, Math.min(cols - 1, i + 1)); xf[x] = u - i; }
+    for (let y = 0; y < H; y++) { const u = (view.y + (y + 0.5) / sc) / geo.cellH - 0.5, i = Math.floor(u); yi[y * 2] = Math.max(0, Math.min(rows - 1, i)); yi[y * 2 + 1] = Math.max(0, Math.min(rows - 1, i + 1)); yf[y] = u - i; }
+    for (let y = 0; y < H; y++) {
+      const r0 = yi[y * 2] * cols, r1 = yi[y * 2 + 1] * cols, fy = yf[y];
+      for (let x = 0, o = y * W * 4; x < W; x++, o += 4) {
+        const c0 = xi[x * 2], c1 = xi[x * 2 + 1], fx = xf[x];
+        const a = (alpha[r0 + c0] * (1 - fx) + alpha[r0 + c1] * fx) * (1 - fy) + (alpha[r1 + c0] * (1 - fx) + alpha[r1 + c1] * fx) * fy;
+        out[o] = bg[0]; out[o + 1] = bg[1]; out[o + 2] = bg[2]; out[o + 3] = a;
+      }
+    }
   }
   const mosaicColor = (ci) => [bg[0] + (rgb[ci * 3] - bg[0]) * mAmt, bg[1] + (rgb[ci * 3 + 1] - bg[1]) * mAmt, bg[2] + (rgb[ci * 3 + 2] - bg[2]) * mAmt];
   const cw = geo.cellW * sc, ch = geo.cellH * sc, gw = geo.glyphW * sc, gh = geo.glyphH * sc;
@@ -531,9 +550,11 @@ function render(grid, cs, atlas, s, view) {
         const ci = r * cols + c, ox = (c * geo.cellW - view.x) * sc;
         if (mosaic) {
           const [mr, mg, mb] = mosaicColor(ci);
-          const xa = Math.max(0, Math.round(ox)), xe = Math.min(W, Math.round(ox + cw));
-          const ya = Math.max(0, Math.round(oy)), ye = Math.min(H, Math.round(oy + ch));
-          for (let y = ya; y < ye; y++) for (let x = xa, o = (y * W + xa) * 4; x < xe; x++, o += 4) { out[o] = mr; out[o + 1] = mg; out[o + 2] = mb; out[o + 3] = 255; }
+          // edges from the cell grid itself, so neighbouring blocks share them exactly (no gap rows)
+          const xa = Math.max(0, Math.round(ox)), xe = Math.min(W, Math.round(((c + 1) * geo.cellW - view.x) * sc));
+          const ya = Math.max(0, Math.round(oy)), ye = Math.min(H, Math.round(((r + 1) * geo.cellH - view.y) * sc));
+          const ma = masked ? alpha[ci] : 255;
+          for (let y = ya; y < ye; y++) for (let x = xa, o = (y * W + xa) * 4; x < xe; x++, o += 4) { out[o] = mr; out[o + 1] = mg; out[o + 2] = mb; out[o + 3] = ma; }
         }
         const gi = glyph[ci];
         if (gi < 0 || cs.cov[gi] <= 0) continue;
@@ -564,7 +585,7 @@ function render(grid, cs, atlas, s, view) {
         const c = colOf[x];
         if (c < 0 || c >= cols) continue;
         const ci = r * cols + c;
-        if (mosaic) { const m = mosaicColor(ci); out[o] = m[0]; out[o + 1] = m[1]; out[o + 2] = m[2]; out[o + 3] = 255; }
+        if (mosaic) { const m = mosaicColor(ci); out[o] = m[0]; out[o + 1] = m[1]; out[o + 2] = m[2]; out[o + 3] = masked ? alpha[ci] : 255; }
         const gi = glyph[ci];
         if (gi >= 0) blendPx(out, o, color[ci * 3], color[ci * 3 + 1], color[ci * 3 + 2], cs.cov[gi] * areaK);
       }

@@ -1,7 +1,7 @@
 // TEST=png: exercises the PNG export path (temporary transparent document, 2x render, saveAs.png) without the file picker.
 let doc;
 await step("create source doc", async () => {
-  doc = await core.executeAsModal(() => app.documents.add({ width: 600, height: 400, resolution: 72, mode: "RGBColorMode", fill: "white" }), { commandName: "t" });
+  doc = await core.executeAsModal(() => app.documents.add({ width: 600, height: 400, resolution: 72, mode: "RGBColorMode", depth: 8, fill: "white" }), { commandName: "t" });
   const W = doc.width, H = doc.height, buf = new Uint8Array(W * H * 4);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const o = (y * W + x) * 4, d = Math.hypot(x - W / 2, y - H / 2) / (H / 2); buf[o] = 255 * x / W; buf[o + 1] = 255 * Math.max(0, 1 - d); buf[o + 2] = 255 * y / H; buf[o + 3] = 255; }
   await core.executeAsModal(async () => { const id = await makeImageData(buf, W, H, false, doc.colorProfileName); await imaging.putPixels({ documentID: doc.id, layerID: doc.layers[0].id, imageData: id }); id.dispose(); }, { commandName: "t" });
