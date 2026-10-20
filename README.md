@@ -5,7 +5,7 @@ A Photoshop plugin that turns any image into ASCII and glyph art with a live pre
 ![logo](logo/ascii-by-star-logo.png)
 
 ## Install (Photoshop 2024 / v25 or newer)
-1. Download **`ASCII by Star.ccx`** from the [latest release](https://github.com/StarodubO/ascii-by-star/releases/latest).
+1. Download the **`.ccx`** file (`ASCII.by.Star.ccx`) from the [latest release](https://github.com/StarodubO/ascii-by-star/releases/latest).
 2. Double-click it. Creative Cloud installs it and warns that it isn't from the marketplace; confirm.
 3. Restart Photoshop and open **Plugins ▸ ASCII by Star**.
 
