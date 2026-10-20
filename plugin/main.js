@@ -12,7 +12,8 @@ const TAG_RE = /#([a-z0-9]{6})$/;
 const ANALYSIS_MAX = 1600; // long side of the cached analysis image
 const PREVIEW_MAX = 560;
 
-let atlas = null;
+let atlas = null; // glyph atlas in use: the built-in one, or one rendered from the chosen font
+let baseAtlas = null;
 let S = freshSettings(loadJSON("gf:last", null));
 let src = null; // cached analysis pixels {docId, layerId, scale, docW, docH, w, h, data, stale}
 let busy = false;
@@ -57,7 +58,7 @@ let csCache = { key: null, cs: null };
 function currentCharset() {
   const info = charsetInfo();
   const chars = info.id === "custom" ? S.customChars : info.chars;
-  const key = info.id + "|" + chars + "|" + S.sortByDensity;
+  const key = atlas.id + "|" + info.id + "|" + chars + "|" + S.sortByDensity;
   if (csCache.key !== key) csCache = { key, cs: Engine.buildCharset(atlas, chars, S.sortByDensity) };
   return csCache.cs;
 }
@@ -228,6 +229,96 @@ async function createLayer(doc, name) {
   return await doc.createLayer({ name });
 }
 
+// ---------- custom fonts ----------
+// UXP can't draw text, so characters in an installed font are rendered by Photoshop itself: one text layer
+// per character in a scratch document, read back and cropped into an atlas like the built-in one.
+// Atlases are cached in memory and in the plugin's data folder.
+const fontAtlases = new Map();
+let fontBuild = null; // {key, promise}
+function charsetString() { const info = charsetInfo(); return info.id === "custom" ? S.customChars : info.chars; }
+function fontKey() { const set = new Set(Array.from(" " + charsetString()).filter((c) => c !== "\n" && c !== "\r" && c !== "\t")); return { chars: Array.from(set), key: S.font + "|" + Array.from(set).join("") }; }
+function hashStr(t) { let h = 0x811c9dc5; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(16); }
+
+async function loadCachedFontAtlas(key) {
+  try {
+    const folder = await lfs.getDataFolder(), base = "font-" + hashStr(key);
+    const meta = JSON.parse(await (await folder.getEntry(base + ".json")).read({ format: formats.utf8 }));
+    if (meta.key !== key) return null;
+    const bin = await (await folder.getEntry(base + ".bin")).read({ format: formats.binary });
+    const a = Engine.prepareAtlas(meta, new Uint8Array(bin)); a.id = key; return a;
+  } catch (e) { return null; }
+}
+async function saveCachedFontAtlas(key, meta, data) {
+  try {
+    const folder = await lfs.getDataFolder(), base = "font-" + hashStr(key);
+    await (await folder.createFile(base + ".json", { overwrite: true })).write(JSON.stringify(Object.assign({ key }, meta)), { format: formats.utf8 });
+    await (await folder.createFile(base + ".bin", { overwrite: true })).write(data.buffer, { format: formats.binary });
+  } catch (e) { console.error("font cache", e); }
+}
+
+async function buildFontAtlas(fontPS, chars, key) {
+  const F = 40, cw0 = Math.round(F * 1.4), cellH = Math.round(F * 1.2), base = Math.round(F * 0.92), cols = 16;
+  const rows = Math.ceil(chars.length / cols), W = cols * cw0, H = rows * cellH;
+  const boxes = [];
+  let pixels = null, comps = 3;
+  busy = true;
+  try {
+    await core.executeAsModal(async () => {
+      const tmp = await app.documents.add({ width: W, height: H, resolution: 72, mode: "RGBColorMode", fill: "white", name: "ASCII by Star font" });
+      try {
+        const black = new app.SolidColor(); black.rgb.hexValue = "000000";
+        for (let i = 0; i < chars.length; i++) {
+          const ch = chars[i], c = i % cols, r = Math.floor(i / cols);
+          if (i % 8 === 0) status(`Rendering font ${S.fontName || fontPS}… ${i}/${chars.length}`);
+          if (ch === " ") { boxes.push(null); continue; }
+          const layer = await tmp.createTextLayer({ contents: ch, fontSize: F, fontName: fontPS, textColor: black, position: { x: c * cw0 + Math.round(cw0 * 0.2), y: r * cellH + base } });
+          const b = layer.boundsNoEffects;
+          boxes.push(b && b.right > b.left ? { l: b.left, r: b.right } : null);
+        }
+        const res = await imaging.getPixels({ documentID: tmp.id, componentSize: 8, applyAlpha: true });
+        pixels = await res.imageData.getData({ chunky: true }); comps = res.imageData.components; res.imageData.dispose();
+      } finally { await tmp.closeWithoutSaving(); }
+    }, { commandName: "ASCII by Star font" });
+  } finally { busy = false; }
+  // cell width: widest glyph, within sensible limits, so proportional fonts fit
+  let maxW = 0;
+  for (const b of boxes) if (b) maxW = Math.max(maxW, b.r - b.l);
+  const cellW = Math.max(Math.round(F * 0.45), Math.min(Math.round(F * 1.1), Math.round(maxW * 1.08) || Math.round(F * 0.6)));
+  const data = new Uint8Array(chars.length * cellW * cellH);
+  for (let i = 0; i < chars.length; i++) {
+    const b = boxes[i]; if (!b) continue;
+    const c = i % cols, r = Math.floor(i / cols), x0 = Math.round((b.l + b.r) / 2 - cellW / 2), y0 = r * cellH;
+    for (let y = 0; y < cellH; y++) for (let x = 0; x < cellW; x++) {
+      const sx = x0 + x, sy = y0 + y;
+      if (sx < c * cw0 || sx >= (c + 1) * cw0 || sy >= H) continue; // stay inside this glyph's slot
+      const o = (sy * W + sx) * comps, L = 0.2126 * pixels[o] + 0.7152 * pixels[o + 1] + 0.0722 * pixels[o + 2];
+      data[(i * cellH + y) * cellW + x] = 255 - L;
+    }
+  }
+  const meta = { cellW, cellH, fontSize: F, chars };
+  await saveCachedFontAtlas(key, meta, data);
+  const a = Engine.prepareAtlas(meta, data); a.id = key;
+  return a;
+}
+
+// Makes `atlas` match the chosen font and character set; renders the font first if needed.
+async function readyAtlas() {
+  if (!baseAtlas) return;
+  if (!S.font) { atlas = baseAtlas; return; }
+  const { chars, key } = fontKey();
+  if (!fontAtlases.has(key)) {
+    let a = await loadCachedFontAtlas(key);
+    if (!a) {
+      if (!fontBuild || fontBuild.key !== key) fontBuild = { key, promise: buildFontAtlas(S.font, chars, key) };
+      try { a = await fontBuild.promise; }
+      catch (e) { console.error(e); status(`Couldn't render ${S.fontName || S.font}: ${errMsg(e)}. Using the built-in font.`, true); atlas = baseAtlas; return; }
+      finally { if (fontBuild && fontBuild.key === key) fontBuild = null; }
+    }
+    fontAtlases.set(key, a);
+  }
+  atlas = fontAtlases.get(key);
+}
+
 // ---------- preview ----------
 let pvTimer = null, pvRunning = false, pvAgain = false;
 function schedulePreview(delay) {
@@ -300,6 +391,7 @@ async function runLive() {
   try {
     const d = docById(live.docId), sd = docById(live.sourceDocId);
     if (!d || !sd) { live = null; updateLiveBtn(); return; }
+    await readyAtlas();
     await ensureSource(neededScale(sd), sd);
     const cs = currentCharset(), geo = Engine.computeGeometry(src.docW, src.docH, S, atlas), grid = Engine.computeGrid(src, geo, S, cs);
     const lv = live;
@@ -340,10 +432,11 @@ async function placeSmartObject(doc, grid, cs, scale, name) {
 
 async function renderPreview() {
   if (!atlas) return;
+  await readyAtlas();
   const ok = await ensureSource(0);
   if (!ok) { showPreviewMsg("Open a document to begin"); status(""); return; }
   // the character grid is reused while settings and source are unchanged
-  const key = JSON.stringify(S);
+  const key = atlas.id + JSON.stringify(S);
   if (gridCache.key !== key || gridCache.src !== src) {
     const cs = currentCharset(), geo = Engine.computeGeometry(src.docW, src.docH, S, atlas);
     gridCache = { key, src, cs, geo, grid: Engine.computeGrid(src, geo, S, cs) };
@@ -373,6 +466,7 @@ async function applyRaster(update) {
   const doc = sourceDoc();
   try { checkDoc(doc); } catch (e) { return status(e.message, true); }
   if (update && (!editing || editing.docId !== doc.id)) return status("The edited layer is in another document. Switch back to it.", true);
+  await readyAtlas();
   busy = true;
   status("Rendering…");
   const t0 = Date.now();
@@ -421,6 +515,7 @@ async function applyRaster(update) {
 }
 
 async function outputGrid() {
+  await readyAtlas();
   const doc = sourceDoc();
   checkDoc(doc);
   await ensureSource(neededScale(doc));
@@ -447,7 +542,7 @@ async function makeTextLayer() {
         const layer = await doc.createTextLayer({
           contents: lines.join("\r"),
           fontSize: geo.size,
-          fontName: $("font").value || "Menlo-Regular",
+          fontName: S.font || "Menlo-Regular",
           textColor: color,
           position: { x: (geo.cellW - geo.glyphW) / 2, y: baseline },
         });
@@ -537,6 +632,7 @@ async function runBatch() {
     if (!outF) return status("");
     const files = (await inF.getEntries()).filter((e) => e.isFile && /\.(jpe?g|png|tiff?|psd|psb|webp|bmp|gif|heic)$/i.test(e.name));
     if (!files.length) return status("No images found in that folder.", true);
+    await readyAtlas();
     const cs = currentCharset(), alsoTxt = $("batchTxt").checked;
     let done = 0, failed = 0;
     busy = true;
@@ -727,6 +823,23 @@ function buildUI() {
   $("source").addEventListener("change", () => { src = null; schedulePreview(0); });
   $("refresh").addEventListener("click", () => { src = null; csCache.key = null; schedulePreview(0); });
   $("liveBtn").addEventListener("click", toggleLive);
+  $("resetAll").addEventListener("click", () => {
+    S = freshSettings(); editing = null; $("editBox").classList.add("hidden");
+    $("fontSearch").value = ""; fillFontSelect(); syncUI(); buildPresetSelect(); fitLayout(true);
+    status("All settings reset to defaults"); schedulePreview(0);
+  });
+  $("fontSel").addEventListener("change", () => { const v = $("fontSel").value, f = allFonts.find((x) => x.ps === v); setFont(v, f ? f.name : v); });
+  $("fontSearch").addEventListener("input", fillFontSelect);
+  $("fontFromLayer").addEventListener("click", () => {
+    try {
+      const doc = sourceDoc(), l = doc && doc.activeLayers && doc.activeLayers[0];
+      const font = l && l.textItem && l.textItem.characterStyle && l.textItem.characterStyle.font;
+      if (!font) return status("Select a text layer first, then click From text layer.", true);
+      const f = allFonts.find((x) => x.ps === font || x.name === font);
+      setFont(f ? f.ps : font, f ? f.name : font);
+      status(`Font set to ${f ? f.name : font}`);
+    } catch (e) { status("Select a text layer first, then click From text layer.", true); }
+  });
   setSelect($("quality"), loadJSON("gf:quality", "1"));
   $("quality").addEventListener("change", async () => {
     saveJSON("gf:quality", $("quality").value);
@@ -798,6 +911,7 @@ function syncUI() {
   $("serpentine").checked = !!S.serpentine;
   $("gradientMid").checked = !!S.gradientMid;
   if ($("customChars").value !== S.customChars) $("customChars").value = S.customChars;
+  if (allFonts.length) fillFontSelect();
   document.querySelectorAll(".swatch").forEach((el) => { el.style.backgroundColor = getColor(el.dataset.color); });
   document.querySelectorAll(".hex").forEach((el) => { el.value = getColor(el.dataset.hex); });
   refreshVisibility();
@@ -819,23 +933,34 @@ function refreshVisibility() {
   show($("glitchBody"), !!S.glitchOn);
 }
 
+let allFonts = [];
 async function loadFonts() {
-  const el = $("font");
-  const mono = /mono|menlo|courier|consol|monaco|code|fixed|terminal|typewriter|ocr/i;
-  let list = [];
   try {
     // one batchPlay call is far faster than walking app.fonts (1000+ DOM proxies)
     const r = await action.batchPlay([{ _obj: "get", _target: [{ _property: "fontList" }, { _ref: "application", _enum: "ordinal", _value: "targetEnum" }] }], {});
     const fl = r && r[0] && r[0].fontList;
     const names = (fl && fl.fontName) || [], ps = (fl && fl.fontPostScriptName) || [];
-    for (let i = 0; i < ps.length; i++) if (mono.test(names[i]) || mono.test(ps[i])) list.push({ ps: ps[i], name: names[i] || ps[i] });
-  } catch (e) { console.error(e); list = []; }
-  if (!list.find((f) => f.ps === "Menlo-Regular")) list.unshift({ ps: "Menlo-Regular", name: "Menlo Regular" });
-  list.sort((a, b) => (a.ps === "Menlo-Regular" ? -1 : b.ps === "Menlo-Regular" ? 1 : a.name.localeCompare(b.name)));
-  el.innerHTML = list.map((f) => `<option value="${f.ps}">${f.name}</option>`).join("");
-  setSelect(el, loadJSON("gf:font", "Menlo-Regular"));
-  el.addEventListener("change", () => saveJSON("gf:font", el.value));
-  return list.length;
+    allFonts = ps.map((p, i) => ({ ps: p, name: names[i] || p })).sort((x, y) => x.name.localeCompare(y.name));
+  } catch (e) { console.error(e); allFonts = []; }
+  fillFontSelect();
+  return allFonts.length;
+}
+function fillFontSelect() {
+  const el = $("fontSel"), q = $("fontSearch").value.trim().toLowerCase();
+  const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+  let list = q ? allFonts.filter((f) => f.name.toLowerCase().includes(q) || f.ps.toLowerCase().includes(q)) : allFonts.filter((f) => /mono|menlo|courier|consol|monaco|code|terminal|typewriter/i.test(f.name));
+  const total = list.length;
+  list = list.slice(0, 250);
+  if (S.font && !list.find((f) => f.ps === S.font)) list.unshift({ ps: S.font, name: S.fontName || S.font });
+  let html = '<option value="">Built-in (Menlo, fastest)</option>';
+  html += `<option value="" disabled>— ${q ? `${total} match${total === 1 ? "" : "es"}${total > 250 ? ", first 250" : ""}` : "Monospace fonts · type above to search all " + allFonts.length} —</option>`;
+  for (const f of list) html += `<option value="${esc(f.ps)}">${esc(f.name)}</option>`;
+  el.innerHTML = html;
+  setSelect(el, S.font || "");
+}
+function setFont(ps, name) {
+  S.font = ps || ""; S.fontName = ps ? name || ps : "";
+  fillFontSelect(); schedulePreview(0);
 }
 
 // ---------- layout ----------
@@ -873,7 +998,7 @@ async function init() {
   $("preview").addEventListener("load", () => fitLayout(true));
   setInterval(() => fitLayout(false), 400);
   fitLayout(true);
-  try { atlas = await loadAtlas(); }
+  try { baseAtlas = atlas = await loadAtlas(); baseAtlas.id = "builtin"; }
   catch (e) { console.error(e); showPreviewMsg("Failed to load glyph atlas: " + errMsg(e)); return; }
   try { await action.addNotificationListener(["select", "open", "close"], onPsEvent); } catch (e) { console.error(e); }
   schedulePreview(0);

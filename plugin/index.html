@@ -44,6 +44,7 @@
   <div id="previewWrap"><img id="preview" alt=""><div id="previewMsg">Open a document to begin</div></div>
   <div class="row btnrow" style="margin-top:5px">
     <button id="liveBtn" title="Opens a separate document that updates live. Zoom and pan it with Photoshop's own tools.">Open live preview window</button>
+    <button id="resetAll" title="Reset every setting to its default" style="flex:0 0 auto">Reset all</button>
   </div>
   <div class="row">
     <select id="source" class="grow">
@@ -83,6 +84,9 @@
     <div class="head"><span class="chev">▾</span>Characters</div>
     <div class="body">
       <div class="row"><select id="charset" class="grow"></select></div>
+      <div class="row"><span class="label">Font</span><select id="fontSel" class="grow"></select></div>
+      <div class="row"><input type="text" id="fontSearch" placeholder="Search installed fonts…"><button id="fontFromLayer" title="Use the font of the selected text layer (pick it with Photoshop's font menu first)">From text layer</button></div>
+      <p class="hint" id="fontHint">Any installed font works, including your own. Photoshop draws its characters once (a few seconds), then they're cached.</p>
       <div class="row" id="customRow"><textarea id="customChars" placeholder="Type your characters, e.g.  .:-=+*#%@"></textarea></div>
       <div class="row"><label><input type="checkbox" id="sortByDensity"> Sort by density</label></div>
       <p class="hint" id="sortHint">Off = your order is the ramp, light → dark ink.</p>
@@ -203,7 +207,6 @@
   <div class="section" data-section="output">
     <div class="head"><span class="chev">▾</span>Output &amp; export</div>
     <div class="body">
-      <div class="row"><span class="label">Text font</span><select id="font" class="grow"></select></div>
       <div class="row btnrow"><button id="textLayer">Create editable text layer</button></div>
       <p class="hint">Editable text uses the single text colour. Use “Apply as new layer” for colour output.</p>
       <div class="row"><button id="exportPng" class="grow">Export PNG…</button><select id="pngScale" style="flex:0 0 70px"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select></div>

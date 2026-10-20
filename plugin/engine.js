@@ -23,6 +23,8 @@ const DEFAULTS = {
   charset: "bourke",
   customChars: " .:-=+*#%@",
   sortByDensity: true,
+  font: "", // PostScript name of an installed font; "" = built-in Menlo atlas
+  fontName: "",
   sizeMode: "px", // "px" | "cols"
   size: 12, // font size in document pixels
   columns: 120,
