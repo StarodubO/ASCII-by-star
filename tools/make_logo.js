@@ -66,13 +66,13 @@ const BG = [14, 13, 20];
 // small sizes: a star built from asterisks, rows overlapped so the shape stays solid
 for (const [S, cols] of [[48, 9], [96, 14]]) {
   const r = drawStar(S, cols, Object.assign({ charset: "custom", customChars: " *", lineHeight: 0.55, spacingX: 1, threshold: 0.25 }, GOLD, { gradient: ["#ffb300", "#ffc933", "#fff6d0"] }), true);
-  png(root + `/plugin/icons/plugin${S === 96 ? "@2x" : ""}.png`, S, S, tile(S, r.rgba, BG));
+  png(root + `/plugin/icons/plugin${S === 96 ? "@2x" : "@1x"}.png`, S, S, tile(S, r.rgba, BG));
 }
 // panel icons (Photoshop toolbar): single colour, transparent, built from block characters so they stay crisp when tiny
 for (const [theme, fg] of [["dark", "#efefef"], ["light", "#2b2b2b"]]) {
   for (const [S, cols] of [[23, 7], [46, 12]]) {
     const r = drawStar(S, cols, { charset: "quadrant", detail: 1, colorMode: "mono", fg, contrast: 1.6, invert: theme === "light" }, false);
-    png(root + `/plugin/icons/panel_${theme}${S === 46 ? "@2x" : ""}.png`, S, S, r.rgba);
+    png(root + `/plugin/icons/panel_${theme}${S === 46 ? "@2x" : "@1x"}.png`, S, S, r.rgba);
   }
 }
 console.log("logo + icons written");
