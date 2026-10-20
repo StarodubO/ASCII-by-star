@@ -8,6 +8,8 @@ const { CHARSETS } = require("./charsets.js");
 const { PRESETS } = require("./presets.js");
 
 const $ = (id) => document.getElementById(id);
+// Layers made by the plugin end in "ASCII by Star" (older versions used a "#xxxxxx" tag).
+const OUR_RE = /(\s*ASCII by Star|\s*#[a-z0-9]{6})$/;
 const TAG_RE = /#([a-z0-9]{6})$/;
 const ANALYSIS_MAX = 1600; // long side of the cached analysis image
 const PREVIEW_MAX = 560;
@@ -50,7 +52,6 @@ function findLayers(layers, pred, out = []) {
   return out;
 }
 function findLayerById(doc, id) { return findLayers(doc.layers, (l) => l.id === id)[0] || null; }
-function newTag() { let t = ""; for (let i = 0; i < 6; i++) t += "abcdefghijklmnopqrstuvwxyz0123456789"[Math.floor(Math.random() * 36)]; return t; }
 function charsetInfo() { return CHARSETS.find((c) => c.id === S.charset) || CHARSETS[0]; }
 function docBaseName(doc) { return String((doc && doc.title) || "ascii").replace(/\.[^.]+$/, ""); }
 
@@ -93,7 +94,7 @@ async function capture(ctx, doc, layerId, scale, ownHistory) {
   const aw = Math.max(1, Math.round(docW * scale)), ah = Math.max(1, Math.round(docH * scale));
   let hidden = [], sid = null;
   if (layerId === null) {
-    hidden = findLayers(doc.layers, (l) => TAG_RE.test(l.name) && l.visible);
+    hidden = findLayers(doc.layers, (l) => OUR_RE.test(l.name) && l.visible);
     if (hidden.length && ownHistory) { try { sid = await ctx.hostControl.suspendHistory({ documentID: doc.id, name: "ASCII by Star sample" }); } catch (e) { sid = null; } }
     for (const l of hidden) l.visible = false;
   }
@@ -154,7 +155,7 @@ function sourceLayerId(doc) {
   if ($("source").value !== "layer") return null;
   if (editing && editing.docId === doc.id && editing.sourceLayerId != null && findLayerById(doc, editing.sourceLayerId)) return editing.sourceLayerId;
   const al = doc.activeLayers && doc.activeLayers[0];
-  if (al && !TAG_RE.test(al.name) && al.kind !== constants.LayerKind.GROUP && String(al.kind) !== "group") return al.id;
+  if (al && !OUR_RE.test(al.name) && al.kind !== constants.LayerKind.GROUP && String(al.kind) !== "group") return al.id;
   if (src && src.docId === doc.id && src.layerId != null && findLayerById(doc, src.layerId)) return src.layerId;
   return al ? al.id : null;
 }
@@ -355,33 +356,69 @@ async function createScratchDoc(W, H, res, name) {
   }
 }
 
-// ---------- live preview window ----------
-// A separate document that mirrors the output at full (or 2x/4x) resolution, so it can be inspected
-// with Photoshop's own zoom and pan.
-let liveTimer = null, liveRunning = false, liveAgain = false;
+// ---------- live smart object ----------
+// "Open live smart object" places the result in the working document as a smart object and opens its
+// contents (.psb) as the preview window. Edits are written into the .psb and saved, which updates the
+// smart object in the working document. Closing saves and closes the .psb.
+let liveTimer = null, liveRunning = false, liveAgain = false, liveSaveTimer = null;
 function updateLiveBtn() {
   const b = $("liveBtn");
-  b.textContent = live ? "Close live preview window" : "Open live preview window";
+  b.textContent = live ? "Save & close live smart object" : "Open live smart object";
   b.classList.toggle("primary", !!live);
 }
+async function selectLayer(layer) {
+  await action.batchPlay([{ _obj: "select", _target: [{ _ref: "layer", _id: layer.id }], makeVisible: false }], {});
+}
 async function toggleLive() {
-  if (live) {
-    const d = docById(live.docId); live = null; updateLiveBtn();
-    if (d) { try { await core.executeAsModal(() => d.closeWithoutSaving(), { commandName: "Close live preview" }); } catch (e) { /* user can close it */ } }
-    return;
-  }
+  if (live) return closeLive();
   const doc = sourceDoc();
   try { checkDoc(doc); } catch (e) { return status(e.message, true); }
-  const scale = Math.max(1, Math.min(qualityScale(), Math.floor(8000 / Math.max(doc.width, doc.height)) || 1));
+  await readyAtlas();
+  busy = true;
+  status("Opening live smart object…");
+  try {
+    await core.executeAsModal(async (ctx) => {
+      const layerId = sourceLayerId(doc);
+      let so = editing && editing.docId === doc.id ? findLayerById(doc, editing.layerId) : null;
+      if (so && !/smart/i.test(String(so.kind))) so = null; // re-editing a pixel layer: make a new smart object
+      if (!so) {
+        src = await capture(ctx, doc, layerId, neededScale(doc), true);
+        const cs = currentCharset(), geo = Engine.computeGeometry(doc.width, doc.height, S, atlas), grid = Engine.computeGrid(src, geo, S, cs);
+        const sid = await ctx.hostControl.suspendHistory({ documentID: doc.id, name: "ASCII by Star smart object" });
+        try { so = await placeSmartObject(doc, grid, cs, qualityScale(), outputName(doc, layerId)); }
+        finally { await ctx.hostControl.resumeHistory(sid, true); }
+      }
+      rememberLayer(doc, so, layerId);
+      await selectLayer(so);
+      await action.batchPlay([{ _obj: "placedLayerEditContents" }], {});
+      const psb = app.activeDocument;
+      if (!psb || psb.id === doc.id) throw new Error("Photoshop didn't open the smart object contents");
+      const inner = psb.layers.find ? psb.layers.find((l) => l.kind !== "group") || psb.layers[0] : psb.layers[0];
+      live = { docId: psb.id, layerId: inner.id, sourceDocId: doc.id, soLayerId: so.id, soName: so.name, sourceLayerId: layerId, scale: psb.width / doc.width };
+    }, { commandName: "ASCII by Star live smart object" });
+  } catch (e) { console.error(e); live = null; status("Couldn't open the live smart object: " + errMsg(e), true); }
+  finally { busy = false; }
+  updateLiveBtn();
+  if (live) { status(`Editing “${live.soName}” live (${live.scale.toFixed(0)}×). Zoom/pan with Photoshop's tools; Save & close when done.`); scheduleLive(0); }
+}
+async function saveLive(andClose) {
+  if (!live) return;
+  const d = docById(live.docId), lv = live;
+  if (!d) { live = null; updateLiveBtn(); return; }
   busy = true;
   try {
-    await core.executeAsModal(async () => {
-      const { doc: d, layer } = await createScratchDoc(Math.round(doc.width * scale), Math.round(doc.height * scale), (doc.resolution || 72) * scale, `ASCII by Star live — ${docBaseName(doc)}`);
-      live = { docId: d.id, layerId: layer.id, sourceDocId: doc.id, scale };
-    }, { commandName: "ASCII by Star live preview" });
-  } catch (e) { console.error(e); live = null; status(errMsg(e), true); } finally { busy = false; }
-  updateLiveBtn();
-  if (live) { status(`Live preview open at ${live.scale}× — use Photoshop's zoom (pinch, Z, ⌘+/−) and pan (scroll, H) there.`); scheduleLive(0); }
+    await core.executeAsModal(async () => { await d.save(); if (andClose) await d.closeWithoutSaving(); }, { commandName: "ASCII by Star save smart object" });
+    const sd = docById(lv.sourceDocId), so = sd && findLayerById(sd, lv.soLayerId);
+    if (sd && so) rememberLayer(sd, so, lv.sourceLayerId);
+  } finally { busy = false; }
+}
+async function closeLive() {
+  clearTimeout(liveTimer); clearTimeout(liveSaveTimer);
+  const lv = live;
+  while (liveRunning) await new Promise((r) => setTimeout(r, 50));
+  try { await saveLive(true); status(`Saved into “${lv.soName}”.`); }
+  catch (e) { console.error(e); status("Couldn't save the smart object: " + errMsg(e) + ". Save it with ⌘S.", true); }
+  live = null; updateLiveBtn();
 }
 function scheduleLive(delay) { if (!live) return; clearTimeout(liveTimer); liveTimer = setTimeout(runLive, delay === undefined ? 300 : delay); }
 async function runLive() {
@@ -399,12 +436,15 @@ async function runLive() {
     await core.executeAsModal(async (ctx) => {
       let sid = null;
       try { sid = await ctx.hostControl.suspendHistory({ documentID: d.id, name: "Live update" }); } catch (e) { sid = null; }
-      try { await writeLayer(d, findLayerById(d, lv.layerId) || d.layers[0], grid, cs, lv.scale); }
+      try { await writeLayer(d, findLayerById(d, lv.layerId) || d.layers[0], grid, cs, lv.scale, true); }
       finally { if (sid !== null) await ctx.hostControl.resumeHistory(sid, true); }
-    }, { commandName: "ASCII by Star live preview" });
+    }, { commandName: "ASCII by Star live update" });
+    // saving pushes the change into the working document; do it once edits pause
+    clearTimeout(liveSaveTimer);
+    liveSaveTimer = setTimeout(() => { if (live && !liveRunning) saveLive(false).catch((e) => console.error(e)); }, 900);
   } catch (e) {
     console.error(e);
-    if (/busy|modal/i.test(errMsg(e))) liveAgain = true; else status("Live preview: " + errMsg(e), true);
+    if (/busy|modal/i.test(errMsg(e))) liveAgain = true; else status("Live update: " + errMsg(e), true);
   } finally { busy = false; liveRunning = false; }
   if (liveAgain) { liveAgain = false; scheduleLive(400); }
 }
@@ -459,8 +499,23 @@ async function renderPreview() {
 }
 
 // ---------- actions ----------
-function layerName(tag) { return `ASCII by Star · ${charsetInfo().name.replace("…", "")} #${tag}`; }
-function rememberLayer(tag, sourceLayer) { saveJSON("gf:layer:" + tag, { settings: S, source: $("source").value, sourceLayerId: sourceLayer }); }
+// "<layer it was made from> ASCII by Star"
+function outputName(doc, layerId) {
+  let base = "";
+  try { const l = layerId != null ? findLayerById(doc, layerId) : doc.activeLayers && doc.activeLayers[0]; if (l) base = String(l.name); } catch (e) { base = ""; }
+  base = base.replace(OUR_RE, "").trim();
+  return `${base || docBaseName(doc)} ASCII by Star`;
+}
+const layerKey = (doc, id) => `gf:layer:${doc.title}:${id}`;
+function rememberLayer(doc, layer, sourceLayer) {
+  const rec = { settings: S, source: $("source").value, sourceLayerId: sourceLayer };
+  saveJSON(layerKey(doc, layer.id), rec);
+  saveJSON("gf:layerName:" + layer.name, rec);
+}
+function recallLayer(doc, layer) {
+  const t = String(layer.name).match(TAG_RE);
+  return loadJSON(layerKey(doc, layer.id), null) || loadJSON("gf:layerName:" + layer.name, null) || (t ? loadJSON("gf:layer:" + t[1], null) : null);
+}
 
 async function applyRaster(update) {
   const doc = sourceDoc();
@@ -481,11 +536,10 @@ async function applyRaster(update) {
         const geo = Engine.computeGeometry(doc.width, doc.height, S, atlas);
         const grid = Engine.computeGrid(src, geo, S, cs);
         const q = qualityScale();
-        let layer = null, tag;
+        let layer = null;
         const old = update ? findLayerById(doc, editing.layerId) : null;
         if (update && !old) throw new Error("The layer being edited no longer exists.");
-        tag = update ? editing.tag : newTag();
-        const name = update ? old.name : layerName(tag);
+        const name = update ? old.name : outputName(doc, layerId);
         const oldIsSmart = old && /smart/i.test(String(old.kind));
         if (q > 1 || oldIsSmart) {
           try {
@@ -503,7 +557,7 @@ async function applyRaster(update) {
           await writeLayer(doc, layer, grid, cs);
           if (!info) info = `${geo.cols} × ${geo.rows} chars`;
         }
-        rememberLayer(tag, layerId);
+        rememberLayer(doc, layer, layerId);
       } finally {
         await ctx.hostControl.resumeHistory(sid, true);
       }
@@ -546,7 +600,7 @@ async function makeTextLayer() {
           textColor: color,
           position: { x: (geo.cellW - geo.glyphW) / 2, y: baseline },
         });
-        try { layer.name = `ASCII by Star text · ${charsetInfo().name.replace("…", "")}`; } catch (e) { /* keep default name */ }
+        try { layer.name = outputName(doc, sourceLayerId(doc)); } catch (e) { /* keep default name */ }
         const st = layer.textItem && layer.textItem.characterStyle;
         if (st) {
           try { st.useAutoLeading = false; } catch (e) { /* older API */ }
@@ -606,13 +660,12 @@ async function copyText() {
 function loadSelectedLayer() {
   const doc = sourceDoc();
   const l = doc && doc.activeLayers && doc.activeLayers[0];
-  const m = l && String(l.name).match(TAG_RE);
-  if (!m) return status("Select a layer made by ASCII by Star (its name ends in #xxxxxx).", true);
-  const rec = loadJSON("gf:layer:" + m[1], null);
+  if (!l || !OUR_RE.test(String(l.name))) return status("Select a layer made by ASCII by Star (its name ends in “ASCII by Star”).", true);
+  const rec = recallLayer(doc, l);
   if (!rec) return status("No saved settings for this layer on this computer.", true);
   S = freshSettings(rec.settings);
   setSelect($("source"), rec.source || "merged");
-  editing = { docId: doc.id, layerId: l.id, tag: m[1], name: l.name, sourceLayerId: rec.sourceLayerId == null ? null : rec.sourceLayerId };
+  editing = { docId: doc.id, layerId: l.id, name: l.name, sourceLayerId: rec.sourceLayerId == null ? null : rec.sourceLayerId };
   src = null;
   syncUI();
   $("editLabel").textContent = "Editing: " + l.name;
@@ -828,8 +881,16 @@ function buildUI() {
     $("fontSearch").value = ""; fillFontSelect(); syncUI(); buildPresetSelect(); fitLayout(true);
     status("All settings reset to defaults"); schedulePreview(0);
   });
-  $("fontSel").addEventListener("change", () => { const v = $("fontSel").value, f = allFonts.find((x) => x.ps === v); setFont(v, f ? f.name : v); });
-  $("fontSearch").addEventListener("input", fillFontSelect);
+  $("fontList").addEventListener("click", (e) => {
+    let n = e.target;
+    while (n && n !== $("fontList") && !(n.getAttribute && n.getAttribute("data-ps") !== null)) n = n.parentNode;
+    if (!n || n === $("fontList")) return;
+    const v = n.getAttribute("data-ps"), f = allFonts.find((x) => x.ps === v);
+    setFont(v, f ? f.name : v);
+  });
+  const refilter = () => { clearTimeout(fontFilterTimer); fontFilterTimer = setTimeout(fillFontSelect, 60); };
+  $("fontSearch").addEventListener("input", refilter);
+  $("fontSearch").addEventListener("keyup", refilter);
   $("fontFromLayer").addEventListener("click", () => {
     try {
       const doc = sourceDoc(), l = doc && doc.activeLayers && doc.activeLayers[0];
@@ -843,7 +904,6 @@ function buildUI() {
   setSelect($("quality"), loadJSON("gf:quality", "1"));
   $("quality").addEventListener("change", async () => {
     saveJSON("gf:quality", $("quality").value);
-    if (live) { await toggleLive(); await toggleLive(); } // reopen the live window at the new resolution
   });
 
   $("apply").addEventListener("click", () => applyRaster(false));
@@ -940,26 +1000,34 @@ async function loadFonts() {
     const r = await action.batchPlay([{ _obj: "get", _target: [{ _property: "fontList" }, { _ref: "application", _enum: "ordinal", _value: "targetEnum" }] }], {});
     const fl = r && r[0] && r[0].fontList;
     const names = (fl && fl.fontName) || [], ps = (fl && fl.fontPostScriptName) || [];
-    allFonts = ps.map((p, i) => ({ ps: p, name: names[i] || p })).sort((x, y) => x.name.localeCompare(y.name));
+    const fams = (fl && fl.fontFamilyName) || [];
+    allFonts = ps.map((p, i) => ({ ps: p, name: names[i] || p, family: fams[i] })).sort((x, y) => x.name.localeCompare(y.name));
   } catch (e) { console.error(e); allFonts = []; }
   fillFontSelect();
   return allFonts.length;
 }
+// Live-filtered font list; each name is drawn in its own typeface when UXP can resolve it.
+let fontFilterTimer = null;
 function fillFontSelect() {
-  const el = $("fontSel"), q = $("fontSearch").value.trim().toLowerCase();
+  const box = $("fontList"), q = $("fontSearch").value.trim().toLowerCase();
   const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-  let list = q ? allFonts.filter((f) => f.name.toLowerCase().includes(q) || f.ps.toLowerCase().includes(q)) : allFonts.filter((f) => /mono|menlo|courier|consol|monaco|code|terminal|typewriter/i.test(f.name));
+  const recent = loadJSON("gf:recentFonts", []);
+  let list;
+  if (q) list = allFonts.filter((f) => f.name.toLowerCase().includes(q) || f.ps.toLowerCase().includes(q));
+  else list = recent.map((ps) => allFonts.find((f) => f.ps === ps)).filter(Boolean).concat(allFonts.filter((f) => !recent.includes(f.ps) && /mono|menlo|courier|consol|monaco|code|terminal|typewriter/i.test(f.name)));
   const total = list.length;
-  list = list.slice(0, 250);
-  if (S.font && !list.find((f) => f.ps === S.font)) list.unshift({ ps: S.font, name: S.fontName || S.font });
-  let html = '<option value="">Built-in (Menlo, fastest)</option>';
-  html += `<option value="" disabled>— ${q ? `${total} match${total === 1 ? "" : "es"}${total > 250 ? ", first 250" : ""}` : "Monospace fonts · type above to search all " + allFonts.length} —</option>`;
-  for (const f of list) html += `<option value="${esc(f.ps)}">${esc(f.name)}</option>`;
-  el.innerHTML = html;
-  setSelect(el, S.font || "");
+  list = list.slice(0, 120);
+  let html = `<div class="fontItem${S.font ? "" : " sel"}" data-ps="">Built-in (Menlo, fastest)</div>`;
+  for (const f of list) html += `<div class="fontItem${f.ps === S.font ? " sel" : ""}" data-ps="${esc(f.ps)}" style="font-family:'${esc(f.ps)}','${esc(f.family || f.name)}'">${esc(f.name)}</div>`;
+  if (!total) html += `<div class="fontNote">No installed font matches “${esc(q)}”</div>`;
+  else if (total > list.length) html += `<div class="fontNote">${total - list.length} more — keep typing to narrow down</div>`;
+  else if (!q) html += `<div class="fontNote">Recent and monospace fonts · type to search all ${allFonts.length}</div>`;
+  box.innerHTML = html;
+  $("fontCurrent").textContent = S.font ? S.fontName || S.font : "Built-in (Menlo)";
 }
 function setFont(ps, name) {
   S.font = ps || ""; S.fontName = ps ? name || ps : "";
+  if (ps) saveJSON("gf:recentFonts", [ps].concat(loadJSON("gf:recentFonts", []).filter((x) => x !== ps)).slice(0, 8));
   fillFontSelect(); schedulePreview(0);
 }
 

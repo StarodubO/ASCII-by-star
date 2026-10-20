@@ -30,6 +30,10 @@
   button { font-size: 11px; }
   .primary { font-weight: bold; }
   .hidden { display: none; }
+  #fontList { max-height: 168px; overflow-y: auto; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; margin-bottom: 6px; }
+  .fontItem { padding: 4px 6px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  .fontItem.sel { background: rgba(80, 160, 255, 0.35); }
+  .fontNote { padding: 4px 6px; font-size: 10px; opacity: 0.6; }
   .subhead { font-size: 10px; opacity: 0.7; margin: 8px 0 4px 0; text-transform: uppercase; letter-spacing: 0.4px; }
   .editing { background: rgba(80, 160, 255, 0.15); border: 1px solid rgba(80, 160, 255, 0.5); border-radius: 4px; padding: 6px; margin-bottom: 6px; }
   .hint { font-size: 10px; opacity: 0.65; margin: 0 0 6px 0; }
@@ -43,7 +47,7 @@
  <div id="top">
   <div id="previewWrap"><img id="preview" alt=""><div id="previewMsg">Open a document to begin</div></div>
   <div class="row btnrow" style="margin-top:5px">
-    <button id="liveBtn" title="Opens a separate document that updates live. Zoom and pan it with Photoshop's own tools.">Open live preview window</button>
+    <button id="liveBtn" title="Places the result as a smart object in your document and opens its contents. Edits update it live; Save & close puts the final result into your document.">Open live smart object</button>
     <button id="resetAll" title="Reset every setting to its default" style="flex:0 0 auto">Reset all</button>
   </div>
   <div class="row">
@@ -84,8 +88,9 @@
     <div class="head"><span class="chev">▾</span>Characters</div>
     <div class="body">
       <div class="row"><select id="charset" class="grow"></select></div>
-      <div class="row"><span class="label">Font</span><select id="fontSel" class="grow"></select></div>
-      <div class="row"><input type="text" id="fontSearch" placeholder="Search installed fonts…"><button id="fontFromLayer" title="Use the font of the selected text layer (pick it with Photoshop's font menu first)">From text layer</button></div>
+      <div class="row"><span class="label">Font</span><b id="fontCurrent" class="grow" style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Built-in (Menlo)</b></div>
+      <div class="row"><input type="text" id="fontSearch" placeholder="Type to search installed fonts…"><button id="fontFromLayer" title="Use the font of the selected text layer (pick it with Photoshop's font menu first)">From text layer</button></div>
+      <div id="fontList"></div>
       <p class="hint" id="fontHint">Any installed font works, including your own. Photoshop draws its characters once (a few seconds), then they're cached.</p>
       <div class="row" id="customRow"><textarea id="customChars" placeholder="Type your characters, e.g.  .:-=+*#%@"></textarea></div>
       <div class="row"><label><input type="checkbox" id="sortByDensity"> Sort by density</label></div>

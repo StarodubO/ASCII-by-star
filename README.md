@@ -12,7 +12,7 @@ A Photoshop plugin that turns any image into ASCII and glyph art, with a live pr
 Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, including artboard documents.
 
 ## Features
-- **Any installed font**, including your own. Search the list, or pick a font in Photoshop's font menu on a text layer and click **From text layer**. Photoshop renders it once, then it's cached.
+- **Any installed font**, including your own. A live search list shows each font in its own typeface. Or pick a font in Photoshop's font menu on a text layer and click **From text layer**. Photoshop renders it once, then it's cached.
 - **Reset all** button restores every default.
 - 63 character sets: classic ASCII ramps, blocks, Braille, box drawing, katakana "Matrix", runes, symbols, or type your own.
 - Shape matching: picks characters that follow edges, not just brightness.
@@ -27,10 +27,11 @@ Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, includi
 - Backgrounds: solid, transparent, or a colour mosaic behind the characters.
 - Size the grid by font size (px) or by number of columns.
 - Output: a new pixel layer, an editable text layer (in the chosen font), **PNG at 1×, 2× or 4×** (includes glitch signal effects and keeps transparency), .txt, coloured .html or vector .svg files, or copy to the clipboard.
+- Results are named *“<source layer> ASCII by Star”*.
 - Re-edit: select an ASCII by Star layer, click **Re-edit selected…**, adjust, then click **Update layer**.
 - Presets: 21 built-in looks, plus your own presets, which you can import and export.
 - Batch: process a folder of images to PNG (and optionally .txt).
-- **Live preview window**: a separate document that updates as you change settings. Zoom and pan it with Photoshop's own tools (pinch, Z/H, scroll). The panel shows a quick Fit thumbnail.
+- **Live smart object**: **Open live smart object** places the result in your document as a smart object and opens its contents. Settings update it live (zoom/pan with Photoshop's own tools), and each change is saved into your document. **Save & close** finishes. To edit it again later, select the layer, click **Re-edit…**, then open it live again.
 - **Apply quality**: 1× pixel layer (re-editable in place), or a 2×/4× smart object that holds a higher-resolution render, so it stays sharp when scaled up, upsized (Image Size) or exported.
 
 ## Making changes
