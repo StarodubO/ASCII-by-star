@@ -17,8 +17,9 @@ let S = freshSettings(loadJSON("gf:last", null));
 let src = null; // cached analysis pixels {docId, layerId, scale, docW, docH, w, h, data, stale}
 let busy = false;
 let editing = null; // {docId, layerId, tag, name, sourceLayerId}
-let focus = { x: 0.5, y: 0.5 };
-let lastView = null;
+let focus = { x: 0.5, y: 0.5 }; // centre of the zoomed preview, as a fraction of the document
+let zoom = null; // preview scale in output px per document px; null = fit
+let gridCache = { key: null, src: null, grid: null, cs: null, geo: null };
 let userPresets = loadJSON("gf:userPresets", []);
 
 // ---------- utils ----------
@@ -238,25 +239,49 @@ async function runPreview() {
 }
 function showPreviewMsg(t) { const m = $("previewMsg"); m.textContent = t; m.classList.remove("hidden"); $("preview").classList.add("hidden"); }
 
+function fitScale() { return src ? Math.min(PREVIEW_MAX / src.docW, PREVIEW_MAX / src.docH) : 1; }
+// The preview box keeps the fitted size; zooming changes which part of the document it shows.
+function currentView() {
+  const docW = src.docW, docH = src.docH, fit = fitScale();
+  const w = Math.max(1, Math.round(docW * fit)), h = Math.max(1, Math.round(docH * fit));
+  if (zoom === null || zoom <= fit * 1.0001) { zoom = null; return { x: 0, y: 0, w, h, scale: fit }; }
+  const vw = w / zoom, vh = h / zoom;
+  const x = Math.max(0, Math.min(docW - vw, focus.x * docW - vw / 2)), y = Math.max(0, Math.min(docH - vh, focus.y * docH - vh / 2));
+  focus = { x: (x + vw / 2) / docW, y: (y + vh / 2) / docH };
+  return { x, y, w, h, scale: zoom };
+}
+function updateZoomLabel() { $("zoomLabel").textContent = zoom === null ? "Fit" : Math.round(zoom * 100) + "%"; }
+function zoomAt(newZoom, fx, fy) {
+  if (!src) return;
+  const v = currentView(), fit = fitScale();
+  const px = v.x + (fx * v.w) / v.scale, py = v.y + (fy * v.h) / v.scale; // document point under the cursor stays put
+  newZoom = Math.min(8, Math.max(fit, newZoom));
+  const vw = v.w / newZoom, vh = v.h / newZoom;
+  focus = { x: (px - fx * vw + vw / 2) / src.docW, y: (py - fy * vh + vh / 2) / src.docH };
+  zoom = newZoom <= fit * 1.0001 ? null : newZoom;
+  updateZoomLabel();
+  schedulePreview(0);
+}
+function panBy(dx, dy, rect) {
+  if (!src || zoom === null || !rect.width) return;
+  const v = currentView(), k = v.w / rect.width / v.scale; // document px per screen px
+  focus = { x: focus.x - (dx * k) / src.docW, y: focus.y - (dy * k) / src.docH };
+  schedulePreview(0);
+}
+
 async function renderPreview() {
   if (!atlas) return;
   const ok = await ensureSource(0);
   if (!ok) { showPreviewMsg("Open a document to begin"); status(""); return; }
-  const cs = currentCharset();
-  const geo = Engine.computeGeometry(src.docW, src.docH, S, atlas);
-  const grid = Engine.computeGrid(src, geo, S, cs);
-  const docW = src.docW, docH = src.docH, zoom = $("zoom").value;
-  let view;
-  if (zoom === "fit") {
-    const sc = Math.min(PREVIEW_MAX / docW, PREVIEW_MAX / docH);
-    view = { x: 0, y: 0, w: Math.max(1, Math.round(docW * sc)), h: Math.max(1, Math.round(docH * sc)), scale: sc };
-  } else {
-    const z = Number(zoom);
-    const w = Math.max(1, Math.min(PREVIEW_MAX, Math.round(docW * z))), h = Math.max(1, Math.min(Math.round(PREVIEW_MAX * 0.8), Math.round(docH * z)));
-    const vw = w / z, vh = h / z;
-    view = { x: Math.max(0, Math.min(docW - vw, focus.x * docW - vw / 2)), y: Math.max(0, Math.min(docH - vh, focus.y * docH - vh / 2)), w, h, scale: z };
+  // panning/zooming only re-renders the view; the character grid is reused while settings and source are unchanged
+  const key = JSON.stringify(S);
+  if (gridCache.key !== key || gridCache.src !== src) {
+    const cs = currentCharset(), geo = Engine.computeGeometry(src.docW, src.docH, S, atlas);
+    gridCache = { key, src, cs, geo, grid: Engine.computeGrid(src, geo, S, cs) };
   }
-  lastView = view;
+  const { cs, geo, grid } = gridCache;
+  const docW = src.docW, docH = src.docH;
+  const view = currentView();
   const rgb = Engine.flattenForPreview(Engine.render(grid, cs, atlas, S, view), view.w, view.h);
   const id = await imaging.createImageDataFromBuffer(rgb, { width: view.w, height: view.h, components: 3, chunky: true, colorProfile: "sRGB IEC61966-2.1", colorSpace: "RGB" });
   const b64 = await imaging.encodeImageData({ imageData: id, base64: true });
@@ -266,6 +291,7 @@ async function renderPreview() {
   img.classList.remove("hidden");
   $("previewMsg").classList.add("hidden");
   const lowRes = src.scale < neededScale(activeDoc() || { width: docW, height: docH }) - 1e-6;
+  updateZoomLabel();
   status(`${geo.cols} × ${geo.rows} chars · ${geo.size.toFixed(1)}px · ${cs.n} glyphs${lowRes ? " · preview sampled at reduced res" : ""}`);
 }
 
@@ -591,17 +617,32 @@ function buildUI() {
   $("useFg").addEventListener("click", () => { try { setColor("fg", "#" + app.foregroundColor.rgb.hexValue.toLowerCase()); } catch (e) { status(errMsg(e), true); } });
   $("useBg").addEventListener("click", () => { try { setColor("bg", "#" + app.backgroundColor.rgb.hexValue.toLowerCase()); } catch (e) { status(errMsg(e), true); } });
 
-  $("zoom").addEventListener("change", () => schedulePreview(0));
   $("source").addEventListener("change", () => { src = null; schedulePreview(0); });
   $("refresh").addEventListener("click", () => { src = null; csCache.key = null; schedulePreview(0); });
-  $("preview").addEventListener("click", (e) => {
-    if (!lastView || !src) return;
-    const img = $("preview"), r = img.getBoundingClientRect();
-    const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
-    focus = { x: (lastView.x + (fx * lastView.w) / lastView.scale) / src.docW, y: (lastView.y + (fy * lastView.h) / lastView.scale) / src.docH };
-    if ($("zoom").value === "fit") setSelect($("zoom"), "1");
-    schedulePreview(0);
+  // preview navigation: pinch (trackpad) or mouse wheel zooms, two-finger scroll or drag pans, double-click toggles fit
+  const wrap = $("previewWrap");
+  const pointIn = (e) => { const r = $("preview").getBoundingClientRect(); return { r, fx: r.width ? Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) : 0.5, fy: r.height ? Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) : 0.5 }; };
+  wrap.addEventListener("wheel", (e) => {
+    if (e.preventDefault) e.preventDefault();
+    const { r, fx, fy } = pointIn(e);
+    const lines = e.deltaMode === 1, pinch = e.ctrlKey || e.metaKey;
+    const mouseWheel = lines || (e.deltaX === 0 && Math.abs(e.deltaY) >= 50 && Number.isInteger(e.deltaY));
+    if (pinch || mouseWheel || e.altKey) {
+      const d = lines ? e.deltaY * 33 : e.deltaY;
+      zoomAt((zoom || fitScale()) * Math.exp(-d * (pinch ? 0.01 : 0.0025)), fx, fy);
+    } else panBy(-e.deltaX, -e.deltaY, r);
   });
+  let drag = null;
+  wrap.addEventListener("mousedown", (e) => { drag = { x: e.clientX, y: e.clientY, r: $("preview").getBoundingClientRect() }; if (e.preventDefault) e.preventDefault(); });
+  const dragRoot = typeof document.addEventListener === "function" ? document : wrap;
+  dragRoot.addEventListener("mousemove", (e) => { if (!drag) return; panBy(e.clientX - drag.x, e.clientY - drag.y, drag.r); drag.x = e.clientX; drag.y = e.clientY; });
+  dragRoot.addEventListener("mouseup", () => { drag = null; });
+  wrap.addEventListener("mouseleave", () => { if (dragRoot === wrap) drag = null; });
+  wrap.addEventListener("dblclick", (e) => { const { fx, fy } = pointIn(e); if (zoom === null) zoomAt(1, fx, fy); else { zoom = null; updateZoomLabel(); schedulePreview(0); } });
+  $("zoomFit").addEventListener("click", () => { zoom = null; updateZoomLabel(); schedulePreview(0); });
+  $("zoom1").addEventListener("click", () => zoomAt(1, 0.5, 0.5));
+  $("zoomIn").addEventListener("click", () => zoomAt((zoom || fitScale()) * 1.5, 0.5, 0.5));
+  $("zoomOut").addEventListener("click", () => zoomAt((zoom || fitScale()) / 1.5, 0.5, 0.5));
 
   $("apply").addEventListener("click", () => applyRaster(false));
   $("updateLayer").addEventListener("click", () => applyRaster(true));

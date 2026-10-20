@@ -35,19 +35,22 @@
   .hint { font-size: 10px; opacity: 0.65; margin: 0 0 6px 0; }
   .btnrow { flex-wrap: wrap; }
   .btnrow button { flex: 1 1 auto; margin-bottom: 4px; }
-  #zoom { flex: 0 0 74px; }
+  .zbtn { flex: 0 0 auto; min-width: 30px; }
+  #previewWrap { cursor: grab; }
 </style>
 </head>
 <body>
  <div id="top">
   <div id="previewWrap"><img id="preview" alt=""><div id="previewMsg">Open a document to begin</div></div>
   <div class="row" style="margin-top:5px">
-    <select id="zoom">
-      <option value="fit" selected>Fit</option>
-      <option value="0.5">50%</option>
-      <option value="1">100%</option>
-      <option value="2">200%</option>
-    </select>
+    <button id="zoomFit" class="zbtn" title="Fit the whole image">Fit</button>
+    <button id="zoom1" class="zbtn" title="100%">1:1</button>
+    <button id="zoomOut" class="zbtn" title="Zoom out">−</button>
+    <button id="zoomIn" class="zbtn" title="Zoom in">+</button>
+    <span id="zoomLabel" class="val" style="text-align:left;margin-left:2px">Fit</span>
+    <span class="hint grow" style="margin:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">Pinch/scroll to zoom · drag to pan</span>
+  </div>
+  <div class="row">
     <select id="source" class="grow">
       <option value="merged" selected>Source: Visible (merged)</option>
       <option value="layer">Source: Active layer</option>

@@ -28,7 +28,7 @@ Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, includi
 - Re-edit: select an ASCII by Star layer, click **Re-edit selected…**, adjust, then click **Update layer**.
 - Presets: 21 built-in looks, plus your own presets, which you can import and export.
 - Batch: process a folder of images to PNG (and optionally .txt).
-- Preview: fit, 50%, 100% or 200% zoom. Click the preview to choose the zoom focus.
+- Preview: pinch on a trackpad or use the mouse wheel to zoom (up to 800%). Two-finger scroll or drag to pan. Double-click switches between Fit and 100%. Fit, 1:1, − and + buttons too.
 
 ## Making changes
 | What | Where |
