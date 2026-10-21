@@ -33,7 +33,7 @@ Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, includi
 - **Batch:** process a folder of images to PNG (and optionally .txt).
 
 ## Ink bleed tab
-Adds an ink-on-paper overlay to any layer (or the whole visible image) without touching it. The result is a group named *“<layer> Ink Bleed”* with four blend-mode layers you can fine-tune in Photoshop: **Ink bleed** and **Ink pooling** (Multiply), **Ink gaps** (Screen) and **Paper** (Multiply). For light ink on dark paper the modes swap automatically.
+Adds an ink-on-paper overlay to any layer (or the whole visible image) without touching it. The result is a group named *“<layer> Ink Bleed”* with four blend-mode layers you can fine-tune in Photoshop: **Ink bleed** and **Ink pooling** (Multiply), **Ink gaps** (Normal, showing the paper under your layer through the ink) and **Paper** (Multiply). For light ink on dark paper the modes swap automatically.
 
 - **Paper:** 8 generated paper types (newsprint, office paper, blotting paper, washi, laid paper, cold-press watercolour, kraft, rough print) or **any image file as the paper**: your own scans, at any size. The texture shapes the bleed: ink skips its raised parts and pools in its dips.
 - **Bleed:** wetness, distance, feathering, wicking along fibres, halo opacity and edge softness.

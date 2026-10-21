@@ -51,6 +51,7 @@ const DEFAULTS = {
   bgMode: "solid", // solid | transparent | mosaic
   bg: "#0b0b0b",
   keepAlpha: true, // the background only covers the source's opaque parts
+  bgOpacity: 1, // strength of the solid or mosaic background (0 = characters only)
   mosaicAmount: 0.35,
   glyphOpacity: 1,
   // shadows: drawn between the background and the characters. Sizes are fractions of the font size, so they
@@ -701,8 +702,10 @@ function render(grid, cs, atlas, s, view) {
   // keep the source's transparency: the background fades out where the source is transparent
   let masked = false;
   if (s.keepAlpha && alpha) for (let i = 0; i < alpha.length && !masked; i++) masked = alpha[i] < 255;
+  const bgA = clamp01(s.bgOpacity === undefined ? 1 : s.bgOpacity);
   if (s.bgMode !== "transparent" && !masked) {
-    for (let o = 0; o < out.length; o += 4) { out[o] = bg[0]; out[o + 1] = bg[1]; out[o + 2] = bg[2]; out[o + 3] = 255; }
+    const a = Math.round(255 * bgA);
+    for (let o = 0; o < out.length; o += 4) { out[o] = bg[0]; out[o + 1] = bg[1]; out[o + 2] = bg[2]; out[o + 3] = a; }
   } else if (s.bgMode === "solid") {
     // cell coverage, interpolated between cell centres in document space (strip-safe, follows the silhouette)
     const xi = new Int32Array(W * 2), xf = new Float32Array(W), yi = new Int32Array(H * 2), yf = new Float32Array(H);
@@ -713,7 +716,7 @@ function render(grid, cs, atlas, s, view) {
       for (let x = 0, o = y * W * 4; x < W; x++, o += 4) {
         const c0 = xi[x * 2], c1 = xi[x * 2 + 1], fx = xf[x];
         const a = (alpha[r0 + c0] * (1 - fx) + alpha[r0 + c1] * fx) * (1 - fy) + (alpha[r1 + c0] * (1 - fx) + alpha[r1 + c1] * fx) * fy;
-        out[o] = bg[0]; out[o + 1] = bg[1]; out[o + 2] = bg[2]; out[o + 3] = a;
+        out[o] = bg[0]; out[o + 1] = bg[1]; out[o + 2] = bg[2]; out[o + 3] = a * bgA;
       }
     }
   }
@@ -733,7 +736,7 @@ function render(grid, cs, atlas, s, view) {
           // edges from the cell grid itself, so neighbouring blocks share them exactly (no gap rows)
           const xa = Math.max(0, Math.round(ox)), xe = Math.min(W, Math.round(((c + 1) * geo.cellW - view.x) * sc));
           const ya = Math.max(0, Math.round(oy)), ye = Math.min(H, Math.round(((r + 1) * geo.cellH - view.y) * sc));
-          const ma = masked ? alpha[ci] : 255;
+          const ma = (masked ? alpha[ci] : 255) * bgA;
           for (let y = ya; y < ye; y++) for (let x = xa, o = (y * W + xa) * 4; x < xe; x++, o += 4) { out[o] = mr; out[o + 1] = mg; out[o + 2] = mb; out[o + 3] = ma; }
         }
         const gi = glyph[ci];
@@ -765,7 +768,7 @@ function render(grid, cs, atlas, s, view) {
         const c = colOf[x];
         if (c < 0 || c >= cols) continue;
         const ci = r * cols + c;
-        if (mosaic) { const m = mosaicColor(ci); out[o] = m[0]; out[o + 1] = m[1]; out[o + 2] = m[2]; out[o + 3] = masked ? alpha[ci] : 255; }
+        if (mosaic) { const m = mosaicColor(ci); out[o] = m[0]; out[o + 1] = m[1]; out[o + 2] = m[2]; out[o + 3] = (masked ? alpha[ci] : 255) * bgA; }
         const gi = glyph[ci];
         if (gi >= 0 && !noGlyphs) blendPx(out, o, color[ci * 3], color[ci * 3 + 1], color[ci * 3 + 2], cs.cov[gi] * areaK * (shade ? shade[ci] : 1));
       }

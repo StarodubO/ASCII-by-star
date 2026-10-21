@@ -1,7 +1,6 @@
 // Ink bleed integration steps (TEST=ink node tools/build_test.js).
 const M = (fn) => core.executeAsModal(fn, { commandName: "t" });
 ink = setupInk({ $, loadJSON, saveJSON, errMsg, toRGBA8, makeImageData, convertOut, createLayer, findLayers, findLayerById, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout: () => {}, onCheck: () => {} });
-__el("inkZoom").value = "1";
 const tree = (d) => findLayers(d.layers, () => true).map((l) => `${l.name}${l.parent ? " <" + l.parent.name + ">" : ""} [${String(l.blendMode)}]${l.visible ? "" : " (hidden)"}`);
 async function alphaStats(d, layer) {
   const r = await M(() => imaging.getPixels({ documentID: d.id, layerID: layer.id, applyAlpha: false }));
@@ -25,7 +24,7 @@ await step("create doc + glyph layer", async () => {
   return tree(doc);
 });
 await step("preview (layer source)", async () => { await ink.preview(); return [__el("inkPreview").src.length, __el("inkStatus").textContent]; });
-await step("preview fit", async () => { __el("inkZoom").value = "fit"; await ink.preview(); __el("inkZoom").value = "1"; return [__el("inkPreview").src.length, __el("inkStatus").textContent]; });
+await step("preview fit", async () => { await ink.setZoom("fit"); await ink.preview(); await ink.setZoom("1"); return [__el("inkPreview").src.length, __el("inkStatus").textContent]; });
 await step("apply new overlay", async () => {
   await ink.apply(false);
   return [__el("inkStatus").textContent, tree(doc), ink.editing()];
@@ -90,5 +89,32 @@ await step("save texture png", async () => {
   if (!__MIRROR_DIR) return "no LOG_MIRROR";
   const f = await lfs.createEntryWithUrl("file:" + __MIRROR_DIR + "/ink_texture.png", { overwrite: true });
   await M(() => doc.saveAs.png(f, { compression: 6 }, true)); return f.nativePath;
+});
+await step("white letters on blue stripes: gaps show the blue, not black", async () => {
+  ink.stopEditing();
+  Object.assign(ink.settings(), __mods.ink.DEFAULTS, { texture: "", paperLayer: true, tooth: 0.5, mottle: 0.5 });
+  const d = await M(() => app.documents.add({ width: 700, height: 300, resolution: 72, mode: "RGBColorMode", depth: 8, fill: "white" }));
+  const W = d.width, H = d.height, bg = new Uint8Array(W * H * 4), fg = new Uint8Array(W * H * 4);
+  for (let i = 0; i < W * H; i++) { const x = i % W, y = (i / W) | 0, light = (x % 26) < 9; bg[i * 4] = 20; bg[i * 4 + 1] = light ? 80 : 60; bg[i * 4 + 2] = light ? 200 : 170; bg[i * 4 + 3] = 255;
+    const on = y > 80 && y < 220 && ((x > 60 && x < 200) || (x > 260 && x < 330) || (x > 400 && x < 640)) && !(x > 100 && x < 160 && y > 120 && y < 180);
+    fg[i * 4] = fg[i * 4 + 1] = fg[i * 4 + 2] = 245; fg[i * 4 + 3] = on ? 255 : 0; }
+  let letters;
+  await M(async () => {
+    let id = await makeImageData(bg, W, H, false, d.colorProfileName); await imaging.putPixels({ documentID: d.id, layerID: d.layers[0].id, imageData: id }); id.dispose();
+    letters = await createLayer(d, "Letters");
+    id = await makeImageData(fg, W, H, false, d.colorProfileName); await imaging.putPixels({ documentID: d.id, layerID: letters.id, imageData: id }); id.dispose();
+    await selectLayer(letters);
+  });
+  await ink.apply(false);
+  const g = ink.editing() && findLayerById(d, ink.editing().groupId), gaps = g && g.layers.find((l) => l.name === "Ink gaps");
+  const r = await M(() => imaging.getPixels({ documentID: d.id, layerID: gaps.id, applyAlpha: false }));
+  const px = await toRGBA8(r.imageData); r.imageData.dispose();
+  let n = 0, sr = 0, sg = 0, sb = 0;
+  for (let i = 0; i < px.length; i += 4) if (px[i + 3] > 20) { n++; sr += px[i]; sg += px[i + 1]; sb += px[i + 2]; }
+  const res = { status: __el("inkStatus").textContent, gapsMode: String(gaps.blendMode), gapPixels: n, meanGapColour: n ? [sr / n, sg / n, sb / n].map(Math.round) : null };
+  if (__MIRROR_DIR) { const f = await lfs.createEntryWithUrl("file:" + __MIRROR_DIR + "/ink_letters.png", { overwrite: true }); await M(() => d.saveAs.png(f, { compression: 6 }, true)); }
+  ink.stopEditing();
+  await M(() => d.closeWithoutSaving());
+  return res;
 });
 await step("close test doc", async () => M(() => doc.closeWithoutSaving()));

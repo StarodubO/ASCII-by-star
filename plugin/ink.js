@@ -3,12 +3,12 @@
 // The result is four overlay layers that sit above the source layer, so the source itself is never changed:
 //   bleed   Multiply  ink that spread past the strokes: halo, ragged edges, tendrils wicking along fibres
 //   pool    Multiply  darker rims where ink dried at the edge, pigment settling into the paper's valleys
-//   gaps    Screen    paper showing through the ink: dry skip on the paper's tooth, mottling, pale centres
+//   gaps    Normal    the paper showing through the ink (what's under the layer): dry skip, mottling, pale centres
 //   paper   Multiply  paper colour, grain, relief, fibres, laid lines, flecks
 //
 // Everything runs in "dark space" (dark ink on light paper). For light ink on dark paper the pixels are
-// inverted on the way in and the outputs on the way out, which turns every Multiply layer into Screen
-// and the other way round.
+// inverted on the way in and the outputs on the way out, which turns the Multiply layers into Screen and the
+// other way round. Gaps are Normal: they show the real paper, whatever its colour.
 //
 // Sizes are pixels on a 3000 px long side and scale with the document, so a paper looks the same on any
 // canvas. All randomness is hashed from world coordinates and the seed, so the preview, overlapping tiles
@@ -17,7 +17,9 @@
 
 const REF = 3000;
 
+const SETTINGS_VERSION = 2; // bump when the look of the papers or the bleed changes; saved slider values are refreshed
 const DEFAULTS = {
+  version: SETTINGS_VERSION,
   paper: "newsprint",
   seed: 1,
   inkFrom: "auto", // auto | alpha | dark | light
@@ -26,8 +28,8 @@ const DEFAULTS = {
   wetness: 0.4, spread: 2.5, feather: 0.6, wicking: 0.4, halo: 0.8, softness: 0.15,
   pooling: 0.15, poolWidth: 3, granulation: 0, tooth: 0.15, mottle: 0.3,
   // paper
-  paperColor: "#ece6d6", grainSize: 2, grain: 0.35, relief: 0.15,
-  fibres: 0.7, fibreLength: 18, fibreShow: 0.15, alignment: 0.2, direction: 0,
+  paperColor: "#ece6d6", grainSize: 2, grain: 0.5, relief: 0.1,
+  fibres: 0.7, fibreLength: 18, fibreShow: 0.35, alignment: 0.2, direction: 0,
   laid: 0, laidSpacing: 10, flecks: 0,
   // custom texture (an image file); "" = generated paper
   texture: "", textureName: "", texScale: 1, texStrength: 1, texColour: true,
@@ -36,13 +38,13 @@ const DEFAULTS = {
 // Paper types set every paper and ink setting (not the seed, ink source or paper layer switch).
 const PAPERS = [
   { id: "newsprint", name: "Newsprint", s: {} },
-  { id: "bond", name: "Office paper", s: { wetness: 0.3, spread: 1.5, feather: 0.3, wicking: 0.15, halo: 0.9, softness: 0.15, pooling: 0.1, poolWidth: 2, granulation: 0, tooth: 0, mottle: 0.08, paperColor: "#f7f5f0", grainSize: 1.5, grain: 0.12, relief: 0.08, fibres: 0.5, fibreLength: 20, fibreShow: 0.03, alignment: 0.3, direction: 0, laid: 0, laidSpacing: 10, flecks: 0 } },
-  { id: "blotting", name: "Blotting paper", s: { wetness: 0.6, spread: 7, feather: 0.4, wicking: 0.5, halo: 0.45, softness: 0.45, pooling: 0.3, poolWidth: 4, granulation: 0, tooth: 0, mottle: 0.2, paperColor: "#f2efe9", grainSize: 3, grain: 0.25, relief: 0.15, fibres: 0.9, fibreLength: 25, fibreShow: 0.08, alignment: 0, direction: 0, laid: 0, laidSpacing: 10, flecks: 0 } },
-  { id: "washi", name: "Washi / rice paper", s: { wetness: 0.5, spread: 4, feather: 0.7, wicking: 0.7, halo: 0.7, softness: 0.2, pooling: 0.25, poolWidth: 3, granulation: 0.1, tooth: 0.05, mottle: 0.2, paperColor: "#f3eee2", grainSize: 4, grain: 0.2, relief: 0.2, fibres: 0.45, fibreLength: 90, fibreShow: 0.3, alignment: 0.1, direction: 0, laid: 0, laidSpacing: 10, flecks: 0 } },
-  { id: "laid", name: "Laid paper", s: { wetness: 0.35, spread: 3, feather: 0.6, wicking: 0.3, halo: 0.85, softness: 0.15, pooling: 0.2, poolWidth: 3, granulation: 0, tooth: 0.25, mottle: 0.15, paperColor: "#f1ead8", grainSize: 2, grain: 0.3, relief: 0.45, fibres: 0.4, fibreLength: 20, fibreShow: 0.1, alignment: 0.6, direction: 0, laid: 0.6, laidSpacing: 10, flecks: 0 } },
-  { id: "watercolour", name: "Cold-press watercolour", s: { wetness: 0.6, spread: 6, feather: 0.5, wicking: 0.2, halo: 0.7, softness: 0.35, pooling: 0.6, poolWidth: 4, granulation: 0.5, tooth: 0.35, mottle: 0.3, paperColor: "#f8f6f0", grainSize: 9, grain: 0.55, relief: 0.6, fibres: 0.1, fibreLength: 25, fibreShow: 0.05, alignment: 0, direction: 0, laid: 0, laidSpacing: 10, flecks: 0 } },
-  { id: "kraft", name: "Kraft / recycled", s: { wetness: 0.5, spread: 4, feather: 0.6, wicking: 0.5, halo: 0.8, softness: 0.2, pooling: 0.15, poolWidth: 3, granulation: 0, tooth: 0.2, mottle: 0.3, paperColor: "#c9a27a", grainSize: 2.5, grain: 0.35, relief: 0.2, fibres: 0.8, fibreLength: 22, fibreShow: 0.35, alignment: 0.3, direction: 0, laid: 0, laidSpacing: 10, flecks: 0 } },
-  { id: "rough", name: "Rough print (dry ink)", s: { wetness: 0.15, spread: 1.5, feather: 0.4, wicking: 0.1, halo: 0.9, softness: 0.1, pooling: 0.4, poolWidth: 2, granulation: 0, tooth: 0.6, mottle: 0.35, paperColor: "#f5f1e8", grainSize: 3, grain: 0.4, relief: 0.35, fibres: 0.3, fibreLength: 20, fibreShow: 0.1, alignment: 0.2, direction: 0, laid: 0, laidSpacing: 10, flecks: 0 } },
+  { id: "bond", name: "Office paper", s: { wetness: 0.3, spread: 1.5, feather: 0.3, wicking: 0.15, halo: 0.9, softness: 0.15, pooling: 0.1, poolWidth: 2, granulation: 0, tooth: 0, mottle: 0.08, paperColor: "#f7f5f0", grainSize: 1.5, grain: 0.3, relief: 0.05, fibres: 0.5, fibreLength: 20, fibreShow: 0.15, alignment: 0.3, direction: 0, laid: 0, laidSpacing: 10, flecks: 0 } },
+  { id: "blotting", name: "Blotting paper", s: { wetness: 0.6, spread: 7, feather: 0.4, wicking: 0.5, halo: 0.45, softness: 0.45, pooling: 0.3, poolWidth: 4, granulation: 0, tooth: 0, mottle: 0.2, paperColor: "#f2efe9", grainSize: 3, grain: 0.4, relief: 0.1, fibres: 0.9, fibreLength: 25, fibreShow: 0.3, alignment: 0, direction: 0, laid: 0, laidSpacing: 10, flecks: 0 } },
+  { id: "washi", name: "Washi / rice paper", s: { wetness: 0.5, spread: 4, feather: 0.7, wicking: 0.7, halo: 0.7, softness: 0.2, pooling: 0.25, poolWidth: 3, granulation: 0.1, tooth: 0.05, mottle: 0.2, paperColor: "#f3eee2", grainSize: 4, grain: 0.3, relief: 0.1, fibres: 0.45, fibreLength: 90, fibreShow: 0.7, alignment: 0.1, direction: 0, laid: 0, laidSpacing: 10, flecks: 0 } },
+  { id: "laid", name: "Laid paper", s: { wetness: 0.35, spread: 3, feather: 0.6, wicking: 0.3, halo: 0.85, softness: 0.15, pooling: 0.2, poolWidth: 3, granulation: 0, tooth: 0.25, mottle: 0.15, paperColor: "#f1ead8", grainSize: 2, grain: 0.4, relief: 0.3, fibres: 0.4, fibreLength: 20, fibreShow: 0.25, alignment: 0.6, direction: 0, laid: 0.6, laidSpacing: 10, flecks: 0 } },
+  { id: "watercolour", name: "Cold-press watercolour", s: { wetness: 0.6, spread: 6, feather: 0.5, wicking: 0.2, halo: 0.7, softness: 0.35, pooling: 0.6, poolWidth: 4, granulation: 0.5, tooth: 0.35, mottle: 0.3, paperColor: "#f8f6f0", grainSize: 9, grain: 0.5, relief: 0.55, fibres: 0.1, fibreLength: 25, fibreShow: 0.1, alignment: 0, direction: 0, laid: 0, laidSpacing: 10, flecks: 0 } },
+  { id: "kraft", name: "Kraft / recycled", s: { wetness: 0.5, spread: 4, feather: 0.6, wicking: 0.5, halo: 0.8, softness: 0.2, pooling: 0.15, poolWidth: 3, granulation: 0, tooth: 0.2, mottle: 0.3, paperColor: "#c9a27a", grainSize: 2.5, grain: 0.65, relief: 0.15, fibres: 0.8, fibreLength: 22, fibreShow: 0.9, alignment: 0.3, direction: 0, laid: 0, laidSpacing: 10, flecks: 0 } },
+  { id: "rough", name: "Rough print (dry ink)", s: { wetness: 0.15, spread: 1.5, feather: 0.4, wicking: 0.1, halo: 0.9, softness: 0.1, pooling: 0.4, poolWidth: 2, granulation: 0, tooth: 0.6, mottle: 0.35, paperColor: "#f5f1e8", grainSize: 3, grain: 0.5, relief: 0.3, fibres: 0.3, fibreLength: 20, fibreShow: 0.3, alignment: 0.2, direction: 0, laid: 0, laidSpacing: 10, flecks: 0 } },
 ];
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -212,12 +214,6 @@ function makeFibres(s, sk, ox, oy, w, h) {
   }
   return out;
 }
-// Bilinear read of a field at buffer position (px, py); 0 outside.
-function sample(a, w, h, px, py) {
-  const x = px - 0.5, y = py - 0.5, ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
-  const g = (X, Y) => (X >= 0 && Y >= 0 && X < w && Y < h ? a[Y * w + X] : 0);
-  return (g(ix, iy) * (1 - fx) + g(ix + 1, iy) * fx) * (1 - fy) + (g(ix, iy + 1) * (1 - fx) + g(ix + 1, iy + 1) * fx) * fy;
-}
 // Writes max(existing, v * coverage) of a soft dot into a field.
 function splat(a, w, h, px, py, rad, v) {
   if (rad < 0.75) { // thinner than a pixel: bilinear, fainter as it gets thinner
@@ -233,6 +229,64 @@ function splat(a, w, h, px, py, rad, v) {
     if (q > a[y * w + x]) a[y * w + x] = q;
   }
 }
+// The paper's visible fibres: a dense felt of short, soft strands, some lighter and some darker than the paper
+// (real paper is not a web of dark threads). Returns presence fields for light (P) and dark (N) strands.
+function felt(s, sk, ox, oy, w, h) {
+  const P = new Float32Array(w * h), N = new Float32Array(w * h), cs = 8, L = Math.max(4, s.fibreLength);
+  const per = s.fibres * 5, step = Math.min(1, 0.7 / sk), dir = (s.direction * Math.PI) / 180, spreadA = Math.PI * (1 - s.alignment), reach = L * 0.6 + 2;
+  for (let cy = Math.floor((oy / sk - reach) / cs); cy <= Math.floor(((oy + h) / sk + reach) / cs); cy++) {
+    for (let cx = Math.floor((ox / sk - reach) / cs); cx <= Math.floor(((ox + w) / sk + reach) / cs); cx++) {
+      const r = rng(hashU(s.seed * 13 + 5, cx, cy)), n = Math.floor(per + r());
+      for (let j = 0; j < n; j++) {
+        const mx = (cx + r()) * cs, my = (cy + r()) * cs, len = L * (0.12 + 0.45 * r()), wid = 0.5 + 1.1 * r(), amp = 0.35 + 0.65 * r(), into = r() < 0.55 ? P : N;
+        let th = dir + (r() - 0.5) * spreadA;
+        const bend = ((r() - 0.5) * 0.5) / len, np = Math.max(2, Math.ceil(len / step));
+        let x = mx - (Math.cos(th) * len) / 2, y = my - (Math.sin(th) * len) / 2;
+        for (let k = 0; k <= np; k++) {
+          splat(into, w, h, x * sk - ox, y * sk - oy, (wid * sk) / 2, amp);
+          th += bend * (len / np); x += Math.cos(th) * (len / np); y += Math.sin(th) * (len / np);
+        }
+      }
+    }
+  }
+  return { P, N };
+}
+// Ink travelling through paper: every ink pixel starts with fuel (how far its ink can run) and each step costs
+// fuel by how hard the paper is to cross there: fibres are cheap, dense spots dear. Raster sweeps in both
+// directions keep the best fuel left at each pixel (a geodesic distance transform), giving branching,
+// fibre-following edges instead of a smooth halo.
+function propagateFuel(f, cost, w, h, rounds) {
+  const D = Math.SQRT1_2; // half of √2: diagonal steps average the two costs over a longer step
+  for (let r = 0; r < rounds; r++) {
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x, c = cost[i];
+      let v = f[i];
+      if (x > 0) v = Math.max(v, f[i - 1] - (c + cost[i - 1]) * 0.5);
+      if (y > 0) {
+        const j = i - w;
+        v = Math.max(v, f[j] - (c + cost[j]) * 0.5);
+        if (x > 0) v = Math.max(v, f[j - 1] - (c + cost[j - 1]) * D);
+        if (x < w - 1) v = Math.max(v, f[j + 1] - (c + cost[j + 1]) * D);
+      }
+      f[i] = v;
+    }
+    for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x, c = cost[i];
+      let v = f[i];
+      if (x < w - 1) v = Math.max(v, f[i + 1] - (c + cost[i + 1]) * 0.5);
+      if (y < h - 1) {
+        const j = i + w;
+        v = Math.max(v, f[j] - (c + cost[j]) * 0.5);
+        if (x < w - 1) v = Math.max(v, f[j + 1] - (c + cost[j + 1]) * D);
+        if (x > 0) v = Math.max(v, f[j - 1] - (c + cost[j - 1]) * D);
+      }
+      f[i] = v;
+    }
+  }
+}
+// How far ink can run from a heavy stroke, in reference px (fibres stretch it up to 5×).
+const inkReach = (s) => Math.max(0.5, s.spread * (0.3 + 1.6 * s.wetness));
+
 function flecks(s, sk, ox, oy, w, h) {
   const K = new Float32Array(w * h), cs = 10, p = s.flecks * 0.3;
   for (let cy = Math.floor(oy / sk / cs) - 1; cy <= Math.floor((oy + h) / sk / cs) + 1; cy++) {
@@ -384,7 +438,7 @@ function inkPixel(d, o, det) {
 
 // Extra source pixels needed around a region, in output px (rounded to 64 for blur alignment).
 function margin(s, sk) {
-  const ref = 3 * s.spread + 1.5 * Math.max(4, s.fibreLength) + 3 * s.poolWidth + 6;
+  const ref = 5 * inkReach(s) + 1.5 * Math.max(4, s.fibreLength) + 3 * s.poolWidth + 6;
   return Math.ceil((ref * sk) / 64) * 64;
 }
 
@@ -392,8 +446,10 @@ function margin(s, sk) {
 // src: {w, h, data RGBA8} source pixels; buffer pixel (0,0) sits at world output px (ox, oy).
 // inner: {x, y, w, h} part of the buffer to produce (the rest is margin). sk: output px per reference px.
 // paper: optional custom texture {tex (from prepareTexture), place (from placeTexture)}.
+// under: optional RGBA8 of the inner region with the source hidden, i.e. the paper the gaps should reveal;
+// without it, gaps use the detected paper colour (white, or black for light ink, when unknown).
 // Returns RGBA8 layers {bleed, pool, gaps, paper} for the inner region (paper is null when switched off).
-function process(src, ox, oy, inner, sk, s, det, paper) {
+function process(src, ox, oy, inner, sk, s, det, paper, under) {
   const w = src.w, h = src.h, n = w * h, d = src.data, light = det.light;
   const m = new Float32Array(n), pr = new Float32Array(n), pg = new Float32Array(n), pb = new Float32Array(n);
   let any = false;
@@ -409,6 +465,7 @@ function process(src, ox, oy, inner, sk, s, det, paper) {
   const fib = s.fibres > 0 ? makeFibres(s, sk, ox, oy, w, h) : [];
   const F = new Float32Array(n);
   for (const f of fib) for (let k = 0; k < f.pts.length; k += 2) splat(F, w, h, f.pts[k], f.pts[k + 1], f.rad, 1);
+  const FT = s.fibres > 0 ? felt(s, sk, ox, oy, w, h) : null;
   const tex = paper && paper.tex, inv = texInverted(det, tex);
   const H = tex ? sampleTexture(tex, paper.place, sk, ox, oy, 0, 0, w, h, false).H : fbm(w, h, ox, oy, sk, Math.max(0.5, s.grainSize), 4, seed);
   if (inv) for (let i = 0; i < n; i++) H[i] = 1 - H[i]; // lighter areas of the paper as shown are its peaks
@@ -436,46 +493,31 @@ function process(src, ox, oy, inner, sk, s, det, paper) {
   };
 
   if (any) {
-    // how far the ink travels: blurred ink, scaled by wetness and by how absorbent the paper is locally
-    const N2 = fbm(w, h, ox, oy, sk, Math.max(1.5, s.spread * 0.9), 3, seed + 11);
-    const W = gauss(m, w, h, ox, oy, s.spread * sk);
-    const gain = 0.5 + 4 * s.wetness, sw = 0.03 + 0.35 * s.softness, fe = s.feather;
-    const P = new Float32Array(n), S = new Float32Array(n);
+    // how far the ink travels: fuel from the strokes (thin strokes carry less ink), spent crossing the paper
+    const fe = s.feather, reachPx = inkReach(s) * sk;
+    const N2 = fbm(w, h, ox, oy, sk, Math.max(1.5, s.spread * 0.8), 4, seed + 11);
+    const mass = gauss(m, w, h, ox, oy, Math.max(0.6, s.spread * 0.8 * sk));
+    const cost = new Float32Array(n), fuel = new Float32Array(n);
     for (let i = 0; i < n; i++) {
-      const absorb = Math.exp(fe * (1.6 * (N2[i] - 0.5) + 0.8 * F[i] - 0.8 * (H[i] - 0.5)));
-      const p = gain * W[i] * absorb;
-      P[i] = p; S[i] = smooth(0.5 - sw, 0.5 + sw, p);
+      const fib = FT ? Math.min(1, FT.P[i] + FT.N[i]) : 0;
+      const ease = fe * (2.4 * (N2[i] - 0.5) + 1.3 * fib - 1.4 * (H[i] - 0.5)) + 2.5 * s.wicking * F[i];
+      cost[i] = Math.min(6, Math.max(0.2, Math.exp(-ease)));
+      fuel[i] = m[i] > 0.35 ? reachPx * (0.35 + 0.65 * clamp01(mass[i] * 1.6)) * m[i] : -1e6;
     }
-    // wicking: ink runs along fibres that touch it, fading with distance
-    const T = new Float32Array(n);
-    if (s.wicking > 0) {
-      for (const f of fib) {
-        if (f.wet >= 0.1 + 0.5 * s.wicking) continue; // only some fibres carry ink; more as wicking rises
-        const pts = f.pts, np = pts.length >> 1, len = (np - 1) * f.step;
-        const dec = Math.exp(-f.step / ((0.15 + 0.6 * s.wicking) * len * 0.7 + 1e-3)), v = new Float32Array(np);
-        let c = 0, hit = false;
-        for (let k = 0; k < np; k++) {
-          const sv = sample(S, w, h, pts[k * 2], pts[k * 2 + 1]);
-          if (sv > 0.05) hit = true;
-          c = Math.max(sv, c * dec); v[k] = c;
-        }
-        if (!hit) continue;
-        c = 0;
-        for (let k = np - 1; k >= 0; k--) { c = Math.max(v[k], c * dec); v[k] = c; }
-        for (let k = 0; k < np; k++) if (v[k] > 0.02) splat(T, w, h, pts[k * 2], pts[k * 2 + 1], f.rad, v[k]);
-      }
-    }
-    // ink density after bleeding (D) and where it pooled at the rims (E)
-    const D = new Float32Array(n);
+    if (reachPx > 0.3) propagateFuel(fuel, cost, w, h, 2);
+    // ink density after bleeding (D): solid where plenty of fuel was left, paler and softer towards the tips
+    const soft = 0.6 + s.softness * reachPx * 0.45, D = new Float32Array(n);
     for (let i = 0; i < n; i++) {
-      const dsp = s.halo * S[i] * (0.6 + 0.4 * clamp01((P[i] - 0.5) * 2)), dt = s.halo * 0.75 * T[i];
-      D[i] = Math.max(m[i], dsp, dt);
+      const f = fuel[i], sp = f > -soft ? smooth(-0.3 * soft, soft, f) : 0;
+      D[i] = Math.max(m[i], s.halo * sp * (0.3 + 0.7 * Math.pow(clamp01(f / (0.8 * reachPx + 1e-3)), 0.7)));
     }
     const B2 = gauss(D, w, h, ox, oy, s.poolWidth * sk);
     const cS = Math.max(s.spread, s.fibreLength * 0.6, 3) * sk;
     const Wc = gauss(m, w, h, ox, oy, cS), Rc = gauss(pr, w, h, ox, oy, cS), Gc = gauss(pg, w, h, ox, oy, cS), Bc = gauss(pb, w, h, ox, oy, cS);
     const Mn = s.mottle > 0 ? fbm(w, h, ox, oy, sk, 40, 3, seed + 23) : null;
     const thr = 0.9 - 0.5 * s.tooth, toothAmt = Math.min(1, s.tooth * 4);
+    // gaps fall back to the paper colour found in the source (tone mode), else white / black
+    const gapRGB = (det.from === "tone" ? det.paper.map((v) => (light ? 1 - v : v)) : light ? [0, 0, 0] : [1, 1, 1]).map((v) => Math.round(v * 255));
     for (let y = 0; y < ih; y++) {
       for (let x = 0; x < iw; x++) {
         const i = (y + inner.y) * w + x + inner.x, o = (y * iw + x) * 4, Di = D[i];
@@ -497,7 +539,12 @@ function process(src, ox, oy, inner, sk, s, det, paper) {
         // gaps: the paper's peaks stay dry, density varies, centres pale where ink pooled to the rim
         const peak = smooth(thr - 0.06, thr + 0.06, H[i]) * toothAmt, mot = Mn ? clamp01((Mn[i] - 0.5) * 3 + 0.5) : 0;
         const ga = Di * clamp01(peak * 0.95 + s.mottle * 0.55 * mot + s.pooling * 0.3) * (1 - clamp01(E * s.pooling * 3)) * (1 - 0.6 * s.granulation * valley);
-        if (ga > 0.002) put(out.gaps, o, 1, 1, 1, ga);
+        if (ga > 0.002) {
+          const gp = out.gaps;
+          if (under && under[o + 3] > 0) { gp[o] = under[o]; gp[o + 1] = under[o + 1]; gp[o + 2] = under[o + 2]; }
+          else { gp[o] = gapRGB[0]; gp[o + 1] = gapRGB[1]; gp[o + 2] = gapRGB[2]; }
+          gp[o + 3] = ga * 255 + 0.5;
+        }
       }
     }
   }
@@ -520,7 +567,9 @@ function process(src, ox, oy, inner, sk, s, det, paper) {
     const paper = (out.paper = new Uint8ClampedArray(iw * ih * 4));
     const K = s.flecks > 0 ? flecks(s, sk, ox, oy, w, h) : null;
     const tint = light ? [1, 1, 1] : hexToRgb(s.paperColor).map((v) => v / 255);
-    const rk = 0.4 * Math.min(4, Math.max(1, s.grainSize)) * sk, norm = 1 / (1 - s.grain * 0.11 - s.relief * 0.2);
+    const rk = 0.4 * Math.min(4, Math.max(1, s.grainSize)) * sk;
+    // formation (the cloudy unevenness of paper) and fine pulp speckle, both centred on the paper colour
+    const form = fbm(w, h, ox, oy, sk, Math.max(6, s.grainSize * 10), 3, seed + 31), speck = fbm(w, h, ox, oy, sk, Math.max(0.6, s.grainSize * 0.6), 2, seed + 37);
     for (let y = 0; y < ih; y++) {
       const by = y + inner.y, yu = (by > 0 ? by - 1 : 0) * w, yd = (by < h - 1 ? by + 1 : h - 1) * w;
       for (let x = 0; x < iw; x++) {
@@ -528,12 +577,11 @@ function process(src, ox, oy, inner, sk, s, det, paper) {
         // relief: light from the top left
         const gx = H[by * w + (bx < w - 1 ? bx + 1 : bx)] - H[by * w + (bx > 0 ? bx - 1 : 0)], gy = H[yd + bx] - H[yu + bx];
         const shade = clamp01(0.5 - (gx + gy) * 0.707 * rk);
-        let t = (1 - s.grain * 0.22 * H[i]) * (1 - s.relief * 0.4 * shade) * norm;
-        t *= 1 - s.fibreShow * 0.3 * F[i];
+        let t = 1 + s.grain * (0.1 * (form[i] - 0.5) + 0.14 * (speck[i] - 0.5)) - s.relief * 0.3 * (shade - 0.5);
+        if (FT) t += s.fibreShow * 0.25 * (FT.P[i] - FT.N[i]);
         if (LINE) t *= 1 - s.laid * 0.05 * LINE[i];
         if (K) t *= 1 - K[i];
-        t = t > 1 ? 1 : t;
-        put(paper, o, tint[0] * t, tint[1] * t, tint[2] * t, 1);
+        put(paper, o, clamp01(tint[0] * t), clamp01(tint[1] * t), clamp01(tint[2] * t), 1);
       }
     }
   }
@@ -541,20 +589,20 @@ function process(src, ox, oy, inner, sk, s, det, paper) {
 }
 
 // Blend modes of the four layers, bottom to top, as Photoshop applies them.
-const layerModes = (L) => ({ bleed: L.light ? "screen" : "multiply", pool: L.light ? "screen" : "multiply", gaps: L.light ? "multiply" : "screen", paper: L.paperMode });
+const layerModes = (L) => ({ bleed: L.light ? "screen" : "multiply", pool: L.light ? "screen" : "multiply", gaps: "normal", paper: L.paperMode });
 // Preview: applies the layers to the visible image (`bg`, RGBA8 of the same region) like Photoshop would.
 function composite(bg, L) {
   const n = L.w * L.h, rgb = new Uint8Array(n * 3), modes = layerModes(L);
-  const layers = ["bleed", "pool", "gaps", "paper"].filter((k) => L[k]).map((k) => [L[k], modes[k] === "screen"]);
+  const layers = ["bleed", "pool", "gaps", "paper"].filter((k) => L[k]).map((k) => [L[k], modes[k]]);
   for (let i = 0; i < n; i++) {
     const o = i * 4, a0 = bg[o + 3] / 255;
     for (let c = 0; c < 3; c++) {
       let v = (bg[o + c] / 255) * a0 + (L.light ? 0 : 1 - a0); // empty canvas shows as white (black for light ink)
-      for (const [buf, screen] of layers) {
+      for (const [buf, mode] of layers) {
         const a = buf[o + 3] / 255;
         if (!a) continue;
         const lc = buf[o + c] / 255;
-        v = screen ? v + a * lc * (1 - v) : v * (1 - a + a * lc);
+        v = mode === "screen" ? v + a * lc * (1 - v) : mode === "normal" ? v + (lc - v) * a : v * (1 - a + a * lc);
       }
       rgb[i * 3 + c] = v * 255 + 0.5;
     }
@@ -562,5 +610,5 @@ function composite(bg, L) {
   return rgb;
 }
 
-const Ink = { REF, DEFAULTS, PAPERS, detect, margin, process, composite, layerModes, paperMode, prepareTexture, placeTexture, hexToRgb };
+const Ink = { REF, SETTINGS_VERSION, DEFAULTS, PAPERS, detect, margin, process, composite, layerModes, paperMode, prepareTexture, placeTexture, hexToRgb };
 if (typeof module !== "undefined") module.exports = Ink;

@@ -7,14 +7,16 @@ const uxp = require("uxp");
 const lfs = uxp.storage.localFileSystem, formats = uxp.storage.formats;
 const Ink = require("./ink.js");
 const { makeSlider, SLIDER_HTML } = require("./slider.js");
+const { createViewer } = require("./viewer.js");
+const { findLayers, findLayerById, frameOf, fillArtboardSelect, toRGBA8, convertOut, makeImageData, makeReader } = require("./pixels.js");
 
 const INK_RE = /\s*Ink Bleed$/;
 const ORDER = ["bleed", "pool", "gaps", "paper"]; // bottom to top inside the group
 const NAMES = { bleed: "Ink bleed", pool: "Ink pooling", gaps: "Ink gaps", paper: "Paper" };
 // dark ink on light paper; light ink on dark paper swaps every mode
-const MODES = { bleed: "MULTIPLY", pool: "MULTIPLY", gaps: "SCREEN", paper: "MULTIPLY" };
+const MODES = { bleed: "MULTIPLY", pool: "MULTIPLY", gaps: "NORMAL", paper: "MULTIPLY" };
 const SWAP = { MULTIPLY: "SCREEN", SCREEN: "MULTIPLY" };
-const PV_W = 520, PV_H = 360, FIT_MAX = 520, TILE = 1024;
+const TILE = 1024;
 const TEX_MAX = 3072; // textures are kept at most this big (long side)
 const TEX_TYPES = ["jpg", "jpeg", "png", "tif", "tiff", "psd", "psb", "webp", "bmp"];
 
@@ -48,7 +50,7 @@ const SLIDERS = {
 };
 
 module.exports = function setupInk(h) {
-  const { $, loadJSON, saveJSON, errMsg, toRGBA8, makeImageData, convertOut, createLayer, findLayers, findLayerById, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName } = h;
+  const { $, loadJSON, saveJSON, errMsg, createLayer, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName } = h;
 
   const fresh = (over) => {
     const s = JSON.parse(JSON.stringify(Ink.DEFAULTS));
@@ -56,8 +58,12 @@ module.exports = function setupInk(h) {
     return s;
   };
   let I = fresh(loadJSON("gf:ink:last", null));
+  if (I.version !== Ink.SETTINGS_VERSION) { // saved by an older version: take the paper type's current values
+    const p = Ink.PAPERS.find((x) => x.id === I.paper) || Ink.PAPERS[0];
+    I = fresh(Object.assign({}, Ink.DEFAULTS, p.s, { paper: p.id, seed: I.seed, inkFrom: I.inkFrom, paperLayer: I.paperLayer, texture: I.texture, textureName: I.textureName, texScale: I.texScale, texStrength: I.texStrength, texColour: I.texColour, version: Ink.SETTINGS_VERSION }));
+  }
   let active = false, busy = false, editing = null; // editing: {docId, groupId, name, sourceLayerId}
-  let cache = null, stale = 0, docLong = Ink.REF, view = null, centre = null; // centre: {docId, key, x, y}
+  let cache = null, stale = 0, docLong = Ink.REF, viewer = null;
   const sliderEls = {};
 
   function status(msg, isErr) { const el = $("inkStatus"); el.textContent = msg || ""; el.style.color = isErr ? "#ff7070" : ""; }
@@ -99,71 +105,16 @@ module.exports = function setupInk(h) {
     return { layerId: al.id, name: String(al.name) };
   }
 
-  // Reads output-pixel rect R = {x, y, w, h} (world = document px × z, z ≤ 1, may reach past the canvas)
-  // of a layer (or the composite when layerId is null) into RGBA8, transparent where there is nothing.
-  async function readRect(doc, layerId, R, z) {
-    const out = new Uint8Array(R.w * R.h * 4);
-    let L = Math.max(0, Math.floor(R.x / z)), T = Math.max(0, Math.floor(R.y / z));
-    let Rr = Math.min(doc.width, Math.ceil((R.x + R.w) / z)), B = Math.min(doc.height, Math.ceil((R.y + R.h) / z));
-    if (layerId != null) {
-      const l = findLayerById(doc, layerId), b = l && l.bounds;
-      if (!b) return out;
-      L = Math.max(L, Math.floor(b.left)); T = Math.max(T, Math.floor(b.top)); Rr = Math.min(Rr, Math.ceil(b.right)); B = Math.min(B, Math.ceil(b.bottom));
-    }
-    if (Rr <= L || B <= T) return out;
-    // native depth: asking Photoshop 27 to convert 16/32-bit to 8 fails ("Could not create a new document")
-    const opts = { documentID: doc.id, sourceBounds: { left: L, top: T, right: Rr, bottom: B }, applyAlpha: false };
-    if (layerId != null) opts.layerID = layerId;
-    if (z < 1) opts.targetSize = { width: Math.max(1, Math.round((Rr - L) * z)), height: Math.max(1, Math.round((B - T) * z)) };
-    const res = await imaging.getPixels(opts);
-    const id = res.imageData, iw = id.width, ih = id.height, px = await toRGBA8(id);
-    id.dispose();
-    // with targetSize, Photoshop reports sourceBounds in a downscaled pyramid level, not in document pixels;
-    // the request is already clipped to the layer, so the result covers exactly what was asked for
-    const sb = z < 1 || !res.sourceBounds ? opts.sourceBounds : res.sourceBounds, sw = Math.max(1e-6, sb.right - sb.left), sh = Math.max(1e-6, sb.bottom - sb.top);
-    const x0 = Math.max(0, Math.ceil(sb.left * z - R.x - 0.5)), x1 = Math.min(R.w, Math.ceil(sb.right * z - R.x - 0.5));
-    const y0 = Math.max(0, Math.ceil(sb.top * z - R.y - 0.5)), y1 = Math.min(R.h, Math.ceil(sb.bottom * z - R.y - 0.5));
-    const sxOf = new Int32Array(Math.max(0, x1 - x0));
-    for (let x = x0; x < x1; x++) sxOf[x - x0] = Math.min(iw - 1, Math.max(0, Math.floor((((R.x + x + 0.5) / z - sb.left) / sw) * iw)));
-    for (let y = y0; y < y1; y++) {
-      const sy = Math.min(ih - 1, Math.max(0, Math.floor((((R.y + y + 0.5) / z - sb.top) / sh) * ih)));
-      for (let x = x0; x < x1; x++) {
-        const s = (sy * iw + sxOf[x - x0]) * 4, o = (y * R.w + x) * 4;
-        out[o] = px[s]; out[o + 1] = px[s + 1]; out[o + 2] = px[s + 2]; out[o + 3] = px[s + 3];
-      }
-    }
-    return out;
-  }
-  // Source reader. Composite reads fail on some documents (artboards); then a temporary merged copy is read.
-  function makeReader(doc, layerId) {
-    let stamp = null;
-    return {
-      async read(R, z) {
-        if (layerId != null) return readRect(doc, layerId, R, z);
-        if (!stamp) {
-          try { return await readRect(doc, null, R, z); }
-          catch (e) {
-            try {
-              await action.batchPlay([{ _obj: "mergeVisible", duplicate: true }], { synchronousExecution: true });
-              stamp = doc.activeLayers && doc.activeLayers[0];
-            } catch (e2) { stamp = null; }
-            if (!stamp) throw new Error(`Photoshop couldn't read the visible image (${errMsg(e)}). This can happen when the scratch disk is nearly full. Try Source: Selected layer.`);
-          }
-        }
-        return readRect(doc, stamp.id, R, z);
-      },
-      get stamped() { return !!stamp; },
-      async close() { if (stamp) { try { await stamp.delete(); } catch (e) { /* history rollback removes it */ } stamp = null; } },
-    };
-  }
   // Runs fn with every Ink Bleed group hidden, so reads of the visible image don't include earlier overlays.
   async function withOverlaysHidden(doc, fn) {
     const hidden = findLayers(doc.layers, (l) => isInkGroup(l) && l.visible);
     for (const l of hidden) l.visible = false;
     try { return await fn(); } finally { for (const l of hidden) { try { l.visible = true; } catch (e) { /* deleted */ } } }
   }
-  const overviewZ = (doc) => Math.min(1, 256 / Math.max(doc.width, doc.height));
-  const overviewRect = (doc, z) => ({ x: 0, y: 0, w: Math.max(1, Math.round(doc.width * z)), h: Math.max(1, Math.round(doc.height * z)) });
+  // a small read of the whole frame (artboard or canvas), for deciding what counts as ink
+  const overviewZ = (f) => Math.min(1, 256 / Math.max(f.w, f.h));
+  const overviewRect = (f, z) => ({ x: f.x * z, y: f.y * z, w: Math.max(1, Math.round(f.w * z)), h: Math.max(1, Math.round(f.h * z)) });
+  const artboardPick = () => $("inkArtboard").value || "auto";
 
   // ---------- your textures ----------
   // A picked file goes on a recent list (with a persistent token, so it can be reopened next session).
@@ -239,10 +190,10 @@ module.exports = function setupInk(h) {
     return tex;
   }
   // {tex, place} for Ink.process, or null for generated paper. Outside executeAsModal (it may open a file).
-  async function paperFor(doc) {
+  async function paperFor(doc, frame) {
     if (!I.texture) return null;
     const tex = await getTexture(I.texture);
-    return { tex, place: Ink.placeTexture(tex, doc.width, doc.height, I.texScale) };
+    return { tex, place: Ink.placeTexture(tex, frame.w, frame.h, I.texScale) }; // at 100% it covers the artboard (or canvas)
   }
 
   // ---------- preview ----------
@@ -256,12 +207,11 @@ module.exports = function setupInk(h) {
   async function run() {
     if (busy) return;
     if (pvRunning) { pvAgain = true; return; }
-    pvRunning = renderPreview().catch((e) => { console.error(e); showMsg(errMsg(e)); status(errMsg(e), true); });
+    pvRunning = renderPreview().catch((e) => { console.error(e); viewer.showMessage(errMsg(e)); status(errMsg(e), true); });
     await pvRunning;
     pvRunning = null;
     if (pvAgain) { pvAgain = false; schedule(0); }
   }
-  function showMsg(t) { const m = $("inkPreviewMsg"); m.textContent = t; m.classList.remove("hidden"); $("inkPreview").classList.add("hidden"); }
   const covers = (a, b) => a && b.x >= a.x && b.y >= a.y && b.x + b.w <= a.x + a.w && b.y + b.h <= a.y + a.h;
   function cropBuf(a, b) {
     const out = new Uint8Array(b.w * b.h * 4);
@@ -269,33 +219,38 @@ module.exports = function setupInk(h) {
     return out;
   }
 
+  // Preview: prepares the source, then the shared viewer asks renderRegion for the parts it shows.
+  let pv = null; // {doc, src, srcKey, paper}
   async function renderPreview() {
     const doc = activeDoc();
-    if (!doc) { showMsg("Open a document to begin"); status(""); return; }
+    if (!doc) { viewer.showMessage("Open a document to begin"); status(""); return; }
     checkDoc(doc);
     const src = resolveSource(doc);
-    docLong = Math.max(doc.width, doc.height);
+    await fillArtboardSelect($("inkArtboard"), $("inkArtboardRow"), doc);
+    const frame = await frameOf(doc, src.layerId, artboardPick());
+    docLong = Math.max(frame.w, frame.h);
     refreshPx();
-    const zoom = $("inkZoom").value, srcKey = doc.id + "|" + src.layerId;
-    if (!centre || centre.key !== srcKey) {
-      let cx = doc.width / 2, cy = doc.height / 2;
-      try { const l = src.layerId != null && findLayerById(doc, src.layerId), b = l && l.bounds; if (b && b.right > b.left) { cx = (b.left + b.right) / 2; cy = (b.top + b.bottom) / 2; } } catch (e) { /* canvas centre */ }
-      centre = { key: srcKey, x: cx, y: cy };
+    const srcKey = [doc.id, src.layerId, frame.x, frame.y, frame.w, frame.h].join("|");
+    if (!pv || pv.srcKey !== srcKey) { // a new source or artboard: start on the layer's content
+      let cx = frame.x + frame.w / 2, cy = frame.y + frame.h / 2;
+      try { const l = src.layerId != null && findLayerById(doc, src.layerId), b = l && l.bounds; if (b && b.right > b.left) { cx = (Math.max(b.left, frame.x) + Math.min(b.right, frame.x + frame.w)) / 2; cy = (Math.max(b.top, frame.y) + Math.min(b.bottom, frame.y + frame.h)) / 2; } } catch (e) { /* frame centre */ }
+      viewer.setCentre(cx - frame.x, cy - frame.y);
     }
-    let z = 1, up = 1, vw, vh, vx = 0, vy = 0;
-    if (zoom === "fit") { z = Math.min(1, FIT_MAX / doc.width, FIT_MAX / doc.height); vw = Math.max(1, Math.round(doc.width * z)); vh = Math.max(1, Math.round(doc.height * z)); }
-    else {
-      up = Number(zoom) || 1;
-      vw = Math.min(doc.width, Math.round(PV_W / up)); vh = Math.min(doc.height, Math.round(PV_H / up));
-      vx = Math.max(0, Math.min(doc.width - vw, Math.round(centre.x - vw / 2))); vy = Math.max(0, Math.min(doc.height - vh, Math.round(centre.y - vh / 2)));
-    }
+    pv = { doc, src, srcKey, frame, paper: await paperFor(doc, frame) };
+    await viewer.refresh();
+  }
+  // The preview of document rect `rect` at scale z (output px per document px), as RGB.
+  async function renderRegion(rect, z) {
+    if (!pv) return null;
+    const { doc, src, srcKey, paper, frame } = pv;
+    // the viewer works in the frame; reads and the effect use canvas coordinates (so they match the apply)
+    const vx = Math.round((rect.x + frame.x) * z), vy = Math.round((rect.y + frame.y) * z), vw = Math.max(1, Math.round(rect.w * z)), vh = Math.max(1, Math.round(rect.h * z));
     const sk = (z * docLong) / Ink.REF, M = Ink.margin(I, sk);
     const need = { x: Math.floor((vx - M) / 64) * 64, y: Math.floor((vy - M) / 64) * 64 };
     need.w = Math.ceil((vx + vw + M) / 64) * 64 - need.x; need.h = Math.ceil((vy + vh + M) / 64) * 64 - need.y;
     const vrect = { x: vx, y: vy, w: vw, h: vh };
-    const paper = await paperFor(doc);
     const key = `${srcKey}|${z}|${doc.width}x${doc.height}|${stale}`;
-    if (!cache || cache.key !== key || !covers(cache.buf, need) || !covers(cache.bg, vrect)) {
+    if (!cache || cache.key !== key || !covers(cache.buf, need) || !covers(cache.bg, vrect) || (cache.under && !covers(cache.under, vrect))) {
       // read a little extra so small setting changes don't need another read
       const ex = { x: need.x - 128, y: need.y - 128, w: need.w + 256, h: need.h + 256 };
       busy = true;
@@ -306,8 +261,8 @@ module.exports = function setupInk(h) {
           const reader = makeReader(doc, src.layerId);
           try {
             return await withOverlaysHidden(doc, async () => {
-              const oz = overviewZ(doc);
-              const overview = await reader.read(overviewRect(doc, oz), oz);
+              const oz = overviewZ(frame);
+              const overview = await reader.read(overviewRect(frame, oz), oz);
               const buf = Object.assign({ data: await reader.read(ex, z) }, ex);
               let bgData = null, approx = false;
               if (src.layerId == null) bgData = await reader.read(vrect, z);
@@ -317,7 +272,10 @@ module.exports = function setupInk(h) {
                 catch (e) { console.error(e); bgData = await reader.read(vrect, z); approx = true; } // just the layer, on white
                 finally { await bgReader.close(); }
               }
-              return { key, overview, buf, bg: Object.assign({ data: bgData }, vrect), approx };
+              // what's under the source layer: the paper the ink gaps reveal
+              let under = null;
+              if (src.layerId != null) under = await readUnder(doc, src.layerId, null, vrect, z);
+              return { key, overview, buf, bg: Object.assign({ data: bgData }, vrect), under: under && Object.assign({ data: under }, vrect), approx };
             });
           } finally {
             await reader.close();
@@ -328,36 +286,18 @@ module.exports = function setupInk(h) {
     }
     const det = Ink.detect(cache.overview, I.inkFrom);
     const t0 = Date.now();
-    const L = Ink.process({ w: need.w, h: need.h, data: cropBuf(cache.buf, need) }, need.x, need.y, { x: vx - need.x, y: vy - need.y, w: vw, h: vh }, sk, I, det, paper);
-    let rgb = Ink.composite(cache.bg.x === vx && cache.bg.w === vw && cache.bg.y === vy && cache.bg.h === vh ? cache.bg.data : cropBuf(cache.bg, vrect), L);
-    let ow = vw, oh = vh;
-    if (up > 1) { // show the 1:1 render enlarged, so 200% matches what the layers will hold
-      ow = vw * up; oh = vh * up;
-      const big = new Uint8Array(ow * oh * 3);
-      for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) { const s = (Math.floor(y / up) * vw + Math.floor(x / up)) * 3, o = (y * ow + x) * 3; big[o] = rgb[s]; big[o + 1] = rgb[s + 1]; big[o + 2] = rgb[s + 2]; }
-      rgb = big;
-    }
-    const id = await imaging.createImageDataFromBuffer(rgb, { width: ow, height: oh, components: 3, chunky: true, colorProfile: "sRGB IEC61966-2.1", colorSpace: "RGB" });
-    const b64 = await imaging.encodeImageData({ imageData: id, base64: true });
-    id.dispose();
-    const img = $("inkPreview");
-    img.src = "data:image/jpeg;base64," + b64;
-    img.classList.remove("hidden");
-    $("inkPreviewMsg").classList.add("hidden");
-    view = { zoom, z, vx, vy, vw, vh };
+    const L = Ink.process({ w: need.w, h: need.h, data: cropBuf(cache.buf, need) }, need.x, need.y, { x: vx - need.x, y: vy - need.y, w: vw, h: vh }, sk, I, det, paper, cache.under && cropBuf(cache.under, vrect));
+    const rgb = Ink.composite(cropBuf(cache.bg, vrect), L);
     status(`${src.layerId == null ? "Visible image" : "“" + src.name + "”"} · ${det.label}${I.texture ? " · on " + I.textureName : ""} · ${Date.now() - t0} ms${cache.approx ? " · preview shows the layer alone (Photoshop couldn't read the full image)" : ""}`);
+    return { rgb, w: vw, h: vh };
   }
 
-  // click the preview: inspect that spot at 100% (or re-centre when already zoomed in)
-  function onPreviewClick(e) {
-    if (!view) return;
-    const img = $("inkPreview"), r = img.getBoundingClientRect();
-    if (!r || !r.width) return;
-    const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
-    if (!(fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1)) return;
-    centre = Object.assign({}, centre, { x: (view.vx + fx * view.vw) / view.z, y: (view.vy + fy * view.vh) / view.z });
-    if (view.zoom === "fit") $("inkZoom").value = "1";
-    schedule(0);
+  // The visible image under the source layer (source and `alsoHide` hidden for the read), or null.
+  async function readUnder(doc, layerId, alsoHide, R, z) {
+    const l = findLayerById(doc, layerId), hide = [l, alsoHide].filter((x) => x && x.visible), ur = makeReader(doc, null);
+    try { for (const x of hide) x.visible = false; return await ur.read(R, z); }
+    catch (e) { console.error("under", e); return null; }
+    finally { for (const x of hide) { try { x.visible = true; } catch (e) { /* gone */ } } await ur.close(); }
   }
 
   // ---------- apply ----------
@@ -369,31 +309,33 @@ module.exports = function setupInk(h) {
     while (pvRunning) await pvRunning;
     const t0 = Date.now();
     let info = "", paper = null;
-    try { paper = await paperFor(doc); } catch (e) { return status(errMsg(e), true); }
+    try { paper = await paperFor(doc, await frameOf(doc, resolveSource(doc).layerId, artboardPick())); } catch (e) { return status(errMsg(e), true); }
     busy = true;
     try {
       await core.executeAsModal(async (ctx) => {
         const sid = await ctx.hostControl.suspendHistory({ documentID: doc.id, name: update ? "Ink bleed update" : "Ink bleed" });
-        const src = resolveSource(doc);
+        const src = resolveSource(doc), frame = await frameOf(doc, src.layerId, artboardPick());
         const reader = makeReader(doc, src.layerId);
         const hidden = src.layerId == null ? findLayers(doc.layers, (l) => isInkGroup(l) && l.visible) : [];
         for (const l of hidden) l.visible = false;
         try {
-          const oz = overviewZ(doc), det = Ink.detect(await reader.read(overviewRect(doc, oz), oz), I.inkFrom);
+          const oz = overviewZ(frame), det = Ink.detect(await reader.read(overviewRect(frame, oz), oz), I.inkFrom);
           let group = update ? findLayerById(doc, editing.groupId) : null;
           if (update && !group) throw new Error("The Ink Bleed group being edited no longer exists.");
-          const layers = await prepareLayers(doc, group, src, det.light, reader.stamped);
+          const layers = await prepareLayers(doc, group, src, det.light, reader.stamped, frame);
           group = layers.group;
-          const W = doc.width, H = doc.height, sk = Math.max(W, H) / Ink.REF, M = Ink.margin(I, sk);
+          const X0 = frame.x, Y0 = frame.y, X1 = frame.x + frame.w, Y1 = frame.y + frame.h, sk = Math.max(frame.w, frame.h) / Ink.REF, M = Ink.margin(I, sk);
           const depth = bitDepth(doc), gray = isGray(doc);
           let profile = null;
           try { profile = doc.colorProfileName || null; } catch (e) { profile = null; }
-          const first = {}, nT = Math.ceil(W / TILE) * Math.ceil(H / TILE);
+          const first = {}, nT = Math.ceil(frame.w / TILE) * Math.ceil(frame.h / TILE);
           let k = 0;
-          for (let ty = 0; ty < H; ty += TILE) for (let tx = 0; tx < W; tx += TILE) {
+          for (let ty = Y0; ty < Y1; ty += TILE) for (let tx = X0; tx < X1; tx += TILE) {
             status(`Rendering ink… tile ${++k}/${nT}`);
-            const tw = Math.min(TILE, W - tx), th = Math.min(TILE, H - ty), R = { x: tx - M, y: ty - M, w: tw + 2 * M, h: th + 2 * M };
-            const L = Ink.process({ w: R.w, h: R.h, data: await reader.read(R, 1) }, R.x, R.y, { x: M, y: M, w: tw, h: th }, sk, I, det, paper);
+            const tw = Math.min(TILE, X1 - tx), th = Math.min(TILE, Y1 - ty), R = { x: tx - M, y: ty - M, w: tw + 2 * M, h: th + 2 * M };
+            const data = await reader.read(R, 1);
+            const under = src.layerId != null ? await readUnder(doc, src.layerId, group, { x: tx, y: ty, w: tw, h: th }, 1) : null;
+            const L = Ink.process({ w: R.w, h: R.h, data }, R.x, R.y, { x: M, y: M, w: tw, h: th }, sk, I, det, paper, under);
             for (const key of ORDER) {
               const layer = layers[key], px = L[key];
               if (!layer || !px) continue;
@@ -422,7 +364,7 @@ module.exports = function setupInk(h) {
   function hasAlpha(px) { for (let i = 3; i < px.length; i += 4) if (px[i]) return true; return false; }
 
   // Creates (or reuses, when updating) the group and its layers, stacked bottom to top as ORDER.
-  async function prepareLayers(doc, group, src, light, stamped) {
+  async function prepareLayers(doc, group, src, light, stamped, frame) {
     const existing = {};
     if (group) {
       for (const l of group.layers || []) for (const k of ORDER) if (String(l.name) === NAMES[k]) existing[k] = l;
@@ -431,7 +373,7 @@ module.exports = function setupInk(h) {
     for (const k of ORDER) {
       if (k === "paper" && !I.paperLayer) { if (existing.paper) await existing.paper.delete(); continue; }
       out[k] = existing[k] || (await createLayer(doc, NAMES[k]));
-      const mode = light ? SWAP[MODES[k]] : MODES[k];
+      const mode = light ? SWAP[MODES[k]] || MODES[k] : MODES[k];
       try { out[k].blendMode = constants.BlendMode[mode]; } catch (e) { console.error("blend mode", e); }
     }
     const list = ORDER.filter((k) => out[k]).map((k) => out[k]);
@@ -439,7 +381,9 @@ module.exports = function setupInk(h) {
       for (let i = 1; i < list.length; i++) await list[i].move(list[i - 1], constants.ElementPlacement.PLACEBEFORE);
       group = await doc.createLayerGroup({ name: `${src.name.replace(INK_RE, "").trim() || docBaseName(doc)} Ink Bleed`, fromLayers: list });
       const sl = src.layerId != null ? findLayerById(doc, src.layerId) : null;
+      const board = frame && frame.artboardId != null ? findLayerById(doc, frame.artboardId) : null;
       if (sl) await group.move(sl, constants.ElementPlacement.PLACEBEFORE);
+      else if (board && board.layers && board.layers.length) { if (board.layers[0].id !== group.id) await group.move(board.layers[0], constants.ElementPlacement.PLACEBEFORE); } // top of the artboard
       else if (stamped || doc.layers[0].id !== group.id) await group.move(doc.layers[0], constants.ElementPlacement.PLACEBEFORE);
     } else {
       let below = null;
@@ -472,7 +416,7 @@ module.exports = function setupInk(h) {
     sync(); showEditing(); schedule(0);
     status("Loaded the settings of “" + g.name + "”.");
   }
-  function stopEditing() { editing = null; showEditing(); centre = null; schedule(0); }
+  function stopEditing() { editing = null; showEditing(); pv = null; schedule(0); }
 
   // ---------- UI ----------
   const fmtPx = (v) => { const p = (v * docLong) / Ink.REF; return (p < 10 ? p.toFixed(1) : Math.round(p)) + " px"; };
@@ -551,11 +495,14 @@ module.exports = function setupInk(h) {
       if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) { const [r, g, b] = Ink.hexToRgb(v); setPaperColor("#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1)); } else sync();
     });
     $("inkPaperWhite").addEventListener("click", () => setPaperColor("#ffffff"));
-    $("inkZoom").value = loadJSON("gf:inkZoom", "1");
-    $("inkZoom").addEventListener("change", () => { saveJSON("gf:inkZoom", $("inkZoom").value); schedule(0); });
-    $("inkSource").addEventListener("change", () => { centre = null; schedule(0); });
+    $("inkSource").addEventListener("change", () => { pv = null; schedule(0); });
+    $("inkArtboard").addEventListener("change", () => { pv = null; schedule(0); });
     $("inkRefresh").addEventListener("click", () => { stale++; schedule(0); });
-    $("inkPreview").addEventListener("click", onPreviewClick);
+    viewer = createViewer({
+      wrap: $("inkPreviewWrap"), img: $("inkPreview"), msg: $("inkPreviewMsg"), bar: $("inkZoomBar"), storeKey: "gf:zoom:ink",
+      docSize: () => (pv ? { w: pv.frame.w, h: pv.frame.h } : null), render: renderRegion,
+      onError: (e) => { console.error(e); status(errMsg(e), true); },
+    });
     $("inkApply").addEventListener("click", () => apply(false));
     $("inkUpdate").addEventListener("click", () => apply(true));
     $("inkStopEdit").addEventListener("click", stopEditing);
@@ -567,6 +514,8 @@ module.exports = function setupInk(h) {
   return {
     apply, preview: renderPreview, stopEditing, settings: () => I, editing: () => editing, // used by the Photoshop tests
     async useTextureFile(entry) { const t = await addTextureFile(entry); useTexture(t); return t; },
+    setZoom: (m) => viewer.setMode(m),
+    relayout: () => viewer && viewer.relayout(),
     activate() { active = true; schedule(0); },
     deactivate() { active = false; clearTimeout(pvTimer); },
     onPsEvent(evt, desc) {

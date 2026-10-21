@@ -9,18 +9,19 @@ const { PRESETS } = require("./presets.js");
 const setupInk = require("./inkui.js");
 const { makeSlider, SLIDER_HTML } = require("./slider.js");
 const { enhanceAllSelects } = require("./dropdown.js");
+const { createViewer } = require("./viewer.js");
+const { findLayers, findLayerById, fullFrame, sameFrame, frameOf, fillArtboardSelect, toRGBA8, convertOut, makeImageData, makeReader } = require("./pixels.js");
 
 const $ = (id) => document.getElementById(id);
 // Layers made by the plugin end in "ASCII by Star" (older versions used a "#xxxxxx" tag).
 const OUR_RE = /(\s*ASCII by Star|\s*#[a-z0-9]{6})$/;
 const TAG_RE = /#([a-z0-9]{6})$/;
 const ANALYSIS_MAX = 1600; // long side of the cached analysis image
-const PREVIEW_MAX = 560;
 
 let atlas = null; // glyph atlas in use: the built-in one, or one rendered from the chosen font
 let baseAtlas = null;
 let S = freshSettings(loadJSON("gf:last", null));
-let src = null; // cached analysis pixels {docId, layerId, scale, docW, docH, w, h, data, stale}
+let src = null; // cached analysis pixels {docId, layerId, frame, scale, docW, docH (frame size), w, h, data, stale}
 let busy = false;
 let editing = null; // {docId, layerId, tag, name, sourceLayerId}
 let live = null; // live preview window {docId, layerId, sourceDocId, scale}
@@ -52,11 +53,6 @@ function checkDoc(doc) {
   if (!doc) throw new Error("Open a document first.");
   if (!/rgb|gray/i.test(String(doc.mode))) throw new Error("ASCII by Star needs an RGB or Grayscale document (Image ▸ Mode ▸ RGB Color).");
 }
-function findLayers(layers, pred, out = []) {
-  for (const l of layers) { if (pred(l)) out.push(l); if (l.layers && l.layers.length) findLayers(l.layers, pred, out); }
-  return out;
-}
-function findLayerById(doc, id) { return findLayers(doc.layers, (l) => l.id === id)[0] || null; }
 function charsetInfo() { return CHARSETS.find((c) => c.id === S.charset) || CHARSETS[0]; }
 function docBaseName(doc) { return String((doc && doc.title) || "ascii").replace(/\.[^.]+$/, ""); }
 
@@ -77,82 +73,27 @@ async function loadAtlas() {
 }
 
 // ---------- pixel I/O ----------
-async function toRGBA8(id) {
-  const raw = await id.getData({ chunky: true });
-  const n = id.width * id.height, c = id.components, out = new Uint8ClampedArray(n * 4);
-  const cs = id.componentSize || (raw instanceof Float32Array ? 32 : raw instanceof Uint16Array ? 16 : 8);
-  const conv = cs === 16 ? (v) => (v * 255) / 32768 : cs === 32 ? (v) => 255 * Math.pow(Math.max(0, Math.min(1, v)), 1 / 2.2) : (v) => v;
-  const convA = cs === 16 ? (v) => (v * 255) / 32768 : cs === 32 ? (v) => v * 255 : (v) => v;
-  const hasA = c === 2 || c === 4, gray = c <= 2;
-  for (let i = 0, b = 0, o = 0; i < n; i++, b += c, o += 4) {
-    if (gray) { const g = conv(raw[b]); out[o] = out[o + 1] = out[o + 2] = g; }
-    else { out[o] = conv(raw[b]); out[o + 1] = conv(raw[b + 1]); out[o + 2] = conv(raw[b + 2]); }
-    out[o + 3] = hasA ? convA(raw[b + c - 1]) : 255;
-  }
-  return out;
-}
+// The area to work on: an artboard, or the whole canvas (the Artboard menu; see pixels.js frameOf).
+const artboardPick = () => $("artboard").value || "auto";
 
-// Reads the document (merged, without ASCII by Star layers) or one layer into a doc-sized RGBA buffer.
-// Must run inside executeAsModal. ownHistory: wrap temporary visibility changes in a history suspension.
-async function capture(ctx, doc, layerId, scale, ownHistory) {
-  const docW = doc.width, docH = doc.height;
-  const aw = Math.max(1, Math.round(docW * scale)), ah = Math.max(1, Math.round(docH * scale));
+// Reads the frame (an artboard or the canvas) of the visible image without ASCII by Star layers, or of one
+// layer, into an RGBA buffer at `scale`. Inside executeAsModal. ownHistory: undo-proof temporary changes.
+async function capture(ctx, doc, layerId, scale, ownHistory, frame) {
+  frame = frame || fullFrame(doc);
+  const aw = Math.max(1, Math.round(frame.w * scale)), ah = Math.max(1, Math.round(frame.h * scale));
   let hidden = [], sid = null;
   if (layerId === null) {
     hidden = findLayers(doc.layers, (l) => OUR_RE.test(l.name) && l.visible);
-    if (hidden.length && ownHistory) { try { sid = await ctx.hostControl.suspendHistory({ documentID: doc.id, name: "ASCII by Star sample" }); } catch (e) { sid = null; } }
+    if (ownHistory) { try { sid = await ctx.hostControl.suspendHistory({ documentID: doc.id, name: "ASCII by Star sample" }); } catch (e) { sid = null; } }
     for (const l of hidden) l.visible = false;
   }
+  const reader = makeReader(doc, layerId);
   try {
-    // native depth: Photoshop 27 fails ("Could not create a new document") when asked to convert 16/32-bit to 8
-    const opts = { documentID: doc.id, applyAlpha: false };
-    if (layerId !== null) opts.layerID = layerId;
-    if (scale < 1) opts.targetSize = { width: aw, height: ah };
-    let res;
-    try { res = await imaging.getPixels(opts); }
-    catch (e) {
-      // Some documents (artboards, smart objects that need refreshing) refuse a composite read.
-      // Fall back to a temporary "stamp visible" layer and read that instead.
-      if (layerId !== null) throw new Error("Reading the layer failed (" + errMsg(e) + "). Try Source: Visible (merged).");
-      res = await readViaStamp(ctx, doc, opts, ownHistory);
-    }
-    const id = res.imageData, iw = id.width, ih = id.height;
-    const px = await toRGBA8(id);
-    id.dispose();
-    const b = res.sourceBounds || { left: 0, top: 0, right: docW, bottom: docH };
-    const out = new Uint8Array(aw * ah * 4);
-    const bx0 = b.left * scale, by0 = b.top * scale, bw = Math.max(1e-6, (b.right - b.left) * scale), bh = Math.max(1e-6, (b.bottom - b.top) * scale);
-    const dx0 = Math.max(0, Math.floor(bx0)), dx1 = Math.min(aw, Math.ceil(bx0 + bw));
-    const dy0 = Math.max(0, Math.floor(by0)), dy1 = Math.min(ah, Math.ceil(by0 + bh));
-    const sxOf = new Int32Array(Math.max(0, dx1 - dx0));
-    for (let dx = dx0; dx < dx1; dx++) sxOf[dx - dx0] = Math.min(iw - 1, Math.max(0, Math.floor(((dx + 0.5 - bx0) / bw) * iw)));
-    for (let dy = dy0; dy < dy1; dy++) {
-      const sy = Math.min(ih - 1, Math.max(0, Math.floor(((dy + 0.5 - by0) / bh) * ih)));
-      for (let dx = dx0; dx < dx1; dx++) {
-        const s = (sy * iw + sxOf[dx - dx0]) * 4, o = (dy * aw + dx) * 4;
-        out[o] = px[s]; out[o + 1] = px[s + 1]; out[o + 2] = px[s + 2]; out[o + 3] = px[s + 3];
-      }
-    }
-    return { docId: doc.id, layerId, scale, docW, docH, w: aw, h: ah, data: out, stale: false };
+    const data = await reader.read({ x: frame.x * scale, y: frame.y * scale, w: aw, h: ah }, scale);
+    return { docId: doc.id, layerId, frame, scale, docW: frame.w, docH: frame.h, w: aw, h: ah, data, stale: false };
   } finally {
-    for (const l of hidden) l.visible = true;
-    if (sid !== null) { try { await ctx.hostControl.resumeHistory(sid, false); } catch (e) { try { await ctx.hostControl.resumeHistory(sid, true); } catch (e2) { /* ignore */ } } }
-  }
-}
-
-async function readViaStamp(ctx, doc, opts, ownHistory) {
-  let sid = null, stamp = null;
-  if (ownHistory) { try { sid = await ctx.hostControl.suspendHistory({ documentID: doc.id, name: "ASCII by Star sample" }); } catch (e) { sid = null; } }
-  try {
-    await action.batchPlay([{ _obj: "mergeVisible", duplicate: true }], { synchronousExecution: true });
-    stamp = doc.activeLayers && doc.activeLayers[0];
-    if (!stamp) throw new Error("no merged layer");
-    const o = Object.assign({}, opts, { layerID: stamp.id });
-    return await imaging.getPixels(o);
-  } catch (e) {
-    throw new Error("Reading the image failed (" + errMsg(e) + "). Make sure at least one layer is visible.");
-  } finally {
-    if (stamp) { try { await stamp.delete(); } catch (e) { /* rolled back below */ } }
+    await reader.close();
+    for (const l of hidden) { try { l.visible = true; } catch (e) { /* gone */ } }
     if (sid !== null) { try { await ctx.hostControl.resumeHistory(sid, false); } catch (e) { try { await ctx.hostControl.resumeHistory(sid, true); } catch (e2) { /* ignore */ } } }
   }
 }
@@ -165,67 +106,47 @@ function sourceLayerId(doc) {
   if (src && src.docId === doc.id && src.layerId != null && findLayerById(doc, src.layerId)) return src.layerId;
   return al ? al.id : null;
 }
-function baseScale(doc) { return Math.min(1, ANALYSIS_MAX / Math.max(doc.width, doc.height)); }
+// frame: {w, h} of the area being converted
+function baseScale(frame) { return Math.min(1, ANALYSIS_MAX / Math.max(frame.w, frame.h)); }
 // analysis resolution needed so every character cell gets ~3x3 real source pixels
-function neededScale(doc) {
-  const geo = Engine.computeGeometry(doc.width, doc.height, S, atlas);
-  return Math.min(1, Math.max(baseScale(doc), (geo.cols * 4.5) / doc.width, (geo.rows * 4.5) / doc.height));
+function neededScale(frame) {
+  const geo = Engine.computeGeometry(frame.w, frame.h, S, atlas);
+  return Math.min(1, Math.max(baseScale(frame), (geo.cols * 4.5) / frame.w, (geo.rows * 4.5) / frame.h));
 }
 
-async function ensureSource(minScale, forDoc) {
+// Makes `src` hold the current source. full: at the resolution the output needs (else enough for a preview).
+async function ensureSource(full, forDoc) {
   const doc = forDoc || sourceDoc();
   if (!doc) { src = null; return false; }
   checkDoc(doc);
-  const scale = Math.max(baseScale(doc), Math.min(1, minScale || 0));
-  const layerId = sourceLayerId(doc);
-  if (src && !src.stale && src.docId === doc.id && src.layerId === layerId && src.docW === doc.width && src.docH === doc.height && src.scale >= scale - 1e-6) return true;
+  const layerId = sourceLayerId(doc), frame = await frameOf(doc, layerId, artboardPick());
+  const scale = full ? neededScale(frame) : baseScale(frame);
+  if (src && !src.stale && src.docId === doc.id && src.layerId === layerId && sameFrame(src.frame, frame) && src.scale >= scale - 1e-6) return true;
   busy = true;
-  try { src = await core.executeAsModal((ctx) => capture(ctx, doc, layerId, scale, true), { commandName: "ASCII by Star: read pixels" }); }
+  try { src = await core.executeAsModal((ctx) => capture(ctx, doc, layerId, scale, true, frame), { commandName: "ASCII by Star: read pixels" }); }
   finally { busy = false; }
   return true;
 }
 
-function convertOut(rgba, n, depth, gray) {
-  if (gray) {
-    const out = depth === 32 ? new Float32Array(n * 2) : depth === 16 ? new Uint16Array(n * 2) : new Uint8Array(n * 2);
-    for (let i = 0; i < n; i++) {
-      const L = 0.2126 * rgba[i * 4] + 0.7152 * rgba[i * 4 + 1] + 0.0722 * rgba[i * 4 + 2], a = rgba[i * 4 + 3];
-      if (depth === 32) { out[i * 2] = Math.pow(L / 255, 2.2); out[i * 2 + 1] = a / 255; }
-      else if (depth === 16) { out[i * 2] = Math.round((L * 32768) / 255); out[i * 2 + 1] = Math.round((a * 32768) / 255); }
-      else { out[i * 2] = Math.round(L); out[i * 2 + 1] = a; }
-    }
-    return out;
-  }
-  if (depth === 8) return rgba;
-  if (depth === 16) { const out = new Uint16Array(n * 4); for (let i = 0; i < n * 4; i++) out[i] = Math.round((rgba[i] * 32768) / 255); return out; }
-  const out = new Float32Array(n * 4);
-  for (let i = 0; i < n * 4; i++) out[i] = (i & 3) === 3 ? rgba[i] / 255 : Math.pow(rgba[i] / 255, 2.2);
-  return out;
-}
-
-async function makeImageData(buf, w, h, gray, profile) {
-  const base = { width: w, height: h, components: gray ? 2 : 4, chunky: true, colorSpace: gray ? "Grayscale" : "RGB" };
-  if (profile) { try { return await imaging.createImageDataFromBuffer(buf, Object.assign({ colorProfile: profile }, base)); } catch (e) { /* fall through */ } }
-  return await imaging.createImageDataFromBuffer(buf, base);
-}
-
 // Renders the grid into a layer, in horizontal strips to keep memory low. Inside executeAsModal.
+// The output covers the grid's area (the frame) × scale, with its top left at `at` in the target document:
+// the frame's corner when writing into the source document, 0,0 in a scratch document of the frame's size.
 // scale > 1 renders into a larger document (PNG export at 2x/4x); the grid stays in source-document units.
-async function writeLayer(doc, layer, grid, cs, scale, markCorners) {
-  scale = scale || 1;
-  const docW = doc.width, docH = doc.height, depth = bitDepth(doc), gray = isGray(doc);
+async function writeLayer(doc, layer, grid, cs, scale, markCorners, at) {
+  scale = scale || 1; at = at || { x: 0, y: 0 };
+  const W = Math.round(grid.geo.docW * scale), H = Math.round(grid.geo.docH * scale), depth = bitDepth(doc), gray = isGray(doc);
   let profile = null;
   try { profile = doc.colorProfileName || null; } catch (e) { profile = null; }
-  const stripH = Math.max(1, Math.min(docH, Math.floor(4e6 / docW)));
-  for (let y0 = 0; y0 < docH; y0 += stripH) {
-    const h = Math.min(stripH, docH - y0);
-    const rgba = Engine.render(grid, cs, atlas, S, { x: 0, y: y0 / scale, w: docW, h, scale });
-    if (markCorners) { // invisible 1/255 alpha pixels pin the layer bounds to the full canvas
+  const stripH = Math.max(1, Math.min(H, Math.floor(4e6 / W)));
+  for (let y0 = 0; y0 < H; y0 += stripH) {
+    const h = Math.min(stripH, H - y0);
+    const rgba = Engine.render(grid, cs, atlas, S, { x: 0, y: y0 / scale, w: W, h, scale });
+    if (markCorners) { // invisible 1/255 alpha pixels pin the layer bounds to the whole area
       if (y0 === 0) rgba[3] = Math.max(rgba[3], 1);
-      if (y0 + h >= docH) rgba[rgba.length - 1] = Math.max(rgba[rgba.length - 1], 1);
+      if (y0 + h >= H) rgba[rgba.length - 1] = Math.max(rgba[rgba.length - 1], 1);
     }
-    const id = await makeImageData(convertOut(rgba, docW * h, depth, gray), docW, h, gray, profile);
-    try { await imaging.putPixels({ documentID: doc.id, layerID: layer.id, imageData: id, replace: y0 === 0, targetBounds: { left: 0, top: y0 }, commandName: "ASCII by Star" }); }
+    const id = await makeImageData(convertOut(rgba, W * h, depth, gray), W, h, gray, profile);
+    try { await imaging.putPixels({ documentID: doc.id, layerID: layer.id, imageData: id, replace: y0 === 0, targetBounds: { left: at.x, top: at.y + y0 }, commandName: "ASCII by Star" }); }
     catch (e) { id.dispose(); throw new Error("Writing the layer failed (" + errMsg(e) + ")."); }
     id.dispose();
   }
@@ -355,9 +276,9 @@ async function runPreview() {
   pvRunning = false;
   if (pvAgain) { pvAgain = false; schedulePreview(0); }
 }
-function showPreviewMsg(t) { const m = $("previewMsg"); m.textContent = t; m.classList.remove("hidden"); $("preview").classList.add("hidden"); }
+let viewer = null; // the preview (viewer.js)
+function showPreviewMsg(t) { if (viewer) viewer.showMessage(t); else { $("previewMsg").textContent = t; } }
 
-function fitScale() { return src ? Math.min(PREVIEW_MAX / src.docW, PREVIEW_MAX / src.docH) : 1; }
 function docById(id) { try { const ds = app.documents; for (let i = 0; i < ds.length; i++) if (ds[i].id === id) return ds[i]; } catch (e) { /* none open */ } return null; }
 // The document being converted: the active one, unless the live preview window is in front.
 function sourceDoc() { const a = activeDoc(); if (live && a && a.id === live.docId) return docById(live.sourceDocId); return a; }
@@ -400,14 +321,14 @@ async function toggleLive() {
   status("Opening live smart object…");
   try {
     await core.executeAsModal(async (ctx) => {
-      const layerId = sourceLayerId(doc);
+      const layerId = sourceLayerId(doc), frame = await frameOf(doc, layerId, artboardPick());
       let so = editing && editing.docId === doc.id ? findLayerById(doc, editing.layerId) : null;
       if (so && !/smart/i.test(String(so.kind))) so = null; // re-editing a pixel layer: make a new smart object
       if (!so) {
-        src = await capture(ctx, doc, layerId, neededScale(doc), true);
-        const cs = currentCharset(), geo = Engine.computeGeometry(doc.width, doc.height, S, atlas), grid = Engine.computeGrid(src, geo, S, cs);
+        src = await capture(ctx, doc, layerId, neededScale(frame), true, frame);
+        const cs = currentCharset(), geo = Engine.computeGeometry(frame.w, frame.h, S, atlas), grid = Engine.computeGrid(src, geo, S, cs);
         const sid = await ctx.hostControl.suspendHistory({ documentID: doc.id, name: "ASCII by Star smart object" });
-        try { so = await placeSmartObject(doc, grid, cs, qualityScale(), outputName(doc, layerId)); }
+        try { so = await placeSmartObject(doc, grid, cs, qualityScale(), outputName(doc, layerId), frame); }
         finally { await ctx.hostControl.resumeHistory(sid, true); }
       }
       rememberLayer(doc, so, layerId);
@@ -416,7 +337,7 @@ async function toggleLive() {
       const psb = app.activeDocument;
       if (!psb || psb.id === doc.id) throw new Error("Photoshop didn't open the smart object contents");
       const inner = psb.layers.find ? psb.layers.find((l) => l.kind !== "group") || psb.layers[0] : psb.layers[0];
-      live = { docId: psb.id, layerId: inner.id, sourceDocId: doc.id, soLayerId: so.id, soName: so.name, sourceLayerId: layerId, scale: psb.width / doc.width };
+      live = { docId: psb.id, layerId: inner.id, sourceDocId: doc.id, soLayerId: so.id, soName: so.name, sourceLayerId: layerId, scale: psb.width / (src ? src.frame.w : doc.width) };
     }, { commandName: "ASCII by Star live smart object" });
   } catch (e) { console.error(e); live = null; status("Couldn't open the live smart object: " + errMsg(e), true); }
   finally { busy = false; }
@@ -451,7 +372,7 @@ async function runLive() {
     const d = docById(live.docId), sd = docById(live.sourceDocId);
     if (!d || !sd) { live = null; updateLiveBtn(); return; }
     await readyAtlas();
-    await ensureSource(neededScale(sd), sd);
+    await ensureSource(true, sd);
     const cs = currentCharset(), geo = Engine.computeGeometry(src.docW, src.docH, S, atlas), grid = Engine.computeGrid(src, geo, S, cs);
     const lv = live;
     busy = true;
@@ -473,51 +394,70 @@ async function runLive() {
 
 // Renders at `scale`x into a temporary document, converts it to a smart object, brings it into `doc`
 // and scales it back to document size, so the smart object keeps the extra resolution. Inside executeAsModal.
-async function placeSmartObject(doc, grid, cs, scale, name) {
-  const W = Math.round(doc.width * scale), H = Math.round(doc.height * scale);
+async function placeSmartObject(doc, grid, cs, scale, name, frame) {
+  frame = frame || fullFrame(doc);
+  const W = Math.round(frame.w * scale), H = Math.round(frame.h * scale);
   const { doc: tmp, layer } = await createScratchDoc(W, H, (doc.resolution || 72) * scale, "ASCII by Star render");
   let placed = null;
+  const tag = "ASCII by Star render " + Date.now().toString(36); // finds the copy even when duplicate() returns nothing
   try {
     await writeLayer(tmp, layer, grid, cs, scale, true);
     try { layer.selected = true; } catch (e) { /* only layer */ }
     await action.batchPlay([{ _obj: "newPlacedLayer" }], {});
-    placed = await tmp.activeLayers[0].duplicate(doc);
+    const so = tmp.activeLayers[0];
+    so.name = tag;
+    try { placed = await so.duplicate(doc); } catch (e) { console.error("duplicate", e); placed = null; }
+    if (!placed) { // Photoshop sometimes returns nothing here; copy with the menu command instead
+      try { await action.batchPlay([{ _obj: "duplicate", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }], to: { _ref: "document", _id: doc.id }, version: 5 }], {}); } catch (e) { console.error("duplicate to", e); }
+      placed = findLayers(doc.layers, (l) => l.name === tag)[0] || null;
+    }
   } finally { await tmp.closeWithoutSaving(); }
   try { app.activeDocument = doc; } catch (e) { /* already active */ }
-  if (!placed) throw new Error("could not copy the smart object");
+  if (!placed) throw new Error(`Photoshop couldn't copy the render into “${doc.title}”. If a smart object's contents (.psb) is the active document, switch to your main document and try again`);
   placed.name = name;
-  await placed.scale(100 / scale, 100 / scale, constants.AnchorPosition.TOPLEFT);
+  // position first: at full size the corner pixels pin the bounds to the frame exactly, while scaling down
+  // averages them away and the bounds shrink to the characters. Scaling from the top left keeps the corner.
   const b = placed.bounds;
-  if (Math.round(b.left) || Math.round(b.top)) await placed.translate(-b.left, -b.top);
+  if (Math.round(b.left) !== frame.x || Math.round(b.top) !== frame.y) await placed.translate(frame.x - b.left, frame.y - b.top);
+  if (scale !== 1) await placed.scale(100 / scale, 100 / scale, constants.AnchorPosition.TOPLEFT);
   return placed;
 }
 
 async function renderPreview() {
   if (!atlas) return;
   await readyAtlas();
-  const ok = await ensureSource(0);
+  const ok = await ensureSource(false);
   if (!ok) { showPreviewMsg("Open a document to begin"); status(""); return; }
+  await fillArtboardSelect($("artboard"), $("artboardRow"), sourceDoc());
   // the character grid is reused while settings and source are unchanged
   const key = atlas.id + JSON.stringify(S);
   if (gridCache.key !== key || gridCache.src !== src) {
     const cs = currentCharset(), geo = Engine.computeGeometry(src.docW, src.docH, S, atlas);
     gridCache = { key, src, cs, geo, grid: Engine.computeGrid(src, geo, S, cs) };
   }
-  const { cs, geo, grid } = gridCache;
-  const docW = src.docW, docH = src.docH;
-  const fit = fitScale();
-  const view = { x: 0, y: 0, w: Math.max(1, Math.round(docW * fit)), h: Math.max(1, Math.round(docH * fit)), scale: fit };
-  const rgb = Engine.flattenForPreview(Engine.render(grid, cs, atlas, S, view), view.w, view.h);
-  const id = await imaging.createImageDataFromBuffer(rgb, { width: view.w, height: view.h, components: 3, chunky: true, colorProfile: "sRGB IEC61966-2.1", colorSpace: "RGB" });
-  const b64 = await imaging.encodeImageData({ imageData: id, base64: true });
-  id.dispose();
-  const img = $("preview");
-  img.src = "data:image/jpeg;base64," + b64;
-  img.classList.remove("hidden");
-  $("previewMsg").classList.add("hidden");
-  const lowRes = src.scale < neededScale(sourceDoc() || { width: docW, height: docH }) - 1e-6;
+  const { cs, geo } = gridCache;
+  const fk = [src.docId, src.frame.x, src.frame.y, src.frame.w, src.frame.h].join(",");
+  if (viewer.frameKey !== fk) { viewer.frameKey = fk; viewer.setCentre(src.docW / 2, src.docH / 2); } // a new document or artboard
+  await viewer.refresh();
+  const lowRes = src.scale < neededScale(src.frame) - 1e-6;
   scheduleLive();
   if (!live) status(`${geo.cols} × ${geo.rows} chars · ${geo.size.toFixed(1)}px · ${cs.n} glyphs${lowRes ? " · preview sampled at reduced res" : ""}`);
+}
+
+// The preview of document rect `rect` at scale z, as RGB (characters over a checkerboard where transparent).
+function renderRegion(rect, z) {
+  const { cs, grid } = gridCache;
+  if (!grid) return null;
+  const w = Math.max(1, Math.round(rect.w * z)), h = Math.max(1, Math.round(rect.h * z));
+  return { rgb: Engine.flattenForPreview(Engine.render(grid, cs, atlas, S, { x: rect.x, y: rect.y, w, h, scale: z }), w, h), w, h };
+}
+
+function makeViewer() {
+  return createViewer({
+    wrap: $("previewWrap"), img: $("preview"), msg: $("previewMsg"), bar: $("zoomBar"), storeKey: "gf:zoom:ascii",
+    docSize: () => (src ? { w: src.docW, h: src.docH } : null), render: renderRegion,
+    onError: (e) => { console.error(e); status(errMsg(e), true); },
+  });
 }
 
 // ---------- actions ----------
@@ -552,10 +492,10 @@ async function applyRaster(update) {
     await core.executeAsModal(async (ctx) => {
       const sid = await ctx.hostControl.suspendHistory({ documentID: doc.id, name: update ? "ASCII by Star update" : "ASCII by Star" });
       try {
-        const layerId = sourceLayerId(doc);
-        src = await capture(ctx, doc, layerId, neededScale(doc), false);
+        const layerId = sourceLayerId(doc), frame = await frameOf(doc, layerId, artboardPick());
+        src = await capture(ctx, doc, layerId, neededScale(frame), false, frame);
         const cs = currentCharset();
-        const geo = Engine.computeGeometry(doc.width, doc.height, S, atlas);
+        const geo = Engine.computeGeometry(frame.w, frame.h, S, atlas);
         const grid = Engine.computeGrid(src, geo, S, cs);
         const q = qualityScale();
         let layer = null;
@@ -565,7 +505,7 @@ async function applyRaster(update) {
         const oldIsSmart = old && /smart/i.test(String(old.kind));
         if (q > 1 || oldIsSmart) {
           try {
-            layer = await placeSmartObject(doc, grid, cs, Math.max(1, q), name);
+            layer = await placeSmartObject(doc, grid, cs, Math.max(1, q), name, frame);
             if (old) { await layer.move(old, constants.ElementPlacement.PLACEBEFORE); await old.delete(); editing.layerId = layer.id; }
             info = `${geo.cols} × ${geo.rows} chars · ${q}× smart object`;
           } catch (e) {
@@ -576,7 +516,7 @@ async function applyRaster(update) {
         }
         if (!layer) {
           layer = old || (await createLayer(doc, name));
-          await writeLayer(doc, layer, grid, cs);
+          await writeLayer(doc, layer, grid, cs, 1, false, frame);
           if (!info) info = `${geo.cols} × ${geo.rows} chars`;
         }
         rememberLayer(doc, layer, layerId);
@@ -594,7 +534,7 @@ async function outputGrid() {
   await readyAtlas();
   const doc = sourceDoc();
   checkDoc(doc);
-  await ensureSource(neededScale(doc));
+  await ensureSource(true);
   const cs = currentCharset();
   const geo = Engine.computeGeometry(src.docW, src.docH, S, atlas);
   return { doc, cs, geo, grid: Engine.computeGrid(src, geo, S, cs) };
@@ -620,7 +560,7 @@ async function makeTextLayer() {
           fontSize: geo.size,
           fontName: S.font || "Menlo-Regular",
           textColor: color,
-          position: { x: (geo.cellW - geo.glyphW) / 2, y: baseline },
+          position: { x: src.frame.x + (geo.cellW - geo.glyphW) / 2, y: src.frame.y + baseline },
         });
         try { layer.name = outputName(doc, sourceLayerId(doc)); } catch (e) { /* keep default name */ }
         const st = layer.textItem && layer.textItem.characterStyle;
@@ -718,7 +658,7 @@ async function runBatch() {
           const d = await app.open(f);
           try {
             if (!/rgb|gray/i.test(String(d.mode))) await d.changeMode(constants.ChangeMode.RGB);
-            const sample = await capture(ctx, d, null, neededScale(d), false);
+            const sample = await capture(ctx, d, null, neededScale(fullFrame(d)), false);
             const geo = Engine.computeGeometry(d.width, d.height, S, atlas);
             const grid = Engine.computeGrid(sample, geo, S, cs);
             const layer = await createLayer(d, "ASCII by Star");
@@ -815,6 +755,7 @@ const SLIDERS = {
   colorBoost: ["Lift darks", 0, 1, 0.01, pct],
   glyphOpacity: ["Text opacity", 0, 1, 0.01, pct],
   mosaicAmount: ["Mosaic", 0, 1, 0.01, pct],
+  bgOpacity: ["Opacity", 0, 1, 0.01, pct],
   gPixelSort: ["Pixel sort", 0, 1, 0.01, pct],
   gSlices: ["Slice shift", 0, 1, 0.01, pct],
   gSliceSize: ["Slice height", 0.05, 1, 0.01, pct],
@@ -912,6 +853,7 @@ function buildUI() {
   $("useBg").addEventListener("click", () => { try { setColor("bg", "#" + app.backgroundColor.rgb.hexValue.toLowerCase()); } catch (e) { status(errMsg(e), true); } });
 
   $("source").addEventListener("change", () => { src = null; schedulePreview(0); });
+  $("artboard").addEventListener("change", () => { src = null; schedulePreview(0); });
   $("refresh").addEventListener("click", () => { src = null; csCache.key = null; schedulePreview(0); });
   $("liveBtn").addEventListener("click", toggleLive);
   $("resetAll").addEventListener("click", () => {
@@ -1045,6 +987,8 @@ function refreshVisibility() {
   show($("glowColorRow"), !S.glowTextColor);
   show(sliderEls.shadowAngle.row, !!(S.dropOn || S.longOn || S.offOn));
   show(sliderEls.mosaicAmount.row, S.bgMode === "mosaic");
+  show(sliderEls.bgOpacity.row, S.bgMode !== "transparent");
+  show($("bgHint"), S.bgMode !== "transparent");
   show(sliderEls.ditherStrength.row, S.dither !== "none");
   show($("serpRow"), !!Engine.DIFFUSION[S.dither]);
   show($("ditherHint"), S.dither !== "none");
@@ -1137,14 +1081,19 @@ function onCheck(el, fn) {
 // UXP panels don't scroll on their own: give the settings area an explicit height
 // (panel height minus the pinned preview block) whenever the panel size changes.
 let lastH = -1, lastTop = -1;
+// The preview box has a fixed height, so a new preview image (which has no size for a moment while it
+// loads) can't shrink the top area and make the settings jump. Styles are only written when they change.
 function fitLayout(force) {
   const H = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0;
   if (!H) return;
   const isInk = tab === "ink", top = $(isInk ? "inkTop" : "top");
+  const setH = (el, prop, px) => { const v = px + "px"; if (el.style[prop] !== v) el.style[prop] = v; };
+  const pv = Math.max(70, Math.round(H * 0.38));
+  setH($(isInk ? "inkPreviewWrap" : "previewWrap"), "height", pv);
   if (!force && H === lastH && top.offsetHeight === lastTop) return;
-  $(isInk ? "inkPreview" : "preview").style.maxHeight = Math.max(70, Math.round(H * 0.38)) + "px";
   lastH = H; lastTop = top.offsetHeight;
-  $(isInk ? "inkScroller" : "scroller").style.height = Math.max(60, H - ($("tabs").offsetHeight || 0) - top.offsetHeight) + "px";
+  setH($(isInk ? "inkScroller" : "scroller"), "height", Math.max(60, H - ($("tabs").offsetHeight || 0) - top.offsetHeight));
+  if (isInk) { if (ink) ink.relayout(); } else if (viewer) viewer.relayout(); // keep the preview centred in the new size
 }
 
 function showTab(t) {
@@ -1177,6 +1126,7 @@ function onPsEvent(evt, desc) {
 
 async function init() {
   enhanceAllSelects(() => fitLayout(true)); // before any "change" listener is added
+  viewer = makeViewer();
   buildUI();
   syncUI();
   ink = setupInk({ $, loadJSON, saveJSON, errMsg, toRGBA8, makeImageData, convertOut, createLayer, findLayers, findLayerById, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck });
@@ -1184,7 +1134,6 @@ async function init() {
   $("tabInk").addEventListener("click", () => showTab("ink"));
   showTab(tab);
   window.addEventListener("resize", () => fitLayout(true));
-  $("preview").addEventListener("load", () => fitLayout(true));
   setInterval(() => fitLayout(false), 400);
   fitLayout(true);
   try {

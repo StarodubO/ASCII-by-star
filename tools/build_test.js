@@ -1,9 +1,9 @@
 // Builds test/gf_test.psjs: plugin code + DOM shims + an integration test sequence.
 const fs = require("fs"), path = require("path");
 const P = (f) => path.join(__dirname, "../plugin", f);
-const wrap = (name, file) => `(function(){ const module = { exports: {} }; ${fs.readFileSync(P(file), "utf8").replace('require("./ink.js")', "__mods.ink").replace(/const \{ makeSlider, SLIDER_HTML \} = require\("\.\/slider\.js"\);/, "const { makeSlider, SLIDER_HTML } = __mods.slider;")}\n__mods[${JSON.stringify(name)}] = module.exports; })();\n`;
-let main = fs.readFileSync(P("main.js"), "utf8")
-  .replace('require("./engine.js")', '__mods.engine').replace('require("./charsets.js")', '__mods.charsets').replace('require("./presets.js")', '__mods.presets').replace('require("./inkui.js")', '__mods.inkui').replace('const { makeSlider, SLIDER_HTML } = require("./slider.js");', 'const { makeSlider, SLIDER_HTML } = __mods.slider;').replace('const { enhanceAllSelects } = require("./dropdown.js");', 'const { enhanceAllSelects } = __mods.dropdown;')
+const localRequires = (code) => code.replace(/require\("\.\/([a-z]+)\.js"\)/g, (m, n) => `__mods[${JSON.stringify(n)}]`);
+const wrap = (name, file) => `(function(){ const module = { exports: {} }; ${localRequires(fs.readFileSync(P(file), "utf8"))}\n__mods[${JSON.stringify(name)}] = module.exports; })();\n`;
+let main = localRequires(fs.readFileSync(P("main.js"), "utf8"))
   .replace(/\ninit\(\);\s*$/, "\n");
 const atlasB64 = fs.readFileSync(P("atlas.bin")).toString("base64");
 const meta = fs.readFileSync(P("atlas.json"), "utf8");
@@ -18,13 +18,13 @@ const __els = {};
 const __defaults = { source: "merged", zoom: "fit", font: "Menlo-Regular", batchTxt: false };
 function __el(id) {
   if (!__els[id]) __els[id] = { id, value: __defaults[id] !== undefined ? __defaults[id] : "", checked: false, textContent: "", src: "", style: {}, dataset: {},
-    classList: { add() {}, remove() {}, toggle() {} }, options: [], addEventListener() {}, querySelector(sel) { return __el(id + " " + sel); }, querySelectorAll() { return []; } };
+    classList: { add() {}, remove() {}, toggle() {} }, options: [], addEventListener() {}, setAttribute() {}, getAttribute() { return null; }, appendChild() {}, querySelector(sel) { return __el(id + " " + sel); }, querySelectorAll() { return []; } };
   return __els[id];
 }
-const document = { getElementById: __el, querySelectorAll: () => [] };
+const document = { getElementById: __el, querySelectorAll: () => [], createElement: (t) => __el("new-" + t + Math.random()) };
 const __ls = new Map();
 const localStorage = { getItem: (k) => (__ls.has(k) ? __ls.get(k) : null), setItem: (k, v) => __ls.set(k, String(v)) };
-${wrap("engine", "engine.js")}${wrap("charsets", "charsets.js")}${wrap("presets", "presets.js")}${wrap("slider", "slider.js")}${wrap("dropdown", "dropdown.js")}${wrap("ink", "ink.js")}${wrap("inkui", "inkui.js")}
+${["engine", "charsets", "presets", "slider", "dropdown", "viewer", "pixels", "ink", "inkui"].map((n) => wrap(n, n + ".js")).join("")}
 ${main}
 function __b64(s) {
   const T = new Uint8Array(128); const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -52,6 +52,7 @@ async function step(name, fn) {
 async function layerNames(doc) { return findLayers(doc.layers, () => true).map((l) => l.name + (l.visible ? "" : " (hidden)")); }
 
 for (const k of Object.keys(SLIDERS)) sliderEls[k] = { input: {}, val: {}, fmt: String, row: __el("row-" + k) };
+viewer = makeViewer(); // as init() does
 atlas = Engine.prepareAtlas(${meta}, __b64(${JSON.stringify(atlasB64)}));
 L("atlas", atlas.n, atlas.cellW, atlas.cellH);
 ${process.env.TEST ? fs.readFileSync(path.join(__dirname, process.env.TEST + "_steps.js"), "utf8") : MAIN_STEPS}

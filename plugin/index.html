@@ -39,10 +39,11 @@
   .head .chev { margin-right: 6px; width: 10px; opacity: 0.7; }
   .collapsed .body { display: none; }
   #previewWrap, #inkPreviewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; min-height: 80px; position: relative; overflow: hidden; }
-  #preview, #inkPreview { max-width: 100%; }
-  #inkPreview { cursor: crosshair; }
+  #preview, #inkPreview { position: absolute; left: 0; top: 0; max-width: none; cursor: grab; }
+  .zoomBar { margin: 4px 0 0 0; }
+  .zoomBar .zlabel { width: 40px; flex: 0 0 40px; cursor: pointer; }
   #previewMsg, #inkPreviewMsg { position: absolute; padding: 12px; text-align: center; color: #bbb; }
-  #status, #inkStatus { font-size: 10px; opacity: 0.75; min-height: 14px; margin: 4px 0; }
+  #status, #inkStatus { font-size: 10px; opacity: 0.75; height: 26px; overflow: hidden; margin: 4px 0; }
   .swatch, .swatchInk { width: 28px; height: 20px; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; flex: 0 0 28px; cursor: pointer; }
   .hex { width: 62px; flex: 0 1 62px; font-family: Menlo, monospace; }
   button { font-size: 11px; }
@@ -72,6 +73,7 @@
  <div id="asciiTool" class="tool">
  <div id="top">
   <div id="previewWrap"><img id="preview" alt=""><div id="previewMsg">Open a document to begin</div></div>
+  <div class="row zoomBar" id="zoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
   <div class="row btnrow" style="margin-top:5px">
     <button id="liveBtn" title="Places the result as a smart object in your document and opens its contents. Edits update it live; Save & close puts the final result into your document.">Open live smart object</button>
     <button id="resetAll" title="Reset every setting to its default" style="flex:0 0 auto">Reset all</button>
@@ -83,6 +85,7 @@
     </select>
     <button id="refresh" title="Re-read the document">↻</button>
   </div>
+  <div class="row hidden" id="artboardRow"><select id="artboard" class="grow" title="Which artboard to convert. Auto follows the source layer (or the selected layer)."><option value="auto">Artboard: auto (follows the layer)</option></select></div>
   <div id="status"></div>
 
   <div id="editBox" class="editing hidden">
@@ -206,11 +209,13 @@
       <div id="origRows"><div id="sl-saturation"></div><div id="sl-colorBoost"></div></div>
       <div id="sl-glyphOpacity"></div>
       <div class="row"><span class="label">Background</span><select id="bgMode" class="grow">
-        <option value="solid">Solid colour</option><option value="transparent">Transparent</option><option value="mosaic">Colour mosaic</option>
+        <option value="solid">Solid colour</option><option value="transparent">Transparent (characters only)</option><option value="mosaic">Colour mosaic</option>
       </select></div>
-      <div class="row" id="keepAlphaRow"><label title="Where the source is transparent (a PNG cut-out, a layer without background), the output stays transparent too. Turn off to fill the whole canvas."><input type="checkbox" id="keepAlpha"> Keep the source's transparency</label></div>
+      <div class="row" id="keepAlphaRow"><label title="Where the source is transparent (a PNG cut-out, a layer without background), the background stays empty too. Off fills the whole canvas. For characters only, set Background to Transparent."><input type="checkbox" id="keepAlpha"> Follow the image's shape</label></div>
       <div class="row" id="bgRow"><span class="label">Colour</span><div class="swatch" data-color="bg"></div><input type="text" class="hex" data-hex="bg"><button id="useBg" title="Use Photoshop background colour">BG</button></div>
       <div id="sl-mosaicAmount"></div>
+      <div id="sl-bgOpacity"></div>
+      <p class="hint" id="bgHint">Opacity 0% leaves only the characters. Follow the image's shape: for cut-outs (a PNG without background), the background takes the image's outline instead of filling the canvas.</p>
     </div>
   </div>
 
@@ -312,16 +317,15 @@
  <div id="inkTool" class="tool hidden">
  <div id="inkTop">
   <div id="inkPreviewWrap"><img id="inkPreview" alt=""><div id="inkPreviewMsg">Select a layer to begin</div></div>
-  <div class="row" style="margin-top:5px">
-    <select id="inkZoom" style="flex:0 0 74px" title="100% and 200% show one spot at full detail. Click the preview to choose the spot.">
-      <option value="1">100%</option><option value="2">200%</option><option value="fit">Fit</option>
-    </select>
+  <div class="row zoomBar" id="inkZoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
+  <div class="row">
     <select id="inkSource" class="grow">
       <option value="layer" selected>Source: Selected layer</option>
       <option value="merged">Source: Visible (merged)</option>
     </select>
     <button id="inkRefresh" title="Re-read the document">↻</button>
   </div>
+  <div class="row hidden" id="inkArtboardRow"><select id="inkArtboard" class="grow" title="Which artboard to work on. Auto follows the source layer."><option value="auto">Artboard: auto (follows the layer)</option></select></div>
   <div id="inkStatus"></div>
   <div id="inkEditBox" class="editing hidden">
     <div id="inkEditLabel" style="margin-bottom:5px"></div>
@@ -335,7 +339,7 @@
     <div class="body">
       <div class="row"><select id="inkPaperType" class="grow"></select><button id="inkResetPaper" title="Set every slider back to this paper type">Reset</button></div>
       <div class="row"><span class="label">Seed</span><input type="text" id="inkSeed" style="width:60px;flex:0 0 60px"><button id="inkReseed" title="New random pattern">New seed</button></div>
-      <p class="hint">A generated paper sets every slider below. Your own texture (any image file) only replaces the paper and keeps the bleed settings. Click the preview to inspect a different spot.</p>
+      <p class="hint">A generated paper sets every slider below. Your own texture (any image file) only replaces the paper and keeps the bleed settings. Drag the preview to look around.</p>
     </div>
   </div>
 
@@ -402,7 +406,7 @@
   <div class="section" data-section="inkLayers">
     <div class="head"><span class="chev">▾</span>Layers</div>
     <div class="body">
-      <p class="hint">The overlay is a group of four layers above the source: Ink bleed and Ink pooling (Multiply), Ink gaps (Screen) and Paper (Multiply). Light ink on dark paper swaps Multiply and Screen. Change any layer's opacity, or hide it, to fine-tune.</p>
+      <p class="hint">The overlay is a group of four layers above the source: Ink bleed and Ink pooling (Multiply), Ink gaps (Normal: shows the paper under your layer through the ink) and Paper (Multiply). Light ink on dark paper swaps Multiply and Screen. Hide Ink gaps, or lower Dry skip, Mottling and Pooling, for solid ink. Change any layer's opacity, or hide it, to fine-tune.</p>
       <div class="row btnrow"><button id="inkLoad">Edit selected Ink Bleed group</button></div>
     </div>
   </div>
