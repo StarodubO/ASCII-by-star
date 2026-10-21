@@ -46,7 +46,7 @@ const SLIDERS = {
   laidSpacing: ["Line spacing", 3, 40, 0.5, "px", "Distance between laid lines."],
   flecks: ["Flecks", 0, 1, 0.01, pct, "Dark specks, as in recycled or kraft paper."],
   texScale: ["Texture scale", 0.1, 2, 0.01, pct, "100% stretches the texture over the whole canvas. Lower repeats it (mirrored, so without seams) for a finer grain."],
-  texStrength: ["Texture strength", 0, 2, 0.01, pct, "Contrast of the texture in the paper layer. 100% = as scanned."],
+  texStrength: ["Texture contrast", 0, 2, 0.01, pct, "Contrast of the texture in the paper layer. 100% = as scanned."],
 };
 
 module.exports = function setupInk(h) {
@@ -499,7 +499,7 @@ module.exports = function setupInk(h) {
     $("inkArtboard").addEventListener("change", () => { pv = null; schedule(0); });
     $("inkRefresh").addEventListener("click", () => { stale++; schedule(0); });
     viewer = createViewer({
-      wrap: $("inkPreviewWrap"), img: $("inkPreview"), msg: $("inkPreviewMsg"), bar: $("inkZoomBar"), storeKey: "gf:zoom:ink",
+      wrap: $("inkPreviewWrap"), img: $("inkPreview"), msg: $("inkPreviewMsg"), bar: $("inkZoomBar"), grip: $("inkPreviewGrip"), storeKey: "gf:zoom:ink", onLayout: () => h.fitLayout(true),
       docSize: () => (pv ? { w: pv.frame.w, h: pv.frame.h } : null), render: renderRegion,
       onError: (e) => { console.error(e); status(errMsg(e), true); },
     });
@@ -516,6 +516,7 @@ module.exports = function setupInk(h) {
     async useTextureFile(entry) { const t = await addTextureFile(entry); useTexture(t); return t; },
     setZoom: (m) => viewer.setMode(m),
     relayout: () => viewer && viewer.relayout(),
+    get viewer() { return viewer; },
     activate() { active = true; schedule(0); },
     deactivate() { active = false; clearTimeout(pvTimer); },
     onPsEvent(evt, desc) {

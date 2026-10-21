@@ -49,9 +49,8 @@ const only = process.argv[4];
 for (const p of PRESETS) {
   if (only && p.id !== only) continue;
   const s = Object.assign({}, E.DEFAULTS, p.settings);
-  const chars = s.charset === "custom" ? s.customChars : CHARSETS.find((c) => c.id === s.charset).chars;
   const t0 = Date.now();
-  const cs = E.buildCharset(atlas, chars, s.sortByDensity);
+  const cs = E.charsetOf(atlas, s, (CHARSETS.find((c) => c.id === s.charset) || {}).chars);
   const geo = E.computeGeometry(src.w, src.h, s, atlas);
   const grid = E.computeGrid(src, geo, s, cs);
   const out = E.render(grid, cs, atlas, s, { x: 0, y: 0, w: src.w, h: src.h, scale: 1 });

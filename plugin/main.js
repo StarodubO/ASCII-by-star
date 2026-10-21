@@ -58,10 +58,9 @@ function docBaseName(doc) { return String((doc && doc.title) || "ascii").replace
 
 let csCache = { key: null, cs: null };
 function currentCharset() {
-  const info = charsetInfo();
-  const chars = info.id === "custom" ? S.customChars : info.chars;
-  const key = atlas.id + "|" + info.id + "|" + chars + "|" + S.sortByDensity;
-  if (csCache.key !== key) csCache = { key, cs: Engine.buildCharset(atlas, chars, S.sortByDensity) };
+  const parts = Engine.charsetParts(S, charsetInfo().chars);
+  const key = atlas.id + "|" + JSON.stringify(parts) + "|" + S.sortByDensity;
+  if (csCache.key !== key) csCache = { key, cs: Engine.buildCharset(atlas, parts.ramp, S.sortByDensity, parts) };
   return csCache.cs;
 }
 
@@ -169,7 +168,7 @@ const TEXT_MODE_HINTS = {
 // Atlases are cached in memory and in the plugin's data folder.
 const fontAtlases = new Map();
 let fontBuild = null; // {key, promise}
-function charsetString() { const info = charsetInfo(); return info.id === "custom" ? S.customChars : info.chars; }
+function charsetString() { const p = Engine.charsetParts(S, charsetInfo().chars); return p.ramp + p.extra; }
 // The font to draw with: the chosen one, or Menlo drawn by Photoshop when the text has characters the
 // built-in atlas lacks (lowercase Cyrillic, other scripts, emoji…), so nothing typed is dropped.
 function effectiveFont() {
@@ -435,13 +434,14 @@ async function renderPreview() {
     const cs = currentCharset(), geo = Engine.computeGeometry(src.docW, src.docH, S, atlas);
     gridCache = { key, src, cs, geo, grid: Engine.computeGrid(src, geo, S, cs) };
   }
-  const { cs, geo } = gridCache;
+  const { cs, geo, grid } = gridCache;
   const fk = [src.docId, src.frame.x, src.frame.y, src.frame.w, src.frame.h].join(",");
   if (viewer.frameKey !== fk) { viewer.frameKey = fk; viewer.setCentre(src.docW / 2, src.docH / 2); } // a new document or artboard
   await viewer.refresh();
   const lowRes = src.scale < neededScale(src.frame) - 1e-6;
   scheduleLive();
-  if (!live) status(`${geo.cols} × ${geo.rows} chars · ${geo.size.toFixed(1)}px · ${cs.n} glyphs${lowRes ? " · preview sampled at reduced res" : ""}`);
+  const hid = grid.hidden ? ` · ${grid.hiddenPlaced} hidden message${grid.hiddenPlaced === 1 ? "" : "s"}` : "";
+  if (!live) status(`${geo.cols} × ${geo.rows} chars · ${geo.size.toFixed(1)}px · ${cs.n} glyphs${hid}${lowRes ? " · preview sampled at reduced res" : ""}`);
 }
 
 // The preview of document rect `rect` at scale z, as RGB (characters over a checkerboard where transparent).
@@ -449,12 +449,13 @@ function renderRegion(rect, z) {
   const { cs, grid } = gridCache;
   if (!grid) return null;
   const w = Math.max(1, Math.round(rect.w * z)), h = Math.max(1, Math.round(rect.h * z));
-  return { rgb: Engine.flattenForPreview(Engine.render(grid, cs, atlas, S, { x: rect.x, y: rect.y, w, h, scale: z }), w, h), w, h };
+  const s = markHidden ? Object.assign({}, S, { _markHidden: true }) : S;
+  return { rgb: Engine.flattenForPreview(Engine.render(grid, cs, atlas, s, { x: rect.x, y: rect.y, w, h, scale: z }), w, h), w, h };
 }
 
 function makeViewer() {
   return createViewer({
-    wrap: $("previewWrap"), img: $("preview"), msg: $("previewMsg"), bar: $("zoomBar"), storeKey: "gf:zoom:ascii",
+    wrap: $("previewWrap"), img: $("preview"), msg: $("previewMsg"), bar: $("zoomBar"), grip: $("previewGrip"), storeKey: "gf:zoom:ascii", onLayout: () => fitLayout(true),
     docSize: () => (src ? { w: src.docW, h: src.docH } : null), render: renderRegion,
     onError: (e) => { console.error(e); status(errMsg(e), true); },
   });
@@ -784,10 +785,12 @@ const SLIDERS = {
   offDistance: ["Distance", 0, 1, 0.01, pct],
   glowOpacity: ["Strength", 0, 1, 0.01, pct],
   glowSize: ["Size", 0.05, 2, 0.01, pct],
+  outlineLevel: ["Shape at", 0.05, 0.95, 0.01, pct],
+  outlineWidth: ["Width", 1, 6, 1, (v) => String(v)],
 };
 const GLITCH_KEYS = Object.keys(Engine.DEFAULTS).filter((k) => /^g[A-Z]/.test(k));
 
-function randomGlitch() {
+function glitchRecipe() {
   const r = Math.random, pick = (p, max) => (r() < p ? Math.round(r() * max * 100) / 100 : 0);
   for (const k of GLITCH_KEYS) S[k] = Engine.DEFAULTS[k];
   Object.assign(S, {
@@ -798,9 +801,80 @@ function randomGlitch() {
     gCorrupt: pick(0.5, 0.4), gRowShift: pick(0.5, 0.5), gStutter: pick(0.3, 0.4),
     gRgbSplit: pick(0.6, 0.5), gInterlace: pick(0.25, 0.4), gTracking: pick(0.4, 0.6), gScanlines: pick(0.5, 0.6), gNoise: pick(0.4, 0.3),
   });
+}
+function randomGlitch() { glitchRecipe(); syncUI(); schedulePreview(0); }
+
+// ---------- randomize ----------
+const rnd = (a, b) => a + Math.random() * (b - a);
+const chance = (p) => Math.random() < p;
+const pickOne = (list) => list[Math.floor(Math.random() * list.length)];
+const round2 = (v) => Math.round(v * 100) / 100;
+function hslHex(h, s, l) { // h in turns
+  const f = (n) => { const k = (n + (((h % 1) + 1) % 1) * 12) % 12, a = s * Math.min(l, 1 - l); return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))); };
+  return Engine.rgbToHex(f(0), f(8), f(4));
+}
+function mixHex(a, b, t) { const x = Engine.hexToRgb(a), y = Engine.hexToRgb(b); return Engine.rgbToHex(...x.map((v, i) => Math.round(v + (y[i] - v) * t))); }
+
+// A random look. The font, custom text and size mode stay, a custom charset stays custom, and the size varies
+// around the one set before the first of a run of clicks (so it doesn't drift).
+let undoStack = [], lastRandom = null, sizeBase = null;
+function randomizeAll() {
+  const now = JSON.stringify(S);
+  if (now !== lastRandom) sizeBase = { size: S.size, columns: S.columns };
+  undoStack.push(now);
+  if (undoStack.length > 30) undoStack.shift();
+  const info = S.charset === "custom" ? charsetInfo() : pickOne(CHARSETS.filter((c) => c.id !== "custom"));
+  const dark = chance(0.65), h = Math.random(), h2 = h + rnd(0.3, 0.7);
+  const bg = dark ? hslHex(h, rnd(0.2, 0.7), rnd(0.03, 0.1)) : hslHex(h, rnd(0.15, 0.5), rnd(0.88, 0.96));
+  const fg = dark ? hslHex(h2, rnd(0.5, 1), rnd(0.65, 0.9)) : hslHex(h2, rnd(0.4, 0.9), rnd(0.1, 0.28));
+  const accent = hslHex(h2 + 0.5, rnd(0.7, 1), rnd(0.45, 0.6));
+  const scale = Math.pow(2, rnd(-0.6, 0.6));
+  const dithers = Array.from($("dither").options).map((o) => o.value).filter((v) => v && v !== "none");
+  Object.assign(S, {
+    charset: info.id,
+    size: Math.min(60, Math.max(4, Math.round(sizeBase.size * scale * 2) / 2)), columns: Math.min(400, Math.max(20, Math.round(sizeBase.columns / scale))),
+    spacingX: chance(0.7) ? 1 : round2(rnd(0.8, 1.5)), lineHeight: chance(0.7) ? 1 : round2(rnd(0.8, 1.5)),
+    contrast: round2(rnd(0.85, 1.6)), brightness: round2(rnd(-0.12, 0.12)), gamma: round2(rnd(0.7, 1.5)), threshold: chance(0.7) ? 0 : round2(rnd(0.02, 0.2)),
+    invert: chance(0.12), dither: chance(0.35) ? pickOne(dithers) : "none", ditherStrength: round2(rnd(0.6, 1)), serpentine: chance(0.5),
+    detail: info.shape ? round2(rnd(0.4, 0.9)) : chance(0.25) ? round2(rnd(0.2, 0.6)) : 0,
+    colorMode: pickOne(["mono", "mono", "original", "gradient", "gradient"]), fg, bg, gradientMid: chance(0.8),
+    gradient: [mixHex(bg, fg, 0.18), hslHex(Math.random(), rnd(0.7, 1), rnd(0.45, 0.6)), mixHex(fg, dark ? "#ffffff" : "#000000", 0.3)],
+    saturation: round2(rnd(0.9, 1.6)), colorBoost: round2(rnd(0, 0.6)), glyphOpacity: chance(0.8) ? 1 : round2(rnd(0.6, 1)),
+    bgMode: pickOne(["solid", "solid", "solid", "solid", "mosaic", "transparent"]), mosaicAmount: round2(rnd(0.2, 0.6)), bgOpacity: 1,
+    shadowAngle: pickOne([135, 120, 90, 45, -45]),
+    dropOn: chance(0.12), dropColor: dark ? mixHex(bg, fg, 0.4) : "#000000", dropOpacity: round2(rnd(0.5, 0.9)), dropDistance: round2(rnd(0.1, 0.3)), dropSize: round2(rnd(0.15, 0.5)),
+    longOn: chance(0.1), longColor: mixHex(bg, fg, 0.3), longOpacity: round2(rnd(0.6, 0.9)), longLength: round2(rnd(0.8, 2.5)), longFade: round2(rnd(0.3, 1)),
+    offOn: chance(0.12), offColor: accent, offOpacity: round2(rnd(0.7, 1)), offDistance: round2(rnd(0.08, 0.2)),
+    glowOn: dark && chance(0.12), glowTextColor: chance(0.7), glowColor: accent, glowOpacity: round2(rnd(0.5, 0.9)), glowSize: round2(rnd(0.3, 0.7)),
+  });
+  if (S.outlineOn) Object.assign(S, { outlineWidth: pickOne([1, 1, 2, 3]), outlinePos: pickOne(["outside", "center", "inside"]), outlineStyle: chance(0.6) ? "lines" : "chars", outlineColor: accent, outlineFill: pickOne(["image", "none", "chars", "random"]) });
+  if (chance(0.12)) glitchRecipe(); else S.glitchOn = false;
+  lastRandom = JSON.stringify(S);
+  syncUI(); schedulePreview(0);
+  status("Random look. ↶ goes back; save it under Look to keep it.");
+}
+function undoRandomize() {
+  if (!undoStack.length) return;
+  S = freshSettings(JSON.parse(undoStack.pop()));
   syncUI(); schedulePreview(0);
 }
+
+// A black shadow on a near-black background doesn't show, so a shadow switched on with a colour that close to
+// the background starts from a mix of the text and background colours instead.
+const SHADOW_COLORS = { dropOn: "dropColor", longOn: "longColor", offOn: "offColor" };
+function visibleShadow(key) {
+  const k = SHADOW_COLORS[key], old = S[k];
+  if (!k || S.bgMode === "transparent" || Math.abs(Engine.luma(Engine.hexToRgb(old)) - Engine.luma(Engine.hexToRgb(S.bg))) > 0.15) return;
+  S[k] = mixHex(S.bg, S.fg, 0.45);
+  syncUI();
+  status(`Shadow colour set to ${S[k]}: ${old} doesn't show on this background.`);
+}
 const sliderEls = {};
+// controls whose id is the setting they edit
+const SELECTS = ["charset", "textMode", "sizeMode", "dither", "colorMode", "bgMode", "gSortDir", "gChannelSwap", "outlinePos", "outlineStyle", "outlineFill"];
+const CHECKS = ["sortByDensity", "invert", "serpentine", "glitchOn", "gradientMid", "keepAlpha", "phraseShade", "phraseWrap", "dropOn", "longOn", "offOn", "glowOn", "glowTextColor", "outlineOn"];
+const TEXTS = ["customChars", "outlineChars", "outlineFillChars"];
+let markHidden = loadJSON("gf:markHidden", false); // preview only: show where hidden messages went
 
 function buildUI() {
   for (const [key, [label, min, max, step, fmt]] of Object.entries(SLIDERS)) {
@@ -818,30 +892,18 @@ function buildUI() {
   }
   $("charset").innerHTML = html;
 
-  const bindSelect = (id, key, after) => $(id).addEventListener("change", () => { S[key] = $(id).value; if (after) after(); refreshVisibility(); schedulePreview(); });
-  bindSelect("charset", "charset");
-  bindSelect("textMode", "textMode");
-  bindSelect("sizeMode", "sizeMode");
-  bindSelect("dither", "dither");
-  bindSelect("colorMode", "colorMode");
-  bindSelect("bgMode", "bgMode");
-  bindSelect("gSortDir", "gSortDir");
-  bindSelect("gChannelSwap", "gChannelSwap");
+  for (const k of SELECTS) $(k).addEventListener("change", () => { S[k] = $(k).value; refreshVisibility(); schedulePreview(); });
   $("glitchSeed").addEventListener("change", () => { const v = parseInt($("glitchSeed").value, 10); if (v > 0) S.glitchSeed = v; syncUI(); schedulePreview(0); });
   $("glitchReseed").addEventListener("click", () => { S.glitchSeed = Math.floor(Math.random() * 99999) + 1; syncUI(); schedulePreview(0); });
   $("glitchReset").addEventListener("click", () => { for (const k of GLITCH_KEYS) S[k] = Engine.DEFAULTS[k]; syncUI(); schedulePreview(0); });
   $("glitchRandom").addEventListener("click", randomGlitch);
-  const bindCheck = (id, key) => onCheck($(id), (v) => { S[key] = v; refreshVisibility(); schedulePreview(); });
-  bindCheck("sortByDensity", "sortByDensity");
-  bindCheck("invert", "invert");
-  bindCheck("serpentine", "serpentine");
-  bindCheck("glitchOn", "glitchOn");
-  bindCheck("gradientMid", "gradientMid");
-  bindCheck("keepAlpha", "keepAlpha");
-  bindCheck("phraseShade", "phraseShade");
-  bindCheck("phraseWrap", "phraseWrap");
-  for (const k of ["dropOn", "longOn", "offOn", "glowOn", "glowTextColor"]) bindCheck(k, k);
-  $("customChars").addEventListener("input", () => { S.customChars = $("customChars").value; schedulePreview(120); });
+  for (const k of CHECKS) onCheck($(k), (v) => { S[k] = v; if (v) visibleShadow(k); refreshVisibility(); schedulePreview(); });
+  for (const k of TEXTS) $(k).addEventListener("input", () => { S[k] = $(k).value; refreshVisibility(); schedulePreview(120); });
+  $("hideMark").checked = markHidden;
+  onCheck($("hideMark"), (v) => { markHidden = v; saveJSON("gf:markHidden", v); schedulePreview(0); });
+  $("hideMove").addEventListener("click", () => { S.hideSeed = Math.floor(Math.random() * 99999) + 1; schedulePreview(0); });
+  $("randomize").addEventListener("click", randomizeAll);
+  $("undoRandom").addEventListener("click", undoRandomize);
 
   document.querySelectorAll(".swatch").forEach((el) => el.addEventListener("click", () => pickColor(el.dataset.color)));
   document.querySelectorAll(".hex").forEach((el) => el.addEventListener("change", () => {
@@ -905,15 +967,17 @@ function buildUI() {
   $("batch").addEventListener("click", runBatch);
 
   $("preset").addEventListener("change", () => applyPreset($("preset").value));
-  $("resetBtn").addEventListener("click", () => { S = freshSettings(); syncUI(); schedulePreview(0); });
+  $("resetBtn").addEventListener("click", () => applyPreset($("preset").value));
   $("savePreset").addEventListener("click", savePreset);
   $("deletePreset").addEventListener("click", deletePreset);
   $("exportPresets").addEventListener("click", exportPresets);
   $("importPresets").addEventListener("click", importPresets);
 
-  const collapsed = loadJSON("gf:collapsed", { batch: true });
+  const collapsed = loadJSON("gf:collapsed", { batch: true }), bands = new Map();
   document.querySelectorAll(".section").forEach((sec) => {
-    const k = sec.dataset.section;
+    const k = sec.dataset.section, n = bands.get(sec.parentNode) || 0;
+    bands.set(sec.parentNode, n + 1);
+    if (n % 2) sec.classList.add("alt"); // light and dark bands alternate within each tab
     const apply = () => { sec.classList.toggle("collapsed", !!collapsed[k]); sec.querySelector(".chev").textContent = collapsed[k] ? "▸" : "▾"; };
     sec.querySelector(".head").addEventListener("click", () => { collapsed[k] = !collapsed[k]; saveJSON("gf:collapsed", collapsed); apply(); });
     apply();
@@ -944,24 +1008,11 @@ async function pickColor(k) {
 
 function syncUI() {
   for (const [key, el] of Object.entries(sliderEls)) { el.input.value = String(S[key]); el.val.textContent = el.fmt(Number(S[key])); }
-  setSelect($("charset"), S.charset);
-  setSelect($("sizeMode"), S.sizeMode);
-  setSelect($("dither"), S.dither);
-  setSelect($("colorMode"), S.colorMode);
-  setSelect($("bgMode"), S.bgMode);
-  $("sortByDensity").checked = !!S.sortByDensity; if ($("sortByDensity").syncChecked) $("sortByDensity").syncChecked();
-  $("invert").checked = !!S.invert; if ($("invert").syncChecked) $("invert").syncChecked();
-  $("glitchOn").checked = !!S.glitchOn; if ($("glitchOn").syncChecked) $("glitchOn").syncChecked();
+  for (const k of SELECTS) setSelect($(k), S[k]);
+  for (const k of CHECKS) { $(k).checked = !!S[k]; if ($(k).syncChecked) $(k).syncChecked(); }
+  for (const k of TEXTS) if ($(k).value !== S[k]) $(k).value = S[k];
   $("glitchSeed").value = String(S.glitchSeed);
-  setSelect($("gSortDir"), S.gSortDir);
-  setSelect($("gChannelSwap"), S.gChannelSwap);
-  $("serpentine").checked = !!S.serpentine; if ($("serpentine").syncChecked) $("serpentine").syncChecked();
-  $("gradientMid").checked = !!S.gradientMid; if ($("gradientMid").syncChecked) $("gradientMid").syncChecked();
-  $("keepAlpha").checked = !!S.keepAlpha;
-  setSelect($("textMode"), S.textMode);
-  for (const k of ["phraseShade", "phraseWrap"]) { $(k).checked = !!S[k]; if ($(k).syncChecked) $(k).syncChecked(); }
-  for (const k of ["dropOn", "longOn", "offOn", "glowOn", "glowTextColor"]) { $(k).checked = !!S[k]; if ($(k).syncChecked) $(k).syncChecked(); } if ($("keepAlpha").syncChecked) $("keepAlpha").syncChecked();
-  if ($("customChars").value !== S.customChars) $("customChars").value = S.customChars;
+  $("undoRandom").disabled = !undoStack.length;
   if (allFonts.length) fillFontSelect();
   document.querySelectorAll(".swatch").forEach((el) => { el.style.backgroundColor = getColor(el.dataset.color); });
   document.querySelectorAll(".hex").forEach((el) => { el.value = getColor(el.dataset.hex); });
@@ -969,17 +1020,23 @@ function syncUI() {
 }
 function refreshVisibility() {
   const show = (el, on) => el.classList.toggle("hidden", !on);
-  show($("customRow"), S.charset === "custom");
   const custom = S.charset === "custom", mode = custom ? S.textMode : "ramp";
+  show($("customRows"), custom);
+  show($("hideRow"), custom && Engine.parseCustom(S.customChars).messages.length > 0);
   show($("textModeRows"), custom);
   show($("phraseRows"), mode === "phrase");
   show($("sortRow"), mode === "ramp");
+  show($("shapeRows"), mode === "ramp"); // words and phrases are placed by tone and position only
   show($("sortHint"), mode === "ramp" && !S.sortByDensity);
   $("textModeHint").textContent = TEXT_MODE_HINTS[mode] || "";
   show(sliderEls.size.row, S.sizeMode === "px");
   show(sliderEls.columns.row, S.sizeMode === "cols");
   show($("fgRow"), S.colorMode === "mono");
   show($("gradRows"), S.colorMode === "gradient");
+  for (const id of ["gradMidSwatch", "gradMidHex"]) $(id).style.opacity = S.gradientMid ? "" : "0.35";
+  show($("outlineRows"), !!S.outlineOn);
+  show($("outlineCharsRow"), S.outlineStyle === "chars");
+  show($("outlineFillRow"), S.outlineFill === "chars" || S.outlineFill === "random");
   show($("origRows"), S.colorMode === "original");
   show($("bgRow"), S.bgMode !== "transparent");
   show($("keepAlphaRow"), S.bgMode !== "transparent");
@@ -1081,15 +1138,16 @@ function onCheck(el, fn) {
 // UXP panels don't scroll on their own: give the settings area an explicit height
 // (panel height minus the pinned preview block) whenever the panel size changes.
 let lastH = -1, lastTop = -1;
-// The preview box has a fixed height, so a new preview image (which has no size for a moment while it
-// loads) can't shrink the top area and make the settings jump. Styles are only written when they change.
+// The preview box has a fixed height (a share of the panel the viewer keeps; it can also be hidden), so a new
+// preview image (which has no size for a moment while it loads) can't shrink the top area and make the
+// settings jump. Styles are only written when they change.
 function fitLayout(force) {
   const H = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0;
   if (!H) return;
   const isInk = tab === "ink", top = $(isInk ? "inkTop" : "top");
   const setH = (el, prop, px) => { const v = px + "px"; if (el.style[prop] !== v) el.style[prop] = v; };
-  const pv = Math.max(70, Math.round(H * 0.38));
-  setH($(isInk ? "inkPreviewWrap" : "previewWrap"), "height", pv);
+  const v = isInk ? ink && ink.viewer : viewer;
+  if (v) v.layout(H);
   if (!force && H === lastH && top.offsetHeight === lastTop) return;
   lastH = H; lastTop = top.offsetHeight;
   setH($(isInk ? "inkScroller" : "scroller"), "height", Math.max(60, H - ($("tabs").offsetHeight || 0) - top.offsetHeight));

@@ -17,7 +17,7 @@
   .row > * { margin-right: 4px; }
   .row > *:last-child { margin-right: 0; }
   .grow { flex: 1 1 auto; }
-  .label { width: 74px; flex: 0 0 74px; opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .label { width: 88px; flex: 0 0 88px; opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .val { width: 36px; flex: 0 0 36px; text-align: right; font-variant-numeric: tabular-nums; opacity: 0.85; }
   .dd { display: flex; flex-direction: column; min-width: 0; }
   .ddBtn { display: flex; flex-direction: row; align-items: center; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; padding: 3px 6px; cursor: pointer; background: rgba(128, 128, 128, 0.1); }
@@ -34,13 +34,19 @@
   .sthumb { position: absolute; top: -5px; width: 12px; height: 12px; margin-left: -6px; border-radius: 6px; background: #e6e6e6; border: 1px solid rgba(0, 0, 0, 0.4); }
   select, input[type=text], textarea { flex: 1 1 auto; font-size: 11px; }
   textarea { height: 44px; font-family: Menlo, monospace; }
-  .section { border-top: 1px solid var(--uxp-host-border-color); padding-top: 6px; margin-top: 4px; }
+  /* sections run edge to edge in alternating bands (.alt is set in main.js), so you can see where each ends */
+  .section { border-top: 1px solid var(--uxp-host-border-color); margin: 0 -8px; padding: 6px 8px 4px 8px; background: rgba(255, 255, 255, 0.06); }
+  .section.alt { background: rgba(0, 0, 0, 0.2); }
   .head { display: flex; flex-direction: row; align-items: center; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; font-size: 10px; padding: 3px 0 6px 0; cursor: pointer; }
   .head .chev { margin-right: 6px; width: 10px; opacity: 0.7; }
   .collapsed .body { display: none; }
-  #previewWrap, #inkPreviewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; min-height: 80px; position: relative; overflow: hidden; }
+  #previewWrap, #inkPreviewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+  #previewWrap.hidden, #inkPreviewWrap.hidden { display: none; }
+  .zoomBar .ztoggle.grow { flex: 1 1 auto; }
+  .pvGrip { height: 9px; cursor: ns-resize; display: flex; align-items: center; justify-content: center; }
+  .pvGrip > div { width: 40px; height: 3px; border-radius: 2px; background: rgba(128, 128, 128, 0.6); }
   #preview, #inkPreview { position: absolute; left: 0; top: 0; max-width: none; cursor: grab; }
-  .zoomBar { margin: 4px 0 0 0; }
+  .zoomBar { margin: 0; }
   .zoomBar .zlabel { width: 40px; flex: 0 0 40px; cursor: pointer; }
   #previewMsg, #inkPreviewMsg { position: absolute; padding: 12px; text-align: center; color: #bbb; }
   #status, #inkStatus { font-size: 10px; opacity: 0.75; height: 26px; overflow: hidden; margin: 4px 0; }
@@ -65,6 +71,9 @@
   .btnrow { flex-wrap: wrap; }
   .btnrow button { flex: 1 1 auto; margin-bottom: 4px; }
   .zbtn { flex: 0 0 auto; min-width: 30px; }
+  .row > label { display: flex; flex-direction: row; align-items: center; }
+  .row > label > input[type=checkbox] { margin: 0 6px 0 0; flex: 0 0 auto; }
+  .sub { margin: 0 0 6px 4px; padding-left: 8px; border-left: 1px solid var(--uxp-host-border-color); }
 
 </style>
 </head>
@@ -73,6 +82,7 @@
  <div id="asciiTool" class="tool">
  <div id="top">
   <div id="previewWrap"><img id="preview" alt=""><div id="previewMsg">Open a document to begin</div></div>
+  <div class="pvGrip" id="previewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
   <div class="row zoomBar" id="zoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
   <div class="row btnrow" style="margin-top:5px">
     <button id="liveBtn" title="Places the result as a smart object in your document and opens its contents. Edits update it live; Save & close puts the final result into your document.">Open live smart object</button>
@@ -107,7 +117,8 @@
   <div class="section" data-section="look">
     <div class="head"><span class="chev">▾</span>Look</div>
     <div class="body">
-      <div class="row"><select id="preset" class="grow"></select><button id="resetBtn" title="Reset to defaults">Reset</button></div>
+      <div class="row"><select id="preset" class="grow"></select><button id="resetBtn" title="Back to the chosen look, without your changes">Reset</button></div>
+      <div class="row"><button id="randomize" class="grow" title="A random look: characters, size, tone, colours, background, sometimes shadows or glitch. Your font and custom text stay.">Randomize</button><button id="undoRandom" class="zbtn" title="Back to the settings before the last Randomize" disabled>↶</button></div>
       <div class="row"><input type="text" id="presetName" placeholder="Preset name"><button id="savePreset">Save</button><button id="deletePreset" title="Delete selected user preset">Delete</button></div>
       <div class="row btnrow"><button id="exportPresets">Export presets…</button><button id="importPresets">Import…</button></div>
     </div>
@@ -123,7 +134,11 @@
         <div id="fontList"></div>
       </div>
       <p class="hint" id="fontHint">Any installed font works, including your own. Photoshop draws its characters once (a few seconds), then they're cached.</p>
-      <div class="row" id="customRow"><textarea id="customChars" placeholder="Characters, words or a phrase, e.g.  .:-=+*#%@"></textarea></div>
+      <div id="customRows">
+        <p class="hint">Hide a message in the picture: put it in curly braces, e.g. <b>{HELLO}</b>. <b>{XO*5}</b> hides it 5 times.</p>
+        <div class="row"><textarea id="customChars" placeholder="Characters, words or a phrase, e.g.  .:-=+*#%@  {HELLO}"></textarea></div>
+        <div class="row" id="hideRow"><label class="grow"><input type="checkbox" id="hideMark"> Highlight messages in the preview</label><button id="hideMove" title="Put the hidden messages somewhere else">Move</button></div>
+      </div>
       <div id="textModeRows">
         <div class="row"><span class="label">Use the text</span><select id="textMode" class="grow">
           <option value="ramp">As a brightness ramp</option>
@@ -138,8 +153,28 @@
       </div>
       <div class="row" id="sortRow"><label><input type="checkbox" id="sortByDensity"> Sort by density</label></div>
       <p class="hint" id="sortHint">Off = your order is the ramp, light → dark ink, and every character gets an equal share.</p>
-      <div id="sl-detail"></div>
-      <p class="hint">Shape matching picks characters that follow edges, not just brightness. Best with Blocks, Braille and Lines.</p>
+      <div id="shapeRows">
+        <div id="sl-detail"></div>
+        <p class="hint">Shape matching picks characters that follow edges, not just brightness. Best with Blocks, Braille and Lines.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" data-section="outline">
+    <div class="head"><span class="chev">▾</span>Outline</div>
+    <div class="body">
+      <div class="row"><label><input type="checkbox" id="outlineOn"> Outline shapes (text, logos)</label></div>
+      <div id="outlineRows" class="sub">
+        <div id="sl-outlineLevel"></div>
+        <div id="sl-outlineWidth"></div>
+        <div class="row"><span class="label">Position</span><select id="outlinePos" class="grow"><option value="outside">Outside</option><option value="center">Centre</option><option value="inside">Inside</option></select></div>
+        <div class="row"><span class="label">Stroke</span><select id="outlineStyle" class="grow"><option value="lines">Lines along the edge  | / - \</option><option value="chars">Your characters</option></select></div>
+        <div class="row" id="outlineCharsRow"><span class="label">Characters</span><input type="text" id="outlineChars"></div>
+        <div class="row"><span class="label">Colour</span><div class="swatch" data-color="outlineColor"></div><input type="text" class="hex" data-hex="outlineColor"></div>
+        <div class="row"><span class="label">Inside</span><select id="outlineFill" class="grow"><option value="image">The image</option><option value="none">Empty</option><option value="chars">Your characters, in order</option><option value="random">Your characters, random</option></select></div>
+        <div class="row" id="outlineFillRow"><span class="label">Characters</span><input type="text" id="outlineFillChars"></div>
+        <p class="hint">The shape is where characters are drawn (Tone ▸ Invert swaps it). Shape at: how dark a cell must be to belong to it. The inside follows the Colour settings.</p>
+      </div>
     </div>
   </div>
 
@@ -203,7 +238,7 @@
       <div class="row" id="fgRow"><span class="label">Colour</span><div class="swatch" data-color="fg"></div><input type="text" class="hex" data-hex="fg"><button id="useFg" title="Use Photoshop foreground colour">FG</button></div>
       <div id="gradRows">
         <div class="row"><span class="label">Shadows</span><div class="swatch" data-color="g0"></div><input type="text" class="hex" data-hex="g0"></div>
-        <div class="row"><span class="label"><input type="checkbox" id="gradientMid"> Mid</span><div class="swatch" data-color="g1"></div><input type="text" class="hex" data-hex="g1"></div>
+        <div class="row"><span class="label">Midtones</span><div class="swatch" data-color="g1" id="gradMidSwatch"></div><input type="text" class="hex" data-hex="g1" id="gradMidHex"><label title="Off: the gradient runs straight from Shadows to Highlights"><input type="checkbox" id="gradientMid"> Use</label></div>
         <div class="row"><span class="label">Highlights</span><div class="swatch" data-color="g2"></div><input type="text" class="hex" data-hex="g2"></div>
       </div>
       <div id="origRows"><div id="sl-saturation"></div><div id="sl-colorBoost"></div></div>
@@ -215,7 +250,7 @@
       <div class="row" id="bgRow"><span class="label">Colour</span><div class="swatch" data-color="bg"></div><input type="text" class="hex" data-hex="bg"><button id="useBg" title="Use Photoshop background colour">BG</button></div>
       <div id="sl-mosaicAmount"></div>
       <div id="sl-bgOpacity"></div>
-      <p class="hint" id="bgHint">Opacity 0% leaves only the characters. Follow the image's shape: for cut-outs (a PNG without background), the background takes the image's outline instead of filling the canvas.</p>
+      <p class="hint" id="bgHint">Opacity 0% leaves only the characters. Follow the image's shape keeps cut-outs (PNGs without background) cut out instead of filling the canvas.</p>
     </div>
   </div>
 
@@ -223,27 +258,27 @@
     <div class="head"><span class="chev">▾</span>Shadows</div>
     <div class="body">
       <div class="row"><label><input type="checkbox" id="dropOn"> Drop shadow</label></div>
-      <div id="dropRows">
+      <div id="dropRows" class="sub">
         <div class="row"><span class="label">Colour</span><div class="swatch" data-color="dropColor"></div><input type="text" class="hex" data-hex="dropColor"></div>
         <div id="sl-dropOpacity"></div>
         <div id="sl-dropDistance"></div>
         <div id="sl-dropSize"></div>
       </div>
       <div class="row"><label><input type="checkbox" id="longOn"> Long shadow</label></div>
-      <div id="longRows">
+      <div id="longRows" class="sub">
         <div class="row"><span class="label">Colour</span><div class="swatch" data-color="longColor"></div><input type="text" class="hex" data-hex="longColor"></div>
         <div id="sl-longOpacity"></div>
         <div id="sl-longLength"></div>
         <div id="sl-longFade"></div>
       </div>
       <div class="row"><label><input type="checkbox" id="offOn"> Offset shadow</label></div>
-      <div id="offRows">
+      <div id="offRows" class="sub">
         <div class="row"><span class="label">Colour</span><div class="swatch" data-color="offColor"></div><input type="text" class="hex" data-hex="offColor"></div>
         <div id="sl-offOpacity"></div>
         <div id="sl-offDistance"></div>
       </div>
       <div class="row"><label><input type="checkbox" id="glowOn"> Glow</label></div>
-      <div id="glowRows">
+      <div id="glowRows" class="sub">
         <div class="row"><label><input type="checkbox" id="glowTextColor"> Use the characters' colours</label></div>
         <div class="row" id="glowColorRow"><span class="label">Colour</span><div class="swatch" data-color="glowColor"></div><input type="text" class="hex" data-hex="glowColor"></div>
         <div id="sl-glowOpacity"></div>
@@ -257,7 +292,7 @@
   <div class="section" data-section="glitch">
     <div class="head"><span class="chev">▾</span>Glitch</div>
     <div class="body">
-      <div class="row"><label class="grow"><input type="checkbox" id="glitchOn"> Enable glitch</label><button id="glitchRandom" title="Random glitch recipe">Randomize</button></div>
+      <div class="row"><label class="grow"><input type="checkbox" id="glitchOn"> Enable glitch</label><button id="glitchRandom" title="A random mix of glitch effects (the rest of the look stays)">Random glitch</button></div>
       <div id="glitchBody">
         <div class="row"><span class="label">Seed</span><input type="text" id="glitchSeed" style="width:60px;flex:0 0 60px"><button id="glitchReseed" title="New random seed">New seed</button><button id="glitchReset" title="Set all glitch effects to 0">Clear</button></div>
         <p class="hint">The seed fixes the random pattern, so the preview, the applied layer and batch output all match.</p>
@@ -317,6 +352,7 @@
  <div id="inkTool" class="tool hidden">
  <div id="inkTop">
   <div id="inkPreviewWrap"><img id="inkPreview" alt=""><div id="inkPreviewMsg">Select a layer to begin</div></div>
+  <div class="pvGrip" id="inkPreviewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
   <div class="row zoomBar" id="inkZoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
   <div class="row">
     <select id="inkSource" class="grow">

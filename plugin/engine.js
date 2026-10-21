@@ -61,6 +61,11 @@ const DEFAULTS = {
   longOn: false, longColor: "#000000", longOpacity: 0.4, longLength: 1.5, longFade: 1,
   offOn: false, offColor: "#ff2a6d", offOpacity: 1, offDistance: 0.12,
   glowOn: false, glowTextColor: true, glowColor: "#ffffff", glowOpacity: 0.8, glowSize: 0.4,
+  // outline for hard-edged shapes (text, logos); see applyOutline
+  outlineOn: false, outlineLevel: 0.5, outlineWidth: 1, outlinePos: "outside", // outside | center | inside
+  outlineStyle: "lines", outlineChars: "#", outlineColor: "#ff2a6d", // lines (follow the edge) | chars
+  outlineFill: "image", outlineFillChars: ".", // image | none | chars (in order) | random (your characters, shuffled)
+  hideSeed: 1, // where hidden {messages} go
   // glitch (everything is inert unless glitchOn is true)
   glitchOn: false,
   glitchSeed: 1,
@@ -97,7 +102,12 @@ function prepareAtlas(meta, bytes) {
 }
 
 // ---------- charset ----------
-function buildCharset(atlas, str, sortByDensity) {
+// The tone ramp is built from `str`. opts.extra: characters (outline, fill, hidden messages) that are drawable
+// but never picked by tone; they come after the ramp, so n, level, vec and lut only cover the ramp.
+// opts.spread: see MAX_FIRST.
+const MAX_FIRST = 0.25; // highest tone level of the lightest visible character in a spread, density-sorted ramp
+function buildCharset(atlas, str, sortByDensity, opts) {
+  const extra = (opts && opts.extra) || "";
   const seen = new Set(), list = [];
   for (const ch of Array.from(str || "")) {
     if (ch === "\n" || ch === "\r" || ch === "\t" || seen.has(ch)) continue;
@@ -108,14 +118,26 @@ function buildCharset(atlas, str, sortByDensity) {
   if (list.length === 0) list.push(atlas.index.get(" "), atlas.index.get("#"));
   if (sortByDensity !== false) list.sort((a, b) => atlas.cov[a] - atlas.cov[b]);
   const n = list.length;
-  const glyphs = Int32Array.from(list);
-  const cov = new Float32Array(n), level = new Float32Array(n), vec = new Float32Array(n * 9);
+  for (const ch of new Set(Array.from(extra))) {
+    const g = atlas.index.get(ch);
+    if (g !== undefined && !list.includes(g)) list.push(g);
+  }
+  const glyphs = Int32Array.from(list), all = list.length;
+  const cov = new Float32Array(all), level = new Float32Array(n), vec = new Float32Array(n * 9);
   let mn = Infinity, mx = -Infinity;
-  for (let i = 0; i < n; i++) { cov[i] = atlas.cov[glyphs[i]]; mn = Math.min(mn, cov[i]); mx = Math.max(mx, cov[i]); }
+  for (let i = 0; i < all; i++) cov[i] = atlas.cov[glyphs[i]];
+  for (let i = 0; i < n; i++) { mn = Math.min(mn, cov[i]); mx = Math.max(mx, cov[i]); }
   const span = mx - mn > 1e-6 ? mx - mn : 1;
   for (let i = 0; i < n; i++) {
     level[i] = sortByDensity !== false ? (cov[i] - mn) / span : n > 1 ? i / (n - 1) : 1;
     for (let k = 0; k < 9; k++) vec[i * 9 + k] = Math.max(0, (atlas.vec[glyphs[i] * 9 + k] - mn) / span);
+  }
+  // When even the lightest visible character carries a lot of ink (digits, letters, 01), it would take every
+  // mid tone on its own. Move it down to MAX_FIRST and spread the others over the range that frees up.
+  // Not when dithering: error diffusion needs the true densities and mixes the characters by itself.
+  const l1 = level[1];
+  if (opts && opts.spread && sortByDensity !== false && n > 2 && l1 > MAX_FIRST) {
+    for (let i = 1; i < n; i++) level[i] = MAX_FIRST + (1 - MAX_FIRST) * (l1 < 1 - 1e-6 ? (level[i] - l1) / (1 - l1) : (i - 1) / (n - 2));
   }
   const lut = new Uint16Array(256);
   for (let v = 0; v < 256; v++) {
@@ -126,6 +148,32 @@ function buildCharset(atlas, str, sortByDensity) {
   const chars = Array.from(glyphs, (g) => atlas.chars[g]), charIndex = new Map();
   chars.forEach((ch, i) => { if (!charIndex.has(ch)) charIndex.set(ch, i); });
   return { n, glyphs, cov, level, vec, lut, chars, charIndex };
+}
+
+// Custom text syntax: {message} hides "message" once somewhere in the picture, {message*5} five times.
+// Everything outside the braces is the ramp, words or phrase as usual; "{}" stays two plain characters.
+function parseCustom(str) {
+  const messages = [];
+  const text = String(str || "").replace(/\{([^{}]+)\}/g, (all, body) => {
+    const m = body.match(/^([\s\S]*?)\*(\d+)$/), t = (m ? m[1] : body).replace(/\s+/g, " ").trim();
+    if (!t) return all;
+    messages.push({ text: t, count: m ? Math.min(99, Math.max(1, Number(m[2]))) : 1 });
+    return "";
+  });
+  return { text, messages };
+}
+
+const OUTLINE_LINES = "|/-\\"; // edge lines by direction: vertical, rising, horizontal, falling
+// The characters the settings draw with: the ramp (custom text without its hidden messages) and the extras.
+function charsetParts(s, presetChars) {
+  const custom = s.charset === "custom" ? parseCustom(s.customChars) : null;
+  let extra = custom ? custom.messages.map((m) => m.text).join("") : "";
+  if (s.outlineOn) extra += (s.outlineStyle === "chars" ? s.outlineChars : OUTLINE_LINES) + (s.outlineFill === "chars" || s.outlineFill === "random" ? s.outlineFillChars : "");
+  return { ramp: custom ? custom.text : presetChars, extra, spread: s.dither === "none" };
+}
+function charsetOf(atlas, s, presetChars) {
+  const p = charsetParts(s, presetChars);
+  return buildCharset(atlas, p.ramp, s.sortByDensity, p);
 }
 
 // ---------- geometry ----------
@@ -202,6 +250,8 @@ function computeGrid(src, geo, s, cs) {
     }
   }
   const grid = selectGlyphs({ cols, rows, ink, sub, rgb, alpha, geo }, s, cs);
+  if (s.outlineOn) applyOutline(grid, s, cs);
+  if (s.charset === "custom") hideMessages(grid, s, cs, parseCustom(s.customChars).messages);
   return s.glitchOn ? glitchGrid(grid, cs, s) : grid;
 }
 
@@ -265,26 +315,33 @@ function gradientAt(stops, t) {
 //           ink, they split the tones evenly; left to right, each spot gets the word that matches its cells.
 //   phrase: the text written out over and over in reading order; light cells stay empty and (phraseShade)
 //           letters fade with the image.
+const charAt = (cs, ch) => (cs.charIndex.has(ch) ? cs.charIndex.get(ch) : -1);
+// Text as glyph indices (line breaks become spaces; characters the charset lacks are dropped).
+const glyphSeq = (cs, text) => Array.from(String(text || "").replace(/[\r\t]/g, "").replace(/\n+/g, " ")).map((ch) => charAt(cs, ch)).filter((i) => i >= 0);
+// Writes `seq` into the cells `pick` accepts, in reading order, over and over. wrap off: every row starts it again.
+function writeSeq(glyph, cols, rows, seq, pick, wrap) {
+  let k = 0;
+  for (let r = 0; r < rows; r++) {
+    if (!wrap) k = 0;
+    for (let c = 0; c < cols && seq.length; c++) { const ci = r * cols + c; if (pick(ci)) glyph[ci] = seq[k++ % seq.length]; }
+  }
+}
+
 function selectText(g, s, cs) {
   const { cols, rows, ink } = g, cells = cols * rows, glyph = new Int16Array(cells).fill(-1);
-  const at = (ch) => (cs.charIndex.has(ch) ? cs.charIndex.get(ch) : -1);
+  const text = parseCustom(s.customChars).text;
   let shade = null;
   if (s.textMode === "phrase") {
-    const seq = Array.from(String(s.customChars || "").replace(/[\r\t]/g, "").replace(/\n+/g, " ")).map(at).filter((i) => i >= 0);
     const thr = Math.max(s.threshold, 0.04);
     if (s.phraseShade) shade = new Float32Array(cells);
-    let k = 0;
-    for (let r = 0; r < rows; r++) {
-      if (!s.phraseWrap) k = 0;
-      for (let c = 0; c < cols && seq.length; c++) {
-        const ci = r * cols + c, v = ink[ci];
-        if (v <= thr) continue;
-        glyph[ci] = seq[k++ % seq.length];
-        if (shade) shade[ci] = Math.pow(clamp01(v * 1.1), 0.8);
-      }
-    }
+    writeSeq(glyph, cols, rows, glyphSeq(cs, text), (ci) => {
+      if (ink[ci] <= thr) return false;
+      if (shade) shade[ci] = Math.pow(clamp01(ink[ci] * 1.1), 0.8);
+      return true;
+    }, s.phraseWrap);
   } else {
-    const words = Array.from(new Set(String(s.customChars || "").split(/\s+/).filter(Boolean)))
+    const at = (ch) => charAt(cs, ch);
+    const words = Array.from(new Set(text.split(/\s+/).filter(Boolean)))
       .map((w) => Array.from(w).map(at).filter((i) => i >= 0)).filter((w) => w.length)
       .map((w) => ({ w, d: w.reduce((a, i) => a + cs.cov[i], 0) / w.length }))
       .sort((a, b) => a.d - b.d);
@@ -365,6 +422,94 @@ function selectGlyphs(g, s, cs) {
   }
 
   return { cols, rows, geo: g.geo, glyph, color: cellColors(g, s), rgb, alpha, ink };
+}
+
+// ---------- outline ----------
+// For text, logos and other hard-edged shapes: cells with more ink than outlineLevel are the shape. A band
+// outlineWidth cells wide along its edge (outside, centred or inside) becomes the stroke, drawn with lines
+// that follow the edge or with your characters, in its own colour. The inside keeps the image, is emptied,
+// or is filled with your characters, in order or picked at random per cell (hashed from its position).
+function applyOutline(grid, s, cs) {
+  const { cols, rows, glyph, ink, color } = grid, cells = cols * rows, lvl = s.outlineLevel;
+  const inside = new Uint8Array(cells);
+  let nIn = 0;
+  for (let i = 0; i < cells; i++) if (ink[i] > lvl) { inside[i] = 1; nIn++; }
+  if (!nIn || nIn === cells) return;
+  // distance in cells (8 neighbours) to the nearest cell on the other side of the edge
+  const distTo = (want) => {
+    const D = new Float32Array(cells);
+    for (let i = 0; i < cells; i++) D[i] = inside[i] === want ? 0 : 1e9;
+    const relax = (r, c, dr, dc) => { const y = r + dr, x = c + dc; if (y >= 0 && y < rows && x >= 0 && x < cols) { const i = r * cols + c, v = D[y * cols + x] + 1; if (v < D[i]) D[i] = v; } };
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { relax(r, c, -1, -1); relax(r, c, -1, 0); relax(r, c, -1, 1); relax(r, c, 0, -1); }
+    for (let r = rows - 1; r >= 0; r--) for (let c = cols - 1; c >= 0; c--) { relax(r, c, 1, 1); relax(r, c, 1, 0); relax(r, c, 1, -1); relax(r, c, 0, 1); }
+    return D;
+  };
+  const dIn = distTo(1), dOut = distTo(0), w = Math.max(1, Math.round(s.outlineWidth));
+  const [wo, wi] = s.outlinePos === "inside" ? [0, w] : s.outlinePos === "center" ? [Math.ceil(w / 2), Math.floor(w / 2)] : [w, 0];
+  const stroke = new Uint8Array(cells);
+  for (let i = 0; i < cells; i++) stroke[i] = inside[i] ? dOut[i] <= wi : dIn[i] <= wo;
+  if (s.outlineStyle === "chars") writeSeq(glyph, cols, rows, glyphSeq(cs, s.outlineChars), (i) => stroke[i], true);
+  else {
+    // the line runs across the gradient of the signed distance (positive outside the shape)
+    const lines = Array.from(OUTLINE_LINES, (ch) => charAt(cs, ch));
+    const sd = (r, c) => { const i = Math.min(rows - 1, Math.max(0, r)) * cols + Math.min(cols - 1, Math.max(0, c)); return dIn[i] - dOut[i]; };
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      if (!stroke[r * cols + c]) continue;
+      const gx = sd(r - 1, c + 1) + 2 * sd(r, c + 1) + sd(r + 1, c + 1) - sd(r - 1, c - 1) - 2 * sd(r, c - 1) - sd(r + 1, c - 1);
+      const gy = sd(r + 1, c - 1) + 2 * sd(r + 1, c) + sd(r + 1, c + 1) - sd(r - 1, c - 1) - 2 * sd(r - 1, c) - sd(r - 1, c + 1);
+      const a = gx || gy ? Math.atan2(gy, gx) : Math.PI / 2;
+      glyph[r * cols + c] = lines[Math.round((((a % Math.PI) + Math.PI) % Math.PI) / (Math.PI / 4)) % 4];
+    }
+  }
+  const fill = (i) => inside[i] && !stroke[i], typed = s.outlineFill === "chars" || s.outlineFill === "random";
+  if (s.outlineFill === "none") for (let i = 0; i < cells; i++) { if (fill(i)) glyph[i] = -1; }
+  else if (s.outlineFill === "chars") writeSeq(glyph, cols, rows, glyphSeq(cs, s.outlineFillChars), fill, true);
+  else if (s.outlineFill === "random") {
+    const seq = glyphSeq(cs, s.outlineFillChars);
+    if (seq.length) for (let i = 0; i < cells; i++) if (fill(i)) glyph[i] = seq[Math.floor(hash3(57, i % cols, Math.floor(i / cols)) * seq.length)];
+  }
+  const sc = hexToRgb(s.outlineColor);
+  for (let i = 0; i < cells; i++) {
+    if (stroke[i]) color.set(sc, i * 3);
+    if (grid.shade && (stroke[i] || (fill(i) && typed))) grid.shade[i] = 1;
+  }
+}
+
+// ---------- hidden messages ----------
+// Each message is written left to right into one row, replacing the characters there, at a spot picked from
+// the seed (hideSeed). A spot is taken when all its cells are clearly inked, so the message blends in, and
+// keeps a cell clear of other messages. grid.hidden marks the cells (the preview can highlight them).
+function hideMessages(grid, s, cs, messages) {
+  if (!messages.length) return;
+  const { cols, rows, glyph, ink } = grid, hidden = new Uint8Array(cols * rows), seed = (s.hideSeed | 0) + 101;
+  const minInk = Math.max(0.2, s.threshold + 0.1);
+  let placed = 0, n = 0;
+  for (const m of messages) {
+    const seq = Array.from(m.text, (ch) => (ch === " " ? -1 : charAt(cs, ch))), len = Math.min(seq.length, cols);
+    for (let k = 0; k < m.count; k++, n++) {
+      let best = null, bestInk = -1;
+      for (let t = 0; t < 400; t++) {
+        const r = Math.floor(hash3(seed, n, t * 2) * rows), c = Math.floor(hash3(seed, n, t * 2 + 1) * (cols - len + 1));
+        let free = true, sum = 0, low = 0;
+        for (let j = -1; j <= len && free; j++) { const x = c + j; if (x >= 0 && x < cols && hidden[r * cols + x]) free = false; }
+        if (!free) continue;
+        for (let j = 0; j < len; j++) { const v = ink[r * cols + c + j]; sum += v; if (v < minInk) low++; }
+        if (!low) { best = [r, c]; break; }
+        if (sum > bestInk) { bestInk = sum; best = [r, c]; }
+      }
+      if (!best) continue;
+      const [r, c] = best;
+      for (let j = 0; j < len; j++) {
+        const ci = r * cols + c + j;
+        glyph[ci] = seq[j];
+        hidden[ci] = 1;
+        if (grid.shade) grid.shade[ci] = Math.max(grid.shade[ci], 0.6);
+      }
+      placed++;
+    }
+  }
+  grid.hidden = hidden;
+  grid.hiddenPlaced = placed;
 }
 
 // Glyph colour per cell: one colour, the image's own colours, or a gradient map of the ink.
@@ -689,12 +834,18 @@ function renderWithShadows(grid, cs, atlas, s, view) {
   return new Uint8Array(out.buffer);
 }
 
+const MARK_RGB = [0, 230, 255];
 // view: {x, y} top-left in document px, {w, h} output px, scale = output px per document px.
 // Returns straight-alpha RGBA Uint8Array.
 function render(grid, cs, atlas, s, view) {
   if (hasShadow(s)) return renderWithShadows(grid, cs, atlas, s, view);
   const noGlyphs = !!s._noGlyphs; // background only (shadows are stacked between it and the characters)
-  const { cols, rows, geo, glyph, color, rgb, alpha, shade } = grid;
+  const { cols, rows, geo, glyph, rgb, alpha, shade } = grid;
+  let color = grid.color;
+  if (s._markHidden && grid.hidden) { // preview only: hidden messages in a signal colour
+    color = Uint8Array.from(color);
+    grid.hidden.forEach((h, ci) => { if (h) color.set(MARK_RGB, ci * 3); });
+  }
   const sc = view.scale, W = view.w, H = view.h;
   const out = new Uint8ClampedArray(W * H * 4);
   const bg = hexToRgb(s.bg), op = clamp01(s.glyphOpacity);
@@ -863,5 +1014,5 @@ function toSVG(grid, cs, s) {
   return parts.join("\n");
 }
 
-const Engine = { DIFFUSION, ORDERED, resampleGlyph, DEFAULTS, prepareAtlas, buildCharset, computeGeometry, computeGrid, render, flattenForPreview, gridLines, toText, toHTML, toSVG, hexToRgb, rgbToHex, luma };
+const Engine = { DIFFUSION, ORDERED, resampleGlyph, DEFAULTS, prepareAtlas, buildCharset, parseCustom, charsetParts, charsetOf, computeGeometry, computeGrid, render, flattenForPreview, gridLines, toText, toHTML, toSVG, hexToRgb, rgbToHex, luma };
 if (typeof module !== "undefined") module.exports = Engine;

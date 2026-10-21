@@ -3,15 +3,22 @@
 // When zoomed in, the visible area is rendered first (quick), then the area around it (3 × 3 views) in the
 // background, so dragging just slides an image that's already there. A new render is only needed when the
 // view reaches the edge of what's rendered, or when refresh() says the settings changed.
+// The preview's height is a share of the panel (drag the grip under it), and it can be hidden: then nothing
+// is rendered until it's shown again. Both are remembered per tab.
 "use strict";
 const { imaging } = require("photoshop");
-const { makeSlider, SLIDER_HTML } = require("./slider.js");
+const { makeSlider, trackDrag, SLIDER_HTML } = require("./slider.js");
 
 const MAX_ZOOM = 4; // 400%
+const SIZE_MIN = 0.1, SIZE_MAX = 0.8, MIN_PX = 60; // preview height: share of the panel height
 
-function createViewer({ wrap, img, msg, bar, storeKey, render, docSize, onError }) {
-  let zoomT = 0; // slider position: 0 = Fit, 1 = 400%, logarithmic in between
-  try { const v = JSON.parse(localStorage.getItem(storeKey)); zoomT = typeof v === "number" ? Math.max(0, Math.min(1, v)) : 0; } catch (e) { zoomT = 0; }
+function load(key, d) { try { const v = JSON.parse(localStorage.getItem(key)); return v === null ? d : v; } catch (e) { return d; } }
+function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) { /* not saved */ } }
+
+function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, onError, onLayout }) {
+  let zoomT = Math.max(0, Math.min(1, Number(load(storeKey, 0)) || 0)); // slider position: 0 = Fit, 1 = 400%, logarithmic in between
+  let sizeK = Math.max(SIZE_MIN, Math.min(SIZE_MAX, Number(load(storeKey + ":size", 0.38)) || 0.38));
+  let hidden = !!load(storeKey + ":hidden", false), panelH = 0, dirty = true;
   let centre = null; // document px at the middle of the view
   let shown = null; // what the image holds: {x, y, w, h} document px, z, gen
   let pending = null; // the same for an image that is still loading (the old one stays in place until then)
@@ -103,7 +110,7 @@ function createViewer({ wrap, img, msg, bar, storeKey, render, docSize, onError 
   }
   function setZoom(t, at, settle) {
     zoomT = Math.max(0, Math.min(1, t));
-    try { localStorage.setItem(storeKey, JSON.stringify(zoomT)); } catch (e) { /* not saved */ }
+    save(storeKey, zoomT);
     if (at) centre = at;
     const d = docSize();
     if (d && centre) clampCentre(d, box(), scaleFor(d, box()));
@@ -114,30 +121,66 @@ function createViewer({ wrap, img, msg, bar, storeKey, render, docSize, onError 
     if (settle) { zTimer = setTimeout(() => pump(), settle); return Promise.resolve(); }
     return pump();
   }
+  let toggle = null;
   if (bar) {
-    bar.innerHTML = `<span class="label zlabel" title="Double-click for Fit">Zoom</span>${SLIDER_HTML}<span class="val zval"></span>`;
+    bar.innerHTML = `<span class="label zlabel" title="Double-click for Fit">Zoom</span>${SLIDER_HTML}<span class="val zval"></span><button class="zbtn ztoggle"></button>`;
     zval = bar.querySelector(".zval");
     slider = makeSlider(bar.querySelector(".slider"), 0, 1, 0.001, (t) => setZoom(t, null, 220));
     slider.value = zoomT;
     bar.querySelector(".zlabel").addEventListener("dblclick", () => setZoom(0));
+    toggle = bar.querySelector(".ztoggle");
+    toggle.addEventListener("click", () => setHidden(!hidden));
     label();
   }
 
-  let drag = null, usePointer = false;
-  const down = (e, isPointer) => {
-    if (isPointer) usePointer = true; else if (usePointer) return;
-    if (!shown) return;
+  // ---------- size and visibility ----------
+  const setShown = (el, on) => { if (el) el.classList.toggle("hidden", !on); };
+  // Sets the preview height for a panel `H` px tall (only writing styles that change).
+  function layout(H) {
+    panelH = H || panelH;
+    setShown(wrap, !hidden); setShown(grip, !hidden);
+    if (bar) {
+      for (const el of bar.querySelectorAll(".zlabel, .slider, .zval")) setShown(el, !hidden);
+      toggle.classList.toggle("grow", hidden);
+      const t = hidden ? "Show preview" : "Hide";
+      if (toggle.textContent !== t) { toggle.textContent = t; toggle.title = hidden ? "" : "Hide the preview (nothing is rendered while it's hidden)"; }
+    }
+    const px = Math.max(MIN_PX, Math.round(panelH * sizeK)) + "px";
+    if (!hidden && wrap.style.height !== px) wrap.style.height = px;
+  }
+  function setHidden(h) {
+    hidden = h;
+    save(storeKey + ":hidden", hidden);
+    layout();
+    if (onLayout) onLayout();
+    if (!hidden && dirty) pump();
+  }
+  if (grip) {
+    let start = null;
+    trackDrag(grip, {
+      down: (e) => { if (!panelH) return false; start = { y: e.clientY, k: sizeK }; if (e.preventDefault) e.preventDefault(); },
+      move: (e) => {
+        sizeK = Math.max(SIZE_MIN, Math.min(SIZE_MAX, start.k + (e.clientY - start.y) / panelH));
+        layout();
+        if (onLayout) onLayout();
+        place();
+      },
+      up: () => { save(storeKey + ":size", sizeK); pump(); }, // a bigger view may need more rendered around it
+    });
+  }
+
+  let drag = null;
+  const down = (e) => {
+    if (!shown) return false;
     drag = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, moved: false };
     if (e.preventDefault) e.preventDefault();
   };
-  const move = (e, isPointer) => {
-    if (!drag || (usePointer && !isPointer)) return;
+  const move = (e) => {
     drag.dx = e.clientX - drag.x; drag.dy = e.clientY - drag.y;
     if (Math.abs(drag.dx) + Math.abs(drag.dy) > 3) drag.moved = true;
     if (drag.moved) place(drag.dx, drag.dy);
   };
-  const up = (e, isPointer) => {
-    if (!drag || (usePointer && !isPointer)) return;
+  const up = () => {
     const dr = drag, d = docSize();
     drag = null;
     if (!d || !shown) return;
@@ -158,17 +201,14 @@ function createViewer({ wrap, img, msg, bar, storeKey, render, docSize, onError 
   };
   try { img.setAttribute("draggable", "false"); } catch (e) { /* not supported */ }
   img.addEventListener("dragstart", (e) => { if (e.preventDefault) e.preventDefault(); });
-  wrap.addEventListener("pointerdown", (e) => down(e, true));
-  wrap.addEventListener("mousedown", (e) => down(e, false));
-  const root = typeof document !== "undefined" && typeof document.addEventListener === "function" ? document : wrap;
-  root.addEventListener("pointermove", (e) => move(e, true));
-  root.addEventListener("mousemove", (e) => move(e, false));
-  root.addEventListener("pointerup", (e) => up(e, true));
-  root.addEventListener("mouseup", (e) => up(e, false));
+  trackDrag(wrap, { down, move, up });
 
   // Settings or the document changed: render again (what's on screen stays until the new image is ready).
-  function refresh() { gen++; return pump(); }
+  // While hidden, the render waits until the preview is shown.
+  function refresh() { gen++; dirty = hidden; return hidden ? Promise.resolve() : pump(); }
   return {
+    layout,
+    get hidden() { return hidden; },
     refresh,
     // "fit", or a zoom such as "1" (100%) or "2" (200%)
     setMode(m, at) { const d = docSize(); return setZoom(m === "fit" || !d ? 0 : zoomFor(d, box(), Number(m)), at); },

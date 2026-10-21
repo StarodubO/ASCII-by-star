@@ -31,7 +31,7 @@ if (args.includes("--ascii")) {
   const atlas = E.prepareAtlas(meta, fs.readFileSync(path.join(__dirname, "../plugin/atlas.bin")));
   const p = PRESETS.find((x) => x.id === opt("--ascii"));
   const s = Object.assign({}, E.DEFAULTS, p.settings, args.includes("--transparent") ? { bgMode: "transparent" } : {}, args.includes("--size") ? { size: Number(opt("--size")) } : {});
-  const cs = E.buildCharset(atlas, CHARSETS.find((c) => c.id === s.charset).chars, s.sortByDensity);
+  const cs = E.charsetOf(atlas, s, CHARSETS.find((c) => c.id === s.charset).chars);
   const geo = E.computeGeometry(src.w, src.h, s, atlas);
   src = { w: src.w, h: src.h, data: E.render(E.computeGrid(src, geo, s, cs), cs, atlas, s, { x: 0, y: 0, w: src.w, h: src.h, scale: 1 }) };
   writePNG(path.join(outDir, "_source.png"), src.w, src.h, src.data);
