@@ -15,20 +15,29 @@ function findLayerById(doc, id) { return findLayers(doc.layers, (l) => l.id === 
 // ---------- the area to work on ----------
 const fullFrame = (doc) => ({ x: 0, y: 0, w: doc.width, h: doc.height, artboardId: null });
 const sameFrame = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
-// The artboards of a document: [{id, name, x, y, w, h}] (empty without artboards).
+// The artboards of a document: [{id, name, x, y, w, h}] (empty without artboards). Every top-level group is
+// asked in one batchPlay call, and the answer is reused for a moment, because each preview asks twice
+// (frameOf and the artboard menu) and a slider drag previews many times a second.
+const ARTBOARD_TTL = 1000;
+let artboardCache = null; // {docId, w, h, t, boards}
+function forgetArtboards() { artboardCache = null; }
 async function listArtboards(doc) {
-  const out = [];
-  for (const l of doc.layers || []) {
-    if (String(l.kind) !== "group") continue;
-    try {
-      const r = await action.batchPlay([{ _obj: "get", _target: [{ _ref: "layer", _id: l.id }, { _ref: "document", _id: doc.id }] }], {});
-      const a = r && r[0] && r[0].artboardEnabled && r[0].artboard && r[0].artboard.artboardRect;
-      if (!a) continue;
-      const x0 = Math.max(0, Math.round(a.left)), y0 = Math.max(0, Math.round(a.top));
-      const x1 = Math.min(doc.width, Math.round(a.right)), y1 = Math.min(doc.height, Math.round(a.bottom));
-      if (x1 - x0 >= 2 && y1 - y0 >= 2) out.push({ id: l.id, name: String(l.name), x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
-    } catch (e) { /* not an artboard */ }
+  const c = artboardCache;
+  if (c && c.docId === doc.id && c.w === doc.width && c.h === doc.height && Date.now() - c.t < ARTBOARD_TTL) return c.boards;
+  const out = [], groups = (doc.layers || []).filter((l) => String(l.kind) === "group");
+  let res = [];
+  if (groups.length) {
+    try { res = await action.batchPlay(groups.map((l) => ({ _obj: "get", _target: [{ _ref: "layer", _id: l.id }, { _ref: "document", _id: doc.id }] })), {}); }
+    catch (e) { res = []; }
   }
+  groups.forEach((l, i) => {
+    const r = res && res[i], a = r && r.artboardEnabled && r.artboard && r.artboard.artboardRect;
+    if (!a) return; // not an artboard (or an error result)
+    const x0 = Math.max(0, Math.round(a.left)), y0 = Math.max(0, Math.round(a.top));
+    const x1 = Math.min(doc.width, Math.round(a.right)), y1 = Math.min(doc.height, Math.round(a.bottom));
+    if (x1 - x0 >= 2 && y1 - y0 >= 2) out.push({ id: l.id, name: String(l.name), x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+  });
+  artboardCache = { docId: doc.id, w: doc.width, h: doc.height, t: Date.now(), boards: out };
   return out;
 }
 // The area to work on. pick: "auto" = the artboard that holds the layer (or the selected layer when layerId
@@ -160,4 +169,4 @@ function makeReader(doc, layerId) {
   };
 }
 
-if (typeof module !== "undefined") module.exports = { findLayers, findLayerById, fullFrame, sameFrame, listArtboards, frameOf, fillArtboardSelect, toRGBA8, convertOut, makeImageData, readRect, makeReader };
+if (typeof module !== "undefined") module.exports = { findLayers, findLayerById, fullFrame, sameFrame, listArtboards, forgetArtboards, frameOf, fillArtboardSelect, toRGBA8, convertOut, makeImageData, readRect, makeReader };

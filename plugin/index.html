@@ -73,6 +73,21 @@
   .zbtn { flex: 0 0 auto; min-width: 30px; }
   .row > label { display: flex; flex-direction: row; align-items: center; }
   .row > label > input[type=checkbox] { margin: 0 6px 0 0; flex: 0 0 auto; }
+  /* text fields and checkboxes drawn by fields.js (native ones trail behind when the panel scrolls) */
+  /* sizes include padding and border (UXP and browsers then agree), with room for the text's full height */
+  .tf { box-sizing: border-box; flex: 1 1 auto; min-width: 0; height: 22px; line-height: 14px; padding: 3px 6px; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; background: rgba(0, 0, 0, 0.18); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; font-size: 11px; }
+  .tf.tfArea { height: 44px; white-space: pre-wrap; font-family: Menlo, monospace; }
+  .tf.tfHex { width: 62px; flex: 0 1 62px; font-family: Menlo, monospace; }
+  .tf.tfEmpty { opacity: 0.5; }
+  .tf.hidden { display: none; }
+  .row > label { cursor: pointer; }
+  .ck { width: 12px; height: 12px; flex: 0 0 12px; margin: 0 6px 0 0; border: 1px solid rgba(160, 160, 160, 0.8); border-radius: 2px; display: flex; align-items: center; justify-content: center; }
+  .ck.on { background: rgba(80, 160, 255, 0.9); border-color: rgba(80, 160, 255, 1); }
+  .ckMark { display: none; font-size: 10px; color: #ffffff; }
+  .ck.on .ckMark { display: block; }
+  .ckOff { opacity: 0.45; }
+  .vmark { position: absolute; border: 1px solid #00e6ff; pointer-events: none; }
+  .vmark.vsel { border: 1px dashed #ffffff; background: rgba(0, 230, 255, 0.18); }
   .sub { margin: 0 0 6px 4px; padding-left: 8px; border-left: 1px solid var(--uxp-host-border-color); }
 
 </style>
@@ -210,6 +225,22 @@
         <div class="row"><span class="label">Seed</span><input type="text" id="rainSeed" style="width:60px;flex:0 0 60px"><button id="rainReseed" title="New random rain">New seed</button></div>
         <p class="hint" id="rainHint"></p>
       </div>
+    </div>
+  </div>
+
+  <div class="section" data-section="edit">
+    <div class="head"><span class="chev">▾</span>Edit symbols</div>
+    <div class="body">
+      <div class="row"><label title="Or click Edit under the preview. Option-drag (Alt on Windows) moves the view while editing."><input type="checkbox" id="editOn"> Edit in the preview</label></div>
+      <div class="row"><span class="label">Dragging</span><select id="editDrag" class="grow"><option value="paint">Paints freehand</option><option value="line">Draws a line</option><option value="rect">Draws a rectangle</option><option value="ellipse">Draws an ellipse</option><option value="select">Selects a box (then Apply)</option></select></div>
+      <div class="row" id="editFillRow"><label><input type="checkbox" id="editFill"> Filled shape (off: outline only)</label></div>
+      <div class="row"><span class="label">Action</span><select id="editOp" class="grow"><option value="write">Write characters</option><option value="color">Recolour</option><option value="erase">Erase</option><option value="restore">Restore the original</option></select></div>
+      <div class="row" id="editTextRow"><span class="label">Characters</span><input type="text" id="editText" placeholder="e.g.  #  or  STAR"></div>
+      <div class="row" id="editColorRow"><label class="label" id="editUseColorLabel" title="Off: written characters keep the colour the image gives them"><input type="checkbox" id="editUseColor"> Colour</label><div class="swatch" data-color="editColor"></div><input type="text" class="hex" data-hex="editColor"></div>
+      <div class="row hidden" id="editSelRow"><span class="grow" id="editSelInfo"></span><button id="editApply" class="primary" title="Applies the action to the selected cells">Apply</button><button id="editDeselect">Deselect</button></div>
+      <div class="row btnrow"><button id="editFromSel" title="Selects the cells inside a Rectangular Marquee (or the bounding box of any selection) in the open live smart object or in your document. Then Apply edits them.">Select the Photoshop marquee area</button></div>
+      <div class="row btnrow"><button id="editUndo" title="Takes back the last stroke or selection edit">Undo edit</button><button id="editClear" title="Removes every symbol edit">Remove all edits</button></div>
+      <p class="hint" id="editHint"></p>
     </div>
   </div>
 

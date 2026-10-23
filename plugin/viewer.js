@@ -5,6 +5,9 @@
 // view reaches the edge of what's rendered, or when refresh() says the settings changed.
 // The preview's height is a share of the panel (drag the grip under it), and it can be hidden: then nothing
 // is rendered until it's shown again. Both are remembered per tab.
+// setEditor(ed) turns the preview into a canvas: a click or drag calls ed.down/move/up with document px
+// (Option/Alt-drag still moves the view) and ed.hover follows the pointer. setMarks(rects) outlines document
+// rects (cells; {cls} adds a class) over the image. With onEditToggle, the zoom bar gets an Edit button that calls it.
 "use strict";
 const { imaging } = require("photoshop");
 const { makeSlider, trackDrag, SLIDER_HTML } = require("./slider.js");
@@ -15,7 +18,7 @@ const SIZE_MIN = 0.1, SIZE_MAX = 0.8, MIN_PX = 60; // preview height: share of t
 function load(key, d) { try { const v = JSON.parse(localStorage.getItem(key)); return v === null ? d : v; } catch (e) { return d; } }
 function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) { /* not saved */ } }
 
-function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, onError, onLayout }) {
+function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, onError, onLayout, onEditToggle }) {
   let zoomT = Math.max(0, Math.min(1, Number(load(storeKey, 0)) || 0)); // slider position: 0 = Fit, 1 = 400%, logarithmic in between
   let sizeK = Math.max(SIZE_MIN, Math.min(SIZE_MAX, Number(load(storeKey + ":size", 0.38)) || 0.38));
   let hidden = !!load(storeKey + ":hidden", false), panelH = 0, dirty = true;
@@ -23,6 +26,8 @@ function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, on
   let shown = null; // what the image holds: {x, y, w, h} document px, z, gen
   let pending = null; // the same for an image that is still loading (the old one stays in place until then)
   let gen = 0, running = null, again = false;
+  let editor = null, marks = [], placed = null; // placed: where place() put the image {left, top, k}
+  const markEls = [];
 
   // ---------- geometry ----------
   const dpr = () => (typeof window !== "undefined" && window.devicePixelRatio) || 1;
@@ -64,6 +69,36 @@ function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, on
     img.style.height = shown.h * k + "px";
     img.style.left = left + "px";
     img.style.top = top + "px";
+    placed = { left, top, k };
+    drawMarks();
+  }
+  function drawMarks() {
+    while (markEls.length < marks.length) {
+      const el = document.createElement("div");
+      el.className = "vmark";
+      wrap.appendChild(el);
+      markEls.push(el);
+    }
+    markEls.forEach((el, i) => {
+      const m = marks[i];
+      if (!m || !shown || !placed) { if (el.style.display !== "none") el.style.display = "none"; return; }
+      const { left, top, k } = placed;
+      el.style.display = "block";
+      const cls = "vmark" + (m.cls ? " " + m.cls : "");
+      if (el.className !== cls) el.className = cls;
+      el.style.left = left + (m.x - shown.x) * k + "px";
+      el.style.top = top + (m.y - shown.y) * k + "px";
+      el.style.width = Math.max(2, m.w * k) + "px";
+      el.style.height = Math.max(2, m.h * k) + "px";
+    });
+  }
+  // document px under a pointer position, or null when the image isn't there
+  function toDoc(cx, cy) {
+    if (!shown) return null;
+    let r = null;
+    try { r = img.getBoundingClientRect(); } catch (e) { r = null; }
+    if (!r || !r.width || !r.height) return null;
+    return { x: shown.x + ((cx - r.left) / r.width) * shown.w, y: shown.y + ((cy - r.top) / r.height) * shown.h };
   }
   async function show(rect, z, myGen) {
     const res = await render(rect, z);
@@ -121,14 +156,23 @@ function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, on
     if (settle) { zTimer = setTimeout(() => pump(), settle); return Promise.resolve(); }
     return pump();
   }
-  let toggle = null;
+  let toggle = null, editBtn = null;
+  function showEditBtn() {
+    if (!editBtn) return;
+    const t = editor ? "Done" : "Edit";
+    if (editBtn.textContent !== t) editBtn.textContent = t;
+    editBtn.classList.toggle("primary", !!editor);
+    editBtn.title = editor ? "Stop editing; clicks and drags move and zoom the preview again" : "Edit symbols: click or drag on the preview to change characters";
+  }
   if (bar) {
-    bar.innerHTML = `<span class="label zlabel" title="Double-click for Fit">Zoom</span>${SLIDER_HTML}<span class="val zval"></span><button class="zbtn ztoggle"></button>`;
+    bar.innerHTML = `<span class="label zlabel" title="Double-click for Fit">Zoom</span>${SLIDER_HTML}<span class="val zval"></span>${onEditToggle ? '<button class="zbtn zedit"></button>' : ""}<button class="zbtn ztoggle"></button>`;
     zval = bar.querySelector(".zval");
     slider = makeSlider(bar.querySelector(".slider"), 0, 1, 0.001, (t) => setZoom(t, null, 220));
     slider.value = zoomT;
     bar.querySelector(".zlabel").addEventListener("dblclick", () => setZoom(0));
     toggle = bar.querySelector(".ztoggle");
+    editBtn = bar.querySelector(".zedit");
+    if (editBtn) { editBtn.addEventListener("click", () => onEditToggle()); showEditBtn(); }
     toggle.addEventListener("click", () => setHidden(!hidden));
     label();
   }
@@ -140,7 +184,7 @@ function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, on
     panelH = H || panelH;
     setShown(wrap, !hidden); setShown(grip, !hidden);
     if (bar) {
-      for (const el of bar.querySelectorAll(".zlabel, .slider, .zval")) setShown(el, !hidden);
+      for (const el of bar.querySelectorAll(".zlabel, .slider, .zval, .zedit")) setShown(el, !hidden);
       toggle.classList.toggle("grow", hidden);
       const t = hidden ? "Show preview" : "Hide";
       if (toggle.textContent !== t) { toggle.textContent = t; toggle.title = hidden ? "" : "Hide the preview (nothing is rendered while it's hidden)"; }
@@ -172,10 +216,19 @@ function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, on
   let drag = null;
   const down = (e) => {
     if (!shown) return false;
+    if (editor && !e.altKey) { // edit: the press and every move go to the editor
+      const p = toDoc(e.clientX, e.clientY);
+      if (!p) return false;
+      drag = { edit: true };
+      if (e.preventDefault) e.preventDefault();
+      editor.down(p, e);
+      return;
+    }
     drag = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, moved: false };
     if (e.preventDefault) e.preventDefault();
   };
   const move = (e) => {
+    if (drag.edit) { const p = toDoc(e.clientX, e.clientY); if (p) editor.move(p, e); return; }
     drag.dx = e.clientX - drag.x; drag.dy = e.clientY - drag.y;
     if (Math.abs(drag.dx) + Math.abs(drag.dy) > 3) drag.moved = true;
     if (drag.moved) place(drag.dx, drag.dy);
@@ -183,6 +236,7 @@ function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, on
   const up = () => {
     const dr = drag, d = docSize();
     drag = null;
+    if (dr.edit) { if (editor) editor.up(); return; }
     if (!d || !shown) return;
     const b = box(), k = scaleFor(d, b);
     if (!dr.moved) { // a click: in Fit, zoom to 100% on that spot
@@ -202,6 +256,9 @@ function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, on
   try { img.setAttribute("draggable", "false"); } catch (e) { /* not supported */ }
   img.addEventListener("dragstart", (e) => { if (e.preventDefault) e.preventDefault(); });
   trackDrag(wrap, { down, move, up });
+  const hover = (e) => { if (editor && editor.hover && !drag) editor.hover(e ? toDoc(e.clientX, e.clientY) : null); };
+  for (const t of ["pointermove", "mousemove"]) wrap.addEventListener(t, hover);
+  for (const t of ["pointerleave", "mouseleave"]) wrap.addEventListener(t, () => hover(null));
 
   // Settings or the document changed: render again (what's on screen stays until the new image is ready).
   // While hidden, the render waits until the preview is shown.
@@ -214,8 +271,10 @@ function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, on
     setMode(m, at) { const d = docSize(); return setZoom(m === "fit" || !d ? 0 : zoomFor(d, box(), Number(m)), at); },
     get zoom() { return zoomT; },
     setCentre(x, y) { centre = { x, y }; },
-    showMessage(t) { gen++; shown = null; pending = null; msg.textContent = t; msg.classList.remove("hidden"); img.classList.add("hidden"); },
+    showMessage(t) { gen++; shown = null; pending = null; msg.textContent = t; msg.classList.remove("hidden"); img.classList.add("hidden"); drawMarks(); },
     relayout() { label(); place(); },
+    setEditor(ed) { editor = ed || null; img.style.cursor = editor ? "crosshair" : ""; showEditBtn(); },
+    setMarks(rects) { marks = rects || []; drawMarks(); },
   };
 }
 

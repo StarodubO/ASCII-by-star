@@ -9,8 +9,9 @@ const { PRESETS } = require("./presets.js");
 const setupInk = require("./inkui.js");
 const { makeSlider, SLIDER_HTML } = require("./slider.js");
 const { enhanceAllSelects } = require("./dropdown.js");
+const { enhanceAllFields, refreshFields } = require("./fields.js");
 const { createViewer } = require("./viewer.js");
-const { findLayers, findLayerById, fullFrame, sameFrame, frameOf, fillArtboardSelect, toRGBA8, convertOut, makeImageData, makeReader } = require("./pixels.js");
+const { findLayers, findLayerById, fullFrame, sameFrame, frameOf, forgetArtboards, fillArtboardSelect, toRGBA8, convertOut, makeImageData, makeReader } = require("./pixels.js");
 
 const $ = (id) => document.getElementById(id);
 // Layers made by the plugin end in "ASCII by Star" (older versions used a "#xxxxxx" tag).
@@ -306,7 +307,7 @@ async function createScratchDoc(W, H, res, name) {
 // "Open live smart object" places the result in the working document as a smart object and opens its
 // contents (.psb) as the preview window. Edits are written into the .psb and saved, which updates the
 // smart object in the working document. Closing saves and closes the .psb.
-let liveTimer = null, liveRunning = false, liveAgain = false, liveSaveTimer = null;
+let liveTimer = null, liveRunning = false, liveAgain = false, liveSaveTimer = null, liveSaving = null;
 function updateLiveBtn() {
   const b = $("liveBtn");
   b.textContent = live ? "Save & close live smart object" : "Open live smart object";
@@ -359,16 +360,20 @@ async function saveLive(andClose) {
   } finally { busy = false; }
 }
 async function closeLive() {
-  clearTimeout(liveTimer); clearTimeout(liveSaveTimer);
   const lv = live;
+  if (!lv || lv.closing) return; // already closing (a second click)
+  lv.closing = true; // no update or background save may start while the .psb saves and closes
+  clearTimeout(liveTimer); clearTimeout(liveSaveTimer);
   while (liveRunning) await new Promise((r) => setTimeout(r, 50));
+  clearTimeout(liveTimer); clearTimeout(liveSaveTimer); liveAgain = false;
+  if (liveSaving) await liveSaving; // a background save can't share the modal state with this one
   try { await saveLive(true); status(`Saved into “${lv.soName}”.`); }
   catch (e) { console.error(e); status("Couldn't save the smart object: " + errMsg(e) + ". Save it with ⌘S.", true); }
   live = null; updateLiveBtn();
 }
-function scheduleLive(delay) { if (!live) return; clearTimeout(liveTimer); liveTimer = setTimeout(runLive, delay === undefined ? 300 : delay); }
+function scheduleLive(delay) { if (!live || live.closing) return; clearTimeout(liveTimer); liveTimer = setTimeout(runLive, delay === undefined ? 300 : delay); }
 async function runLive() {
-  if (!live) return;
+  if (!live || live.closing) return;
   if (liveRunning) { liveAgain = true; return; }
   liveRunning = true;
   try {
@@ -387,7 +392,7 @@ async function runLive() {
     }, { commandName: "ASCII by Star live update" });
     // saving pushes the change into the working document; do it once edits pause
     clearTimeout(liveSaveTimer);
-    liveSaveTimer = setTimeout(() => { if (live && !liveRunning) saveLive(false).catch((e) => console.error(e)); }, 900);
+    liveSaveTimer = setTimeout(() => { if (live && !live.closing && !liveRunning) liveSaving = saveLive(false).catch((e) => console.error(e)).then(() => { liveSaving = null; }); }, 900);
   } catch (e) {
     console.error(e);
     if (/busy|modal/i.test(errMsg(e))) liveAgain = true; else status("Live update: " + errMsg(e), true);
@@ -442,10 +447,12 @@ async function renderPreview() {
   const fk = [src.docId, src.frame.x, src.frame.y, src.frame.w, src.frame.h].join(",");
   if (viewer.frameKey !== fk) { viewer.frameKey = fk; viewer.setCentre(src.docW / 2, src.docH / 2); } // a new document or artboard
   await viewer.refresh();
+  if (cellSel) refreshEditUI(); else updateMarks(); // the grid may have changed under the selection
   const lowRes = src.scale < neededScale(src.frame) - 1e-6;
   scheduleLive();
   const hid = grid.hidden ? ` · ${grid.hiddenPlaced} hidden message${grid.hiddenPlaced === 1 ? "" : "s"}` : "";
-  if (!live) status(`${geo.cols} × ${geo.rows} chars · ${geo.size.toFixed(1)}px · ${cs.n} glyphs${hid}${lowRes ? " · preview sampled at reduced res" : ""}`);
+  const ne = (S.cellEdits || []).length, eds = ne ? ` · ${ne} edit${ne === 1 ? "" : "s"}` : "";
+  if (!live) status(`${geo.cols} × ${geo.rows} chars · ${geo.size.toFixed(1)}px · ${cs.n} glyphs${hid}${eds}${lowRes ? " · preview sampled at reduced res" : ""}`);
 }
 
 // The preview of document rect `rect` at scale z, as RGB (characters over a checkerboard where transparent).
@@ -460,7 +467,7 @@ function renderRegion(rect, z) {
 function makeViewer() {
   return createViewer({
     wrap: $("previewWrap"), img: $("preview"), msg: $("previewMsg"), bar: $("zoomBar"), grip: $("previewGrip"), storeKey: "gf:zoom:ascii", onLayout: () => fitLayout(true),
-    docSize: () => (src ? { w: src.docW, h: src.docH } : null), render: renderRegion,
+    docSize: () => (src ? { w: src.docW, h: src.docH } : null), render: renderRegion, onEditToggle: () => setEditMode(!tool.on),
     onError: (e) => { console.error(e); status(errMsg(e), true); },
   });
 }
@@ -665,7 +672,7 @@ async function runBatch() {
             if (!/rgb|gray/i.test(String(d.mode))) await d.changeMode(constants.ChangeMode.RGB);
             const sample = await capture(ctx, d, null, neededScale(fullFrame(d)), false);
             const geo = Engine.computeGeometry(d.width, d.height, S, atlas);
-            const grid = Engine.computeGrid(sample, geo, S, cs);
+            const grid = Engine.computeGrid(sample, geo, Object.assign({}, S, { cellEdits: [] }), cs); // edits belong to one picture
             const layer = await createLayer(d, "ASCII by Star");
             await writeLayer(d, layer, grid, cs);
             if (S.bgMode === "transparent") for (const l of d.layers) if (l.id !== layer.id) l.visible = false;
@@ -699,15 +706,19 @@ function applyPreset(v) {
   if (v.startsWith("b:")) p = PRESETS.find((x) => x.id === v.slice(2));
   else if (v.startsWith("u:")) p = userPresets[Number(v.slice(2))];
   if (!p) return;
+  const edits = S.cellEdits; // symbol edits belong to the picture, not the look
   S = freshSettings(p.settings);
+  S.cellEdits = edits;
   syncUI();
   schedulePreview(0);
 }
+// Settings without the symbol edits, which belong to one picture (for presets)
+function lookOnly(s) { return Object.assign(JSON.parse(JSON.stringify(s)), { cellEdits: [] }); }
 function savePreset() {
   const name = $("presetName").value.trim();
   if (!name) return status("Type a preset name first.", true);
   const i = userPresets.findIndex((p) => p.name === name);
-  const rec = { name, settings: JSON.parse(JSON.stringify(S)) };
+  const rec = { name, settings: lookOnly(S) };
   if (i >= 0) userPresets[i] = rec; else userPresets.push(rec);
   saveJSON("gf:userPresets", userPresets);
   buildPresetSelect("u:" + (i >= 0 ? i : userPresets.length - 1));
@@ -725,7 +736,7 @@ async function exportPresets() {
   try {
     const f = await lfs.getFileForSaving("ascii-by-star-presets.json", { types: ["json"] });
     if (!f) return;
-    await f.write(JSON.stringify({ asciiByStar: 1, presets: userPresets.length ? userPresets : [{ name: "Current", settings: S }] }, null, 2), { format: formats.utf8 });
+    await f.write(JSON.stringify({ asciiByStar: 1, presets: userPresets.length ? userPresets : [{ name: "Current", settings: lookOnly(S) }] }, null, 2), { format: formats.utf8 });
     status(`Saved ${f.name}`);
   } catch (e) { status(errMsg(e), true); }
 }
@@ -741,6 +752,230 @@ async function importPresets() {
     buildPresetSelect();
     status(`Imported ${n} preset${n === 1 ? "" : "s"}`);
   } catch (e) { status("Couldn’t import: " + errMsg(e), true); }
+}
+
+// ---------- symbol edits ----------
+// Edit symbols: the preview becomes a canvas. Dragging either paints (each cell under the pointer gets the action)
+// or selects a box of cells, which Apply then edits; a Photoshop marquee can be the box too. Every change is an
+// edit in S.cellEdits, which the engine applies after the grid (engine applyEdits). Positions are stored as
+// fractions of the area, so they stay on the picture when the size changes. The tool's own settings belong to
+// the panel, not to the look, so they're stored apart.
+let tool = Object.assign({ op: "write", drag: "paint", fill: false, text: "#", color: "#00e6ff", useColor: false }, loadJSON("gf:editTool", {}), { on: false });
+const saveTool = () => saveJSON("gf:editTool", { op: tool.op, drag: tool.drag, fill: tool.fill, text: tool.text, color: tool.color, useColor: tool.useColor });
+let cellSel = null; // the selected cells: {rect: [x0, y0, x1, y1]} or {pts: [[x, y], …]} as fractions of the area, or null
+const EDIT_HINTS = {
+  write: "Click a character or drag across several. More than one character is written in turn along the drag; a space empties a cell.",
+  color: "Click or drag over characters to give them the colour.",
+  erase: "Click or drag to empty cells.",
+  restore: "Click or drag to give cells back what the image puts there.",
+  line: "Drag from one end to the other. Shift keeps it straight across, down or diagonal.",
+  rect: "Drag from corner to corner. Shift makes a square.",
+  ellipse: "Drag over the box the ellipse fits in. Shift makes a circle.",
+  select: "Drag a box over the preview (a click picks one cell), then Apply, or press Enter in Characters. Several characters fill the box left to right. The box stays selected, so you can apply more to it.",
+};
+const EDIT_OPS = { write: "write", color: "recolour", erase: "erase", restore: "restore" };
+const frac = (v) => Math.round(Math.max(0, Math.min(1, v)) * 1e6) / 1e6;
+// A new edit from the tool settings, or null (with a message) when there's nothing to write.
+function newEdit() {
+  const e = { op: tool.op };
+  if (tool.op === "write") {
+    if (!tool.text) { status("Type the characters to write first (Edit symbols ▸ Characters).", true); return null; }
+    e.text = tool.text;
+  }
+  if (tool.op === "color" || (tool.op === "write" && tool.useColor)) e.color = tool.color;
+  return e;
+}
+function addEdit(e) { S.cellEdits = (S.cellEdits || []).concat([e]); refreshEditUI(); schedulePreview(0); }
+// The preview grid's cell at column c, row r: its key, outline (document px) and centre (fractions).
+function cellInfo(c, r) {
+  const g = gridCache.geo;
+  if (!g || c < 0 || r < 0 || c >= g.cols || r >= g.rows) return null;
+  return { c, r, key: r * g.cols + c, rect: { x: c * g.cellW, y: r * g.cellH, w: g.cellW, h: g.cellH }, pt: [frac(((c + 0.5) * g.cellW) / g.docW), frac(((r + 0.5) * g.cellH) / g.docH)] };
+}
+function cellAt(p) { const g = gridCache.geo; return g && p ? cellInfo(Math.floor(p.x / g.cellW), Math.floor(p.y / g.cellH)) : null; }
+// The box from cell a to cell b, as fractions along the cells' edges (so exactly those cells are inside).
+function boxOf(a, b) {
+  const g = gridCache.geo, c0 = Math.min(a.c, b.c), c1 = Math.max(a.c, b.c), r0 = Math.min(a.r, b.r), r1 = Math.max(a.r, b.r);
+  return [frac((c0 * g.cellW) / g.docW), frac((r0 * g.cellH) / g.docH), frac(((c1 + 1) * g.cellW) / g.docW), frac(((r1 + 1) * g.cellH) / g.docH)];
+}
+// The selected cells in the current grid: {cols, rows, rect (document px)}, or null
+function selCells() {
+  const g = gridCache.geo;
+  if (!cellSel || !g) return null;
+  const cells = Engine.editCells(cellSel, g);
+  if (!cells.length) return null;
+  let c0 = Infinity, c1 = -1, r0 = Infinity, r1 = -1;
+  for (const i of cells) { const c = i % g.cols, r = Math.floor(i / g.cols); c0 = Math.min(c0, c); c1 = Math.max(c1, c); r0 = Math.min(r0, r); r1 = Math.max(r1, r); }
+  // a shaped selection (from a marquee) is outlined cell by cell, up to a limit
+  const each = cellSel.pts && cells.length <= 1500 ? cells.map((i) => ({ cls: "vsel", x: (i % g.cols) * g.cellW, y: Math.floor(i / g.cols) * g.cellH, w: g.cellW, h: g.cellH })) : null;
+  return { n: cells.length, each, cols: c1 - c0 + 1, rows: r1 - r0 + 1, rect: { x: c0 * g.cellW, y: r0 * g.cellH, w: (c1 - c0 + 1) * g.cellW, h: (r1 - r0 + 1) * g.cellH } };
+}
+let hoverCell = null;
+function updateMarks() {
+  if (!viewer) return;
+  const sc = selCells(), m = [];
+  if (sc) m.push(...(sc.each || [Object.assign({ cls: "vsel" }, sc.rect)]));
+  if (hoverCell && tool.on) m.push(hoverCell.rect);
+  viewer.setMarks(m);
+}
+function setCellSel(box) {
+  cellSel = box;
+  refreshEditUI();
+  const sc = selCells();
+  if (sc) status(`${sc.n} cell${sc.n === 1 ? "" : "s"} selected. Apply edits them (Enter in Characters does too).`);
+}
+// Shapes from cell a to cell b (corners of their box): the cells along the outline, in drawing order.
+function lineCells(a, b) {
+  const out = [], n = Math.max(Math.abs(b.c - a.c), Math.abs(b.r - a.r));
+  for (let t = 0; t <= n; t++) out.push([Math.round(a.c + (n ? ((b.c - a.c) * t) / n : 0)), Math.round(a.r + (n ? ((b.r - a.r) * t) / n : 0))]);
+  return out;
+}
+function shapeCells(kind, a, b) {
+  if (kind === "line") return lineCells(a, b);
+  const c0 = Math.min(a.c, b.c), c1 = Math.max(a.c, b.c), r0 = Math.min(a.r, b.r), r1 = Math.max(a.r, b.r);
+  if (tool.fill) { // every cell inside, in reading order
+    const cx = (c0 + c1) / 2, cy = (r0 + r1) / 2, rx = (c1 - c0) / 2 + 0.5, ry = (r1 - r0) / 2 + 0.5, out = [];
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) if (kind === "rect" || ((c - cx) / rx) ** 2 + ((r - cy) / ry) ** 2 <= 1) out.push([c, r]);
+    return out;
+  }
+  let ring;
+  if (kind === "rect") ring = [[c0, r0], [c1, r0], [c1, r1], [c0, r1], [c0, r0]];
+  else { // ellipse: points around it, joined by lines so the outline has no gaps
+    const cx = (c0 + c1) / 2, cy = (r0 + r1) / 2, rx = (c1 - c0) / 2, ry = (r1 - r0) / 2, n = Math.max(12, Math.ceil(4 * Math.PI * Math.max(rx, ry, 1)));
+    ring = [];
+    for (let k = 0; k <= n; k++) { const t = (2 * Math.PI * k) / n - Math.PI / 2; ring.push([Math.round(cx + rx * Math.cos(t)), Math.round(cy + ry * Math.sin(t))]); }
+  }
+  const out = [];
+  for (let i = 1; i < ring.length; i++) out.push(...lineCells({ c: ring[i - 1][0], r: ring[i - 1][1] }, { c: ring[i][0], r: ring[i][1] }));
+  return out;
+}
+// With Shift: an even shape on screen (cells are taller than wide), or a line straight across, down or at 45°.
+function constrain(kind, a, b) {
+  const g = gridCache.geo, dx = (b.c - a.c) * g.cellW, dy = (b.r - a.r) * g.cellH;
+  if (kind === "line") {
+    const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4), len = Math.hypot(dx, dy);
+    return { c: a.c + Math.round((Math.cos(ang) * len) / g.cellW), r: a.r + Math.round((Math.sin(ang) * len) / g.cellH) };
+  }
+  const s = Math.max(Math.abs(dx), Math.abs(dy));
+  return { c: a.c + (Math.sign(dx) || 1) * Math.round(s / g.cellW), r: a.r + (Math.sign(dy) || 1) * Math.round(s / g.cellH) };
+}
+let stroke = null; // the drag in progress: {e (its edit), seen (cell keys), last (cell)} or {anchor (cell)} for a box
+const editor = {
+  down(p) {
+    const cell = cellAt(p);
+    if (!cell) return;
+    if (tool.drag === "select") { stroke = { anchor: cell }; setCellSel({ rect: boxOf(cell, cell) }); return; }
+    const e = newEdit();
+    if (!e) return;
+    e.pts = [cell.pt];
+    if (tool.drag !== "paint") { stroke = { shape: tool.drag, from: cell, e }; addEdit(e); return; }
+    stroke = { e, seen: new Set([cell.key]), last: cell };
+    addEdit(e);
+  },
+  move(p, ev) {
+    const cell = cellAt(p);
+    hoverCell = cell;
+    if (stroke && stroke.shape) { // a shape is redrawn from its start to the pointer on every move
+      if (!cell) return;
+      const to = ev && ev.shiftKey ? constrain(stroke.shape, stroke.from, cell) : cell, seen = new Set(), pts = [];
+      for (const [c, r] of shapeCells(stroke.shape, stroke.from, to)) { const k = cellInfo(c, r); if (k && !seen.has(k.key)) { seen.add(k.key); pts.push(k.pt); } }
+      stroke.e.pts = pts.length ? pts : [stroke.from.pt];
+      updateMarks();
+      schedulePreview(0);
+      return;
+    }
+    if (stroke && stroke.anchor) { if (cell) { cellSel = { rect: boxOf(stroke.anchor, cell) }; refreshEditUI(); } return; }
+    updateMarks();
+    if (!stroke || !cell || cell.key === stroke.last.key) return;
+    // every cell on the way, so a quick drag leaves no gaps
+    const { c: c0, r: r0 } = stroke.last, n = Math.max(Math.abs(cell.c - c0), Math.abs(cell.r - r0));
+    for (let t = 1; t <= n; t++) {
+      const k = cellInfo(Math.round(c0 + ((cell.c - c0) * t) / n), Math.round(r0 + ((cell.r - r0) * t) / n));
+      if (k && !stroke.seen.has(k.key)) { stroke.seen.add(k.key); stroke.e.pts.push(k.pt); }
+    }
+    stroke.last = cell;
+    schedulePreview(0);
+  },
+  up() { if (stroke && stroke.anchor) setCellSel(cellSel); stroke = null; },
+  hover(p) { hoverCell = cellAt(p); updateMarks(); },
+};
+// Applies the action to the selected box.
+function applySelection() {
+  if (!cellSel) return status("Select cells first: Edit under the preview, Dragging ▸ Selects a box, then drag over the preview.", true);
+  const e = newEdit();
+  if (!e) return;
+  if (cellSel.rect) e.rect = cellSel.rect.slice(); else e.pts = cellSel.pts.slice();
+  addEdit(e);
+  status("Edited the selected cells. Undo edit takes it back.");
+}
+// Selects the cells inside the marquee of the active document: the live smart object or the source document.
+async function editFromSelection() {
+  try {
+    const a = activeDoc();
+    if (!a) return status("Open a document first.", true);
+    const r = await action.batchPlay([{ _obj: "get", _target: [{ _property: "selection" }, { _ref: "document", _id: a.id }] }], {});
+    const sel = r && r[0] && r[0].selection, v = (x) => Number(x && typeof x === "object" ? x._value : x);
+    if (!sel || sel.left === undefined) return status("Make a selection first: Rectangular Marquee in the live smart object or in your document.", true);
+    let x0 = v(sel.left), y0 = v(sel.top), x1 = v(sel.right), y1 = v(sel.bottom), W, H;
+    if (live && a.id === live.docId) { W = a.width; H = a.height; } // the .psb is the area at live.scale
+    else {
+      await ensureSource(false);
+      if (!src || src.docId !== a.id) return status("The selection must be in the live smart object or in the document being converted.", true);
+      x0 -= src.frame.x; x1 -= src.frame.x; y0 -= src.frame.y; y1 -= src.frame.y; W = src.docW; H = src.docH;
+    }
+    if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) return status("The selection is outside the area being converted.", true);
+    // the selection's own shape: the cells whose centre it covers (half or more)
+    const g = gridCache.geo, ox = live && a.id === live.docId ? 0 : src.frame.x, oy = live && a.id === live.docId ? 0 : src.frame.y;
+    const L = Math.max(0, Math.floor(x0)), T = Math.max(0, Math.floor(y0)), R = Math.min(W, Math.ceil(x1)), B = Math.min(H, Math.ceil(y1));
+    let mask = null, mw = R - L;
+    try {
+      const res = await core.executeAsModal(() => imaging.getSelection({ documentID: a.id, sourceBounds: { left: L + ox, top: T + oy, right: R + ox, bottom: B + oy } }), { commandName: "ASCII by Star selection" });
+      mask = await res.imageData.getData({ chunky: true }); mw = res.imageData.width; res.imageData.dispose();
+    } catch (err) { console.error(err); mask = null; } // falls back to the bounding box
+    if (mask && g) {
+      const pts = [];
+      for (let r = 0; r < g.rows; r++) for (let c = 0; c < g.cols; c++) {
+        const fx = ((c + 0.5) * g.cellW) / g.docW, fy = ((r + 0.5) * g.cellH) / g.docH, px = Math.floor(fx * W) - L, py = Math.floor(fy * H) - T;
+        if (px >= 0 && py >= 0 && px < R - L && py < B - T && mask[py * mw + px] >= 128) pts.push([frac(fx), frac(fy)]);
+      }
+      setCellSel(pts.length ? { pts } : null);
+    } else setCellSel({ rect: [frac(x0 / W), frac(y0 / H), frac(x1 / W), frac(y1 / H)] });
+    if (!selCells()) { cellSel = null; refreshEditUI(); status("The selection is smaller than a cell's centre. Make it a little bigger.", true); }
+  } catch (err) { console.error(err); status("Couldn't read the selection: " + errMsg(err), true); }
+}
+function setEditMode(on) {
+  tool.on = !!on;
+  if (!tool.on) hoverCell = null;
+  refreshEditUI();
+  if (!tool.on) return status("Editing off: clicks and drags move and zoom the preview again.");
+  const what = tool.op === "write" ? `write “${tool.text}”` : EDIT_OPS[tool.op];
+  const shape = { line: "a line", rect: "a rectangle", ellipse: "an ellipse" }[tool.drag];
+  if (shape) return status(`Editing: drag on the preview to draw ${shape} that will ${what} (Shift: even shape). Option-drag moves the view.`);
+  status(tool.drag === "select" ? "Editing: drag a box over the preview, then Apply. Option-drag moves the view." : `Editing: click or drag on the preview to ${what}. Option-drag moves the view. More in Edit symbols.`);
+}
+function refreshEditUI() {
+  const n = (S.cellEdits || []).length, show = (el, on) => el.classList.toggle("hidden", !on);
+  if ($("editOn").checked !== tool.on) { $("editOn").checked = tool.on; if ($("editOn").syncChecked) $("editOn").syncChecked(); }
+  setSelect($("editOp"), tool.op);
+  setSelect($("editDrag"), tool.drag);
+  if ($("editText").value !== tool.text) $("editText").value = tool.text;
+  const uc = $("editUseColor"), forced = tool.op === "color"; // recolouring always uses the colour
+  uc.checked = forced || tool.useColor; uc.disabled = forced;
+  if (uc.syncChecked) uc.syncChecked();
+  show($("editTextRow"), tool.op === "write");
+  show($("editFillRow"), tool.drag === "rect" || tool.drag === "ellipse");
+  if ($("editFill").checked !== tool.fill) { $("editFill").checked = tool.fill; if ($("editFill").syncChecked) $("editFill").syncChecked(); }
+  show($("editColorRow"), tool.op === "write" || tool.op === "color");
+  const sc = selCells();
+  show($("editSelRow"), !!sc);
+  if (sc) $("editSelInfo").textContent = `${sc.n} cell${sc.n === 1 ? "" : "s"} selected`;
+  $("editUndo").disabled = !n; $("editClear").disabled = !n;
+  $("editClear").textContent = n ? `Remove all edits (${n})` : "Remove all edits";
+  $("editHint").textContent = (tool.on ? EDIT_HINTS[tool.drag === "paint" ? tool.op : tool.drag] + " Option-drag (Alt on Windows) moves the view." : "Click Edit under the preview (or tick the box above), then click or drag over the preview.") +
+    " Edits stay on their spot in the picture when you change the size or the look; Reset all removes them.";
+  if (viewer) viewer.setEditor(tool.on ? editor : null);
+  updateMarks();
+  refreshFields();
 }
 
 // ---------- UI ----------
@@ -872,7 +1107,9 @@ function randomizeAll() {
 }
 function undoRandomize() {
   if (!undoStack.length) return;
+  const edits = S.cellEdits;
   S = freshSettings(JSON.parse(undoStack.pop()));
+  S.cellEdits = edits; // Randomize doesn't touch them, so neither does going back
   syncUI(); schedulePreview(0);
 }
 
@@ -925,6 +1162,18 @@ function buildUI() {
   $("hideMove").addEventListener("click", () => { S.hideSeed = Math.floor(Math.random() * 99999) + 1; schedulePreview(0); });
   $("randomize").addEventListener("click", randomizeAll);
   $("undoRandom").addEventListener("click", undoRandomize);
+  onCheck($("editOn"), (v) => setEditMode(v));
+  $("editOp").addEventListener("change", () => { tool.op = $("editOp").value; saveTool(); refreshEditUI(); });
+  $("editText").addEventListener("input", () => { tool.text = $("editText").value; saveTool(); });
+  onCheck($("editUseColor"), (v) => { if (tool.op !== "color") { tool.useColor = v; saveTool(); } });
+  $("editDrag").addEventListener("change", () => { tool.drag = $("editDrag").value; saveTool(); setEditMode(tool.on); });
+  $("editFromSel").addEventListener("click", editFromSelection);
+  $("editApply").addEventListener("click", applySelection);
+  onCheck($("editFill"), (v) => { tool.fill = v; saveTool(); });
+  $("editDeselect").addEventListener("click", () => { cellSel = null; refreshEditUI(); });
+  $("editText").addEventListener("keydown", (e) => { if (e.key === "Enter" && cellSel) setTimeout(applySelection, 0); });
+  $("editUndo").addEventListener("click", () => { if (!(S.cellEdits || []).length) return; S.cellEdits = S.cellEdits.slice(0, -1); refreshEditUI(); schedulePreview(0); });
+  $("editClear").addEventListener("click", () => { S.cellEdits = []; refreshEditUI(); schedulePreview(0); status("Removed all symbol edits."); });
 
   document.querySelectorAll(".swatch").forEach((el) => el.addEventListener("click", () => pickColor(el.dataset.color)));
   document.querySelectorAll(".hex").forEach((el) => el.addEventListener("change", () => {
@@ -937,7 +1186,7 @@ function buildUI() {
 
   $("source").addEventListener("change", () => { src = null; schedulePreview(0); });
   $("artboard").addEventListener("change", () => { src = null; schedulePreview(0); });
-  $("refresh").addEventListener("click", () => { src = null; csCache.key = null; schedulePreview(0); });
+  $("refresh").addEventListener("click", () => { src = null; csCache.key = null; forgetArtboards(); schedulePreview(0); });
   $("liveBtn").addEventListener("click", toggleLive);
   $("resetAll").addEventListener("click", () => {
     S = freshSettings(); editing = null; $("editBox").classList.add("hidden");
@@ -1009,8 +1258,9 @@ function buildUI() {
 // colour keys: g0..g2 are the gradient stops, rg0..rg2 the rain's, anything else is a setting name (fg, bg, dropColor, …)
 const GRADIENTS = { g: "gradient", rg: "rainGradient" };
 const gradKey = (k) => { const m = /^(r?g)(\d)$/.exec(k); return m ? [GRADIENTS[m[1]], Number(m[2])] : null; };
-function getColor(k) { const g = gradKey(k); return g ? S[g[0]][g[1]] : S[k]; }
+function getColor(k) { if (k === "editColor") return tool.color; const g = gradKey(k); return g ? S[g[0]][g[1]] : S[k]; }
 function setColor(k, hex) {
+  if (k === "editColor") { tool.color = hex; saveTool(); syncUI(); return; } // the edit tool's colour, not the look's
   const g = gradKey(k);
   if (g) S[g[0]][g[1]] = hex; else S[k] = hex;
   syncUI(); schedulePreview(0);
@@ -1041,6 +1291,7 @@ function syncUI() {
   if (allFonts.length) fillFontSelect();
   document.querySelectorAll(".swatch").forEach((el) => { el.style.backgroundColor = getColor(el.dataset.color); });
   document.querySelectorAll(".hex").forEach((el) => { el.value = getColor(el.dataset.hex); });
+  refreshEditUI();
   refreshVisibility();
 }
 function refreshVisibility() {
@@ -1168,7 +1419,7 @@ function onCheck(el, fn) {
   el.addEventListener("change", check);
   el.addEventListener("click", check);
   if (el.parentNode && el.parentNode.tagName === "LABEL") el.parentNode.addEventListener("click", check);
-  el.syncChecked = () => { last = el.checked; };
+  el.syncChecked = () => { last = el.checked; if (el.ckUpdate) el.ckUpdate(); };
 }
 
 // ---------- layout ----------
@@ -1207,6 +1458,7 @@ function showTab(t) {
 // ---------- Photoshop events ----------
 let staleTimer = null;
 function onPsEvent(evt, desc) {
+  forgetArtboards(); // a document or layer changed: look at the artboards again
   if (live && evt === "close" && !docById(live.docId)) { live = null; updateLiveBtn(); }
   if (tab === "ink") { if (src) src.stale = true; if (ink) ink.onPsEvent(evt, desc); return; }
   if (busy) return;
@@ -1221,10 +1473,11 @@ function onPsEvent(evt, desc) {
 
 async function init() {
   enhanceAllSelects(() => fitLayout(true)); // before any "change" listener is added
+  enhanceAllFields(); // likewise
   viewer = makeViewer();
   buildUI();
   syncUI();
-  ink = setupInk({ $, loadJSON, saveJSON, errMsg, toRGBA8, makeImageData, convertOut, createLayer, findLayers, findLayerById, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck });
+  ink = setupInk({ $, loadJSON, saveJSON, errMsg, toRGBA8, makeImageData, convertOut, createLayer, findLayers, findLayerById, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck, refreshFields });
   $("tabAscii").addEventListener("click", () => showTab("ascii"));
   $("tabInk").addEventListener("click", () => showTab("ink"));
   showTab(tab);

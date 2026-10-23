@@ -66,6 +66,7 @@ const DEFAULTS = {
   outlineStyle: "lines", outlineChars: "#", outlineColor: "#ff2a6d", // lines (follow the edge) | chars
   outlineFill: "image", outlineFillChars: ".", // image | none | chars (in order) | random (your characters, shuffled)
   hideSeed: 1, // where hidden {messages} go
+  cellEdits: [], // symbols changed by hand (Edit symbols; see applyEdits)
   // [ ] fill in custom text (see parseCustom)
   fillLevel: 0.5, // with ramp characters outside the brackets: cells darker than this get the fill
   fillSeed: 1, // order of [?random] items
@@ -213,6 +214,7 @@ function charsetParts(s, presetChars, rainPresetChars) {
   if (s.outlineOn) extra += (s.outlineStyle === "chars" ? s.outlineChars : OUTLINE_LINES) + (s.outlineFill === "chars" || s.outlineFill === "random" ? s.outlineFillChars : "");
   const rain = s.rainOn ? rainSpec(s, rainPresetChars) : null;
   extra += specChars(rain);
+  if (s.cellEdits && s.cellEdits.length) extra += s.cellEdits.map((e) => (e.op === "write" && e.text) || "").join("");
   return { ramp: custom ? custom.text : presetChars, extra, spread: s.dither === "none", rain };
 }
 function charsetOf(atlas, s, presetChars, rainPresetChars) {
@@ -299,6 +301,7 @@ function computeGrid(src, geo, s, cs) {
   if (s.outlineOn) applyOutline(grid, s, cs);
   if (custom) hideMessages(grid, s, cs, custom.messages);
   if (s.rainOn) applyRain(grid, s, cs);
+  if (s.cellEdits && s.cellEdits.length) applyEdits(grid, s, cs);
   return s.glitchOn ? glitchGrid(grid, cs, s) : grid;
 }
 
@@ -588,6 +591,61 @@ function hideMessages(grid, s, cs, messages) {
   grid.hiddenPlaced = placed;
 }
 
+// ---------- symbol edits ----------
+// Changes made by hand (Edit symbols), applied in order after everything the image decides, so later edits
+// win. An edit is {op, text, color} with either pts (a stroke: the cells under its points, in order) or rect
+// (the cells whose centres lie inside). Positions are fractions of the area's width and height, so edits stay
+// on the same part of the picture when the font size or spacing changes.
+//   write   the edit's characters, one per cell, in stroke or reading order and repeating; a space empties
+//           a cell; with color the cells take that colour too
+//   color   recolours the cells that have a character
+//   erase   empties the cells
+//   restore puts back what the image gave the cells (undoes earlier edits there)
+function editCells(e, geo) {
+  const { cols, rows, cellW, cellH, docW, docH } = geo, out = [];
+  if (Array.isArray(e.rect) && e.rect.length === 4) {
+    const x0 = Math.min(e.rect[0], e.rect[2]) * docW, x1 = Math.max(e.rect[0], e.rect[2]) * docW;
+    const y0 = Math.min(e.rect[1], e.rect[3]) * docH, y1 = Math.max(e.rect[1], e.rect[3]) * docH;
+    // a selection that reaches an edge also takes the part-cells there (their centres lie outside the area)
+    const c0 = Math.max(0, Math.ceil(x0 / cellW - 0.5)), c1 = x1 >= docW - 1e-6 ? cols - 1 : Math.min(cols - 1, Math.floor(x1 / cellW - 0.5));
+    const r0 = Math.max(0, Math.ceil(y0 / cellH - 0.5)), r1 = y1 >= docH - 1e-6 ? rows - 1 : Math.min(rows - 1, Math.floor(y1 / cellH - 0.5));
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) out.push(r * cols + c);
+    if (out.length) return out;
+    const c = Math.floor((x0 + x1) / 2 / cellW), r = Math.floor((y0 + y1) / 2 / cellH); // smaller than a cell
+    return c >= 0 && r >= 0 && c < cols && r < rows ? [r * cols + c] : [];
+  }
+  const seen = new Set();
+  for (const p of e.pts || []) {
+    const c = Math.floor((p[0] * docW) / cellW), r = Math.floor((p[1] * docH) / cellH), i = r * cols + c;
+    if (c >= 0 && r >= 0 && c < cols && r < rows && !seen.has(i)) { seen.add(i); out.push(i); }
+  }
+  return out;
+}
+function applyEdits(grid, s, cs) {
+  const { glyph, color, geo } = grid;
+  const orig = { glyph: glyph.slice(), color: color.slice(), shade: grid.shade ? grid.shade.slice() : null, hidden: grid.hidden ? grid.hidden.slice() : null };
+  for (const e of s.cellEdits) {
+    if (!e) continue;
+    const cells = editCells(e, geo), col = e.color ? hexToRgb(e.color) : null;
+    const seq = e.op === "write" ? Array.from(String(e.text || ""), (ch) => (ch === " " ? -1 : charAt(cs, ch))) : [];
+    cells.forEach((i, k) => {
+      if (e.op === "restore") {
+        glyph[i] = orig.glyph[i];
+        color[i * 3] = orig.color[i * 3]; color[i * 3 + 1] = orig.color[i * 3 + 1]; color[i * 3 + 2] = orig.color[i * 3 + 2];
+        if (grid.shade) grid.shade[i] = orig.shade ? orig.shade[i] : 1;
+        if (grid.hidden) grid.hidden[i] = orig.hidden ? orig.hidden[i] : 0;
+        return;
+      }
+      if (e.op === "erase") glyph[i] = -1;
+      else if (e.op === "write" && seq.length) glyph[i] = seq[k % seq.length];
+      else if (e.op !== "write" && e.op !== "color") return;
+      if (col && (e.op === "write" || glyph[i] >= 0)) { color[i * 3] = col[0]; color[i * 3 + 1] = col[1]; color[i * 3 + 2] = col[2]; }
+      if (e.op !== "color" && grid.shade) grid.shade[i] = 1;
+      if (grid.hidden) grid.hidden[i] = 0; // no longer part of a hidden message
+    });
+  }
+}
+
 // ---------- Matrix rain ----------
 // Streams of characters falling from the shape (rainFrom "object": from its lower edges into the empty space
 // below, heads 1..rainDistance cells from the edge, stopping at the next shape) or over the whole image
@@ -869,7 +927,7 @@ function blurField(a, w, h, sigma) { // three box passes ≈ Gaussian, edges cla
   if (sigma < 0.4) return a;
   const wIdeal = Math.sqrt((12 * sigma * sigma) / 3 + 1);
   let wl = Math.floor(wIdeal); if (wl % 2 === 0) wl--;
-  const m = Math.round((12 * sigma * sigma - 3 * wl * wl - 12 * wl - 9) / (-4 * wl - 4)), tmp = new Float32Array(w * h);
+  const m = Math.round((12 * sigma * sigma - 3 * wl * wl - 12 * wl - 9) / (-4 * wl - 4)), tmp = new Float32Array(w * h), acc = new Float64Array(w);
   for (let pass = 0; pass < 3; pass++) {
     const r = ((pass < m ? wl : wl + 2) - 1) >> 1, inv = 1 / (2 * r + 1);
     for (let y = 0; y < h; y++) {
@@ -877,10 +935,12 @@ function blurField(a, w, h, sigma) { // three box passes ≈ Gaussian, edges cla
       for (let k = -r; k <= r; k++) acc += a[row + Math.min(w - 1, Math.max(0, k))];
       for (let x = 0; x < w; x++) { tmp[row + x] = acc * inv; acc += a[row + Math.min(w - 1, x + r + 1)] - a[row + Math.max(0, x - r)]; }
     }
-    for (let x = 0; x < w; x++) {
-      let acc = 0;
-      for (let k = -r; k <= r; k++) acc += tmp[Math.min(h - 1, Math.max(0, k)) * w + x];
-      for (let y = 0; y < h; y++) { a[y * w + x] = acc * inv; acc += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x]; }
+    // columns run side by side (one running sum each), so memory is read row by row
+    acc.fill(0);
+    for (let k = -r; k <= r; k++) { const row = Math.min(h - 1, Math.max(0, k)) * w; for (let x = 0; x < w; x++) acc[x] += tmp[row + x]; }
+    for (let y = 0; y < h; y++) {
+      const row = y * w, add = Math.min(h - 1, y + r + 1) * w, sub = Math.max(0, y - r) * w;
+      for (let x = 0; x < w; x++) { a[row + x] = acc[x] * inv; acc[x] += tmp[add + x] - tmp[sub + x]; }
     }
   }
   return a;
@@ -955,13 +1015,14 @@ function renderWithShadows(grid, cs, atlas, s, view) {
     for (let i = 0; i < B.length; i++) B[i] = Math.min(1, B[i] * 2);
     layers.push([B, col, s.glowOpacity]);
   }
+  const nL = layers.length, LF = layers.map((l) => l[0]), LC = layers.map((l) => l[1]), LO = layers.map((l) => l[2]);
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const o = (y * W + x) * 4, e = (y + M) * EW + x + M;
-      for (const [f, col, op] of layers) {
-        const a = f[e] * op;
+      for (let j = 0; j < nL; j++) {
+        const a = LF[j][e] * LO[j];
         if (a <= 0.002) continue;
-        const c = typeof col === "function" ? col(e) : col;
+        const col = LC[j], c = typeof col === "function" ? col(e) : col;
         blendPx(out, o, c[0], c[1], c[2], Math.min(1, a));
       }
       const ga = G[e * 4 + 3];
@@ -1013,18 +1074,21 @@ function render(grid, cs, atlas, s, view) {
   const cw = geo.cellW * sc, ch = geo.cellH * sc, gw = geo.glyphW * sc, gh = geo.glyphH * sc;
   const c0 = Math.max(0, Math.floor(view.x / geo.cellW)), c1 = Math.min(cols, Math.ceil((view.x + W / sc) / geo.cellW));
   const r0 = Math.max(0, Math.floor(view.y / geo.cellH)), r1 = Math.min(rows, Math.ceil((view.y + H / sc) / geo.cellH));
+  // Pixel positions are rounded in document space and then moved by the view's whole-pixel offset, so strips of
+  // one render agree where they meet (rounding after the move can flip a .5 tie and tear a glyph by 1 px).
+  const vx = view.x * sc, vy = view.y * sc, vxi = Math.floor(vx + 1e-9), vyi = Math.floor(vy + 1e-9), vxf = vx - vxi, vyf = vy - vyi;
 
   if (gw >= 3 && gh >= 3) {
     const igw = Math.round(gw), igh = Math.round(gh), cache = new Map();
     for (let r = r0; r < r1; r++) {
-      const oy = (r * geo.cellH - view.y) * sc;
+      const ay = r * geo.cellH * sc; // the row's top in output px, before the view's offset
       for (let c = c0; c < c1; c++) {
-        const ci = r * cols + c, ox = (c * geo.cellW - view.x) * sc;
+        const ci = r * cols + c, ax = c * geo.cellW * sc;
         if (mosaic) {
           const [mr, mg, mb] = mosaicColor(ci);
           // edges from the cell grid itself, so neighbouring blocks share them exactly (no gap rows)
-          const xa = Math.max(0, Math.round(ox)), xe = Math.min(W, Math.round(((c + 1) * geo.cellW - view.x) * sc));
-          const ya = Math.max(0, Math.round(oy)), ye = Math.min(H, Math.round(((r + 1) * geo.cellH - view.y) * sc));
+          const xa = Math.max(0, Math.round(ax - vxf) - vxi), xe = Math.min(W, Math.round((c + 1) * geo.cellW * sc - vxf) - vxi);
+          const ya = Math.max(0, Math.round(ay - vyf) - vyi), ye = Math.min(H, Math.round((r + 1) * geo.cellH * sc - vyf) - vyi);
           const ma = (masked ? alpha[ci] : 255) * bgA;
           for (let y = ya; y < ye; y++) for (let x = xa, o = (y * W + xa) * 4; x < xe; x++, o += 4) { out[o] = mr; out[o + 1] = mg; out[o + 2] = mb; out[o + 3] = ma; }
         }
@@ -1032,7 +1096,7 @@ function render(grid, cs, atlas, s, view) {
         if (noGlyphs || gi < 0 || cs.cov[gi] <= 0) continue;
         let bm = cache.get(gi);
         if (!bm) { bm = resampleGlyph(atlas, cs.glyphs[gi], igw, igh); cache.set(gi, bm); }
-        const gx = Math.round(ox + (cw - igw) / 2), gy = Math.round(oy + (ch - igh) / 2);
+        const gx = Math.round(ax + (cw - igw) / 2 - vxf) - vxi, gy = Math.round(ay + (ch - igh) / 2 - vyf) - vyi;
         const cr = color[ci * 3], cg = color[ci * 3 + 1], cb = color[ci * 3 + 2], opc = shade ? op * shade[ci] : op;
         const ya = Math.max(0, gy), ye = Math.min(H, gy + igh), xa = Math.max(0, gx), xe = Math.min(W, gx + igw);
         for (let y = ya; y < ye; y++) {
@@ -1093,9 +1157,9 @@ function toText(grid, cs) { return gridLines(grid, cs).map((l) => l.replace(/\s+
 
 const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-// Per-cell colours in text exports: colour modes other than mono, and the rain (its own colours, with the fade
-// mixed into the background where there is one).
-const perCellColor = (s) => s.colorMode !== "mono" || s.rainOn;
+// Per-cell colours in text exports: colour modes other than mono, the rain (its own colours, with the fade
+// mixed into the background where there is one) and recoloured symbol edits.
+const perCellColor = (s) => s.colorMode !== "mono" || s.rainOn || (s.cellEdits || []).some((e) => e && e.color);
 function colorRuns(grid, cs, r, s) {
   const runs = [], fadeTo = s.rainOn && grid.shade && s.bgMode !== "transparent" ? hexToRgb(s.bg) : null;
   let cur = null;
@@ -1159,5 +1223,5 @@ function toSVG(grid, cs, s) {
   return parts.join("\n");
 }
 
-const Engine = { DIFFUSION, ORDERED, resampleGlyph, DEFAULTS, prepareAtlas, buildCharset, parseCustom, charsetParts, charsetOf, computeGeometry, computeGrid, render, flattenForPreview, gridLines, toText, toHTML, toSVG, hexToRgb, rgbToHex, luma };
+const Engine = { DIFFUSION, ORDERED, resampleGlyph, DEFAULTS, prepareAtlas, buildCharset, parseCustom, charsetParts, charsetOf, computeGeometry, computeGrid, editCells, render, flattenForPreview, gridLines, toText, toHTML, toSVG, hexToRgb, rgbToHex, luma };
 if (typeof module !== "undefined") module.exports = Engine;

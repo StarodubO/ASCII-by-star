@@ -11,7 +11,7 @@ let pngPath = null;
 await step("export png 2x (transparent temp doc)", async () => {
   const { cs, geo, grid } = await outputGrid();
   const scale = 2, W = Math.round(geo.docW * scale), H = Math.round(geo.docH * scale);
-  const file = await (await lfs.getDataFolder()).createFile("export-test@2x.png", { overwrite: true });
+  const file = __MIRROR_DIR ? await lfs.createEntryWithUrl("file:" + __MIRROR_DIR + "/export-test@2x.png", { overwrite: true }) : await (await lfs.getDataFolder()).createFile("export-test@2x.png", { overwrite: true });
   let info;
   await core.executeAsModal(async () => {
     const tmp = await app.documents.add({ width: W, height: H, resolution: 144, mode: "RGBColorMode", fill: "transparent", name: "ASCII by Star export" });

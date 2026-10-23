@@ -446,6 +446,7 @@ module.exports = function setupInk(h) {
     $("inkPaperSwatch").style.backgroundColor = I.paperColor;
     $("inkPaperHex").value = I.paperColor;
     $("inkPaperRows").classList.toggle("hidden", !I.paperLayer);
+    if (h.refreshFields) h.refreshFields();
   }
   // A generated paper sets every slider. keepTexture (the Reset button) keeps a chosen texture and its settings.
   function setPaperType(id, keepTexture) {
