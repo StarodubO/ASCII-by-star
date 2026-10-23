@@ -4,7 +4,7 @@ const html = fs.readFileSync(root + "index.html", "utf8");
 const ids = [...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
 const els = {};
 const mk = (id) => ({ id, value: "", checked: false, textContent: "", innerHTML: "", style: {}, dataset: {}, options: [], classList: { add() {}, remove() {}, toggle() {} },
-  addEventListener() {}, setAttribute() {}, getAttribute() { return null; }, appendChild() {}, querySelector(sel) { return mk(id + sel); }, querySelectorAll() { return []; }, getBoundingClientRect() { return { left: 0, top: 0, width: 1, height: 1 }; }, offsetHeight: 100 });
+  addEventListener() {}, setAttribute() {}, getAttribute() { return null; }, appendChild() {}, insertBefore() {}, childNodes: [], querySelector(sel) { return mk(id + sel); }, querySelectorAll() { return []; }, getBoundingClientRect() { return { left: 0, top: 0, width: 1, height: 1 }; }, offsetHeight: 100 });
 for (const id of ids) els[id] = mk(id);
 global.document = { getElementById: (id) => { if (!els[id]) throw new Error("missing element #" + id); return els[id]; }, querySelectorAll: () => [], createElement: (t) => mk("new-" + t), documentElement: {}, addEventListener() {} };
 global.window = { innerHeight: 800, addEventListener() {} };

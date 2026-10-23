@@ -500,7 +500,7 @@ module.exports = function setupInk(h) {
     $("inkArtboard").addEventListener("change", () => { pv = null; schedule(0); });
     $("inkRefresh").addEventListener("click", () => { stale++; schedule(0); });
     viewer = createViewer({
-      wrap: $("inkPreviewWrap"), img: $("inkPreview"), msg: $("inkPreviewMsg"), bar: $("inkZoomBar"), grip: $("inkPreviewGrip"), storeKey: "gf:zoom:ink", onLayout: () => h.fitLayout(true),
+      wrap: $("inkPreviewWrap"), img: $("inkPreview"), msg: $("inkPreviewMsg"), bar: $("inkZoomBar"), grip: $("inkPreviewGrip"), head: $("inkPreviewHead"), storeKey: "gf:zoom:ink", onLayout: () => h.fitLayout(true),
       docSize: () => (pv ? { w: pv.frame.w, h: pv.frame.h } : null), render: renderRegion,
       onError: (e) => { console.error(e); status(errMsg(e), true); },
     });

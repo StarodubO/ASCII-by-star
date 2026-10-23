@@ -35,7 +35,8 @@ Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, includi
   - PNG at 1×, 2× or 4×;
   - .txt, coloured .html or vector .svg, or copy to the clipboard.
 - **Live smart object:** places the result as a smart object and updates it as you change settings, with Photoshop's own zoom and pan.
-- **Preview:** drag the grip under it to make it taller or shorter, or **Hide** it (nothing is rendered while hidden, handy in live mode). Each tab remembers its own.
+- **Preview:** zoom with the mouse wheel or the zoom bar, drag to move around, drag the grip under it to make it taller or shorter, or fold it away with **▾ Preview** (nothing is rendered while hidden, handy in live mode).
+- **A panel that fits small screens:** fold the preview and the **Controls** under it, fold or unfold every section at once, and drag sections into your own order by their ⠿ grip. Every section has a coloured icon, and the layout is remembered per tab on your computer.
 - **Re-edit:** select a generated layer, adjust and **Update layer**.
 - **Presets:** 25 built-in looks, plus your own presets, which you can import and export. **Reset** takes you back to the chosen look; **Randomize** tries a random one (↶ goes back).
 - **Batch:** process a folder of images to PNG (and optionally .txt).
@@ -78,4 +79,4 @@ swift tools/gen_atlas.swift tools/chars.json plugin
 **Tests in Photoshop:** `node tools/build_test.js` writes `test/gf_test.psjs` (set `TEST=ink`, `shadow`, `text`, `feature`, `rain`, `png` or `depth` for the other suites; `LOG_MIRROR=<file>` also writes the log there). Then run `open -a "Adobe Photoshop 2026" test/gf_test.psjs` on macOS, or on Windows `"C:\Program Files\Adobe\Adobe Photoshop 2026\Photoshop.exe" test\gf_test.psjs` (Photoshop already running; **File ▸ Scripts ▸ Browse…** also works).
 
 ## License
-[MIT](LICENSE). The built-in glyph atlas (`plugin/atlas.bin`) is rasterised from the Menlo typeface that ships with macOS.
+[MIT](LICENSE). The built-in glyph atlas (`plugin/atlas.bin`) is rasterised from the Menlo typeface that ships with macOS. Section icons are from [Lucide](https://lucide.dev) (ISC licence, `tools/section-icons/LICENSE`).

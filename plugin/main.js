@@ -7,7 +7,7 @@ const Engine = require("./engine.js");
 const { CHARSETS } = require("./charsets.js");
 const { PRESETS } = require("./presets.js");
 const setupInk = require("./inkui.js");
-const { makeSlider, SLIDER_HTML } = require("./slider.js");
+const { makeSlider, trackDrag, SLIDER_HTML } = require("./slider.js");
 const { enhanceAllSelects } = require("./dropdown.js");
 const { enhanceAllFields, refreshFields } = require("./fields.js");
 const { createViewer } = require("./viewer.js");
@@ -466,7 +466,7 @@ function renderRegion(rect, z) {
 
 function makeViewer() {
   return createViewer({
-    wrap: $("previewWrap"), img: $("preview"), msg: $("previewMsg"), bar: $("zoomBar"), grip: $("previewGrip"), storeKey: "gf:zoom:ascii", onLayout: () => fitLayout(true),
+    wrap: $("previewWrap"), img: $("preview"), msg: $("previewMsg"), bar: $("zoomBar"), grip: $("previewGrip"), head: $("previewHead"), storeKey: "gf:zoom:ascii", onLayout: () => fitLayout(true),
     docSize: () => (src ? { w: src.docW, h: src.docH } : null), render: renderRegion, onEditToggle: () => setEditMode(!tool.on),
     onError: (e) => { console.error(e); status(errMsg(e), true); },
   });
@@ -1132,8 +1132,18 @@ const sliderEls = {};
 const SELECTS = ["charset", "textMode", "sizeMode", "dither", "colorMode", "bgMode", "gSortDir", "gChannelSwap", "outlinePos", "outlineStyle", "outlineFill", "rainFrom", "rainCharset", "rainColorMode"];
 const CHECKS = ["sortByDensity", "invert", "serpentine", "glitchOn", "gradientMid", "keepAlpha", "phraseShade", "phraseWrap", "dropOn", "longOn", "offOn", "glowOn", "glowTextColor", "outlineOn", "rainOn", "rainHead", "rainGradientMid"];
 const TEXTS = ["customChars", "outlineChars", "outlineFillChars", "rainChars"];
+const APPLY_TEXTS = { customChars: "customApply", rainChars: "rainApply" }; // text box → its Apply button
+function refreshApply() {
+  for (const [k, btn] of Object.entries(APPLY_TEXTS)) {
+    const pending = $(k).value !== S[k];
+    $(btn).disabled = !pending; $(btn).classList.toggle("primary", pending);
+    const t = pending ? "Apply text" : "Applied"; if ($(btn).textContent !== t) $(btn).textContent = t;
+  }
+}
 let markHidden = loadJSON("gf:markHidden", false); // preview only: show where hidden messages went
 
+// Sections with a badge (plugin/icons/sections/<id>.png, made by tools/make_section_icons.swift)
+const SECTION_ICONS = new Set(["look", "chars", "outline", "rain", "edit", "grid", "tone", "color", "shadow", "glitch", "output", "batch", "inkType", "inkInk", "inkPaper", "inkLayers"]);
 function buildUI() {
   for (const [key, [label, min, max, step, fmt]] of Object.entries(SLIDERS)) {
     const host = $("sl-" + key);
@@ -1156,11 +1166,20 @@ function buildUI() {
   $("glitchReseed").addEventListener("click", () => { S.glitchSeed = Math.floor(Math.random() * 99999) + 1; syncUI(); schedulePreview(0); });
   $("glitchReset").addEventListener("click", () => { for (const k of GLITCH_KEYS) S[k] = Engine.DEFAULTS[k]; syncUI(); schedulePreview(0); });
   $("glitchRandom").addEventListener("click", randomGlitch);
+  const captureRainArt = () => { S.rainArtLook = {}; for (const k of ["colorMode", "fg", "gradient", "gradientMid", "saturation", "colorBoost"]) S.rainArtLook[k] = JSON.parse(JSON.stringify(S[k])); refreshVisibility(); schedulePreview(0); };
+  $("rainArtCapture").addEventListener("click", () => { captureRainArt(); status("The rain now keeps the characters' current colours."); });
+  $("rainArtLive").addEventListener("click", () => { S.rainArtLook = null; refreshVisibility(); schedulePreview(0); status("The rain follows the characters' colours as they change."); });
+  $("rainColorMode").addEventListener("change", () => { if (S.rainColorMode === "art" && !S.rainArtLook) captureRainArt(); });
   $("rainSeed").addEventListener("change", () => { const v = parseInt($("rainSeed").value, 10); if (v > 0) S.rainSeed = v; syncUI(); schedulePreview(0); });
   $("rainReseed").addEventListener("click", () => { S.rainSeed = Math.floor(Math.random() * 99999) + 1; syncUI(); schedulePreview(0); });
   $("fillShuffle").addEventListener("click", () => { S.fillSeed = Math.floor(Math.random() * 99999) + 1; schedulePreview(0); });
   for (const k of CHECKS) onCheck($(k), (v) => { S[k] = v; if (v) visibleShadow(k); refreshVisibility(); schedulePreview(); });
-  for (const k of TEXTS) $(k).addEventListener("input", () => { S[k] = $(k).value; refreshVisibility(); schedulePreview(120); });
+  // custom text waits for Apply (half-typed {…} or […] would redraw on every key); the rest is live
+  for (const k of TEXTS) if (!APPLY_TEXTS[k]) $(k).addEventListener("input", () => { S[k] = $(k).value; refreshVisibility(); schedulePreview(120); });
+  for (const [k, btn] of Object.entries(APPLY_TEXTS)) {
+    $(k).addEventListener("input", refreshApply);
+    $(btn).addEventListener("click", () => { S[k] = $(k).value; refreshVisibility(); refreshApply(); schedulePreview(0); });
+  }
   $("hideMark").checked = markHidden;
   onCheck($("hideMark"), (v) => { markHidden = v; saveJSON("gf:markHidden", v); schedulePreview(0); });
   $("hideMove").addEventListener("click", () => { S.hideSeed = Math.floor(Math.random() * 99999) + 1; schedulePreview(0); });
@@ -1248,16 +1267,69 @@ function buildUI() {
   $("exportPresets").addEventListener("click", exportPresets);
   $("importPresets").addEventListener("click", importPresets);
 
-  const collapsed = loadJSON("gf:collapsed", { batch: true }), bands = new Map();
-  document.querySelectorAll(".section").forEach((sec) => {
-    const k = sec.dataset.section, n = bands.get(sec.parentNode) || 0;
-    bands.set(sec.parentNode, n + 1);
-    if (n % 2) sec.classList.add("alt"); // light and dark bands alternate within each tab
-    const apply = () => { sec.classList.toggle("collapsed", !!collapsed[k]); sec.querySelector(".chev").textContent = collapsed[k] ? "▸" : "▾"; };
-    sec.querySelector(".head").addEventListener("click", () => { collapsed[k] = !collapsed[k]; saveJSON("gf:collapsed", collapsed); apply(); });
-    apply();
-  });
+  // the controls under each preview can fold away, leaving more room for the settings
+  for (const id of ["ctl", "inkCtl"]) {
+    const head = $(id + "Head"), body = $(id + "Body"), key = "gf:" + id + "Folded";
+    const apply = (f) => { body.classList.toggle("hidden", f); head.querySelector(".chev").textContent = f ? "▸" : "▾"; head.querySelector(".ctlLabel").textContent = f ? "Controls (source, apply, live smart object)" : "Controls"; fitLayout(true); };
+    head.addEventListener("click", () => { const f = !body.classList.contains("hidden"); saveJSON(key, f); apply(f); });
+    apply(!!loadJSON(key, false));
+  }
+  setupSections();
   buildPresetSelect();
+}
+
+// ---------- sections ----------
+// Each tab's settings are sections that fold (remembered), can be dragged into another order by the grip on
+// their heading (remembered per tab), and fold or unfold all at once from buttons in the controls under the preview.
+function setupSections() {
+  const collapsed = loadJSON("gf:collapsed", { batch: true });
+  const sectionsOf = (box) => Array.from(box.childNodes || []).filter((el) => el.classList && el.classList.contains("section"));
+  const restripe = (box) => sectionsOf(box).forEach((sec, i) => sec.classList.toggle("alt", i % 2 === 1)); // light and dark bands alternate
+  const orderKey = (box) => "gf:sectionOrder:" + box.id;
+  const fold = (sec, f) => { collapsed[sec.dataset.section] = f; sec.classList.toggle("collapsed", f); sec.querySelector(".chev").textContent = f ? "▸" : "▾"; };
+  for (const [box, controls] of [[$("scroller"), $("ctlBody")], [$("inkScroller"), $("inkCtlBody")]]) {
+    const secs = sectionsOf(box), original = secs.map((x) => x.dataset.section), last = secs[secs.length - 1], after = last ? last.nextSibling : null;
+    const place = (order) => { // order: section ids; ones not listed keep their usual place after them
+      const byId = new Map(secs.map((x) => [x.dataset.section, x]));
+      for (const id of order.concat(original)) if (byId.has(id)) { box.insertBefore(byId.get(id), after); byId.delete(id); }
+      restripe(box);
+    };
+    for (const sec of secs) {
+      const k = sec.dataset.section, head = sec.querySelector(".head");
+      if (SECTION_ICONS.has(k)) { // a coloured badge, so sections are easy to spot while scrolling
+        const b = document.createElement("img");
+        b.className = "sicon"; b.setAttribute("src", "icons/sections/" + k + ".png"); b.setAttribute("alt", "");
+        head.insertBefore(b, head.querySelector(".chev").nextSibling);
+      }
+      const grip = document.createElement("span");
+      grip.className = "sgrip"; grip.textContent = "⠿"; grip.title = "Drag to move this section";
+      head.appendChild(grip);
+      grip.addEventListener("click", (e) => { if (e.stopPropagation) e.stopPropagation(); }); // a drag is not a fold
+      trackDrag(grip, {
+        down: (e) => { sec.classList.add("dragging"); if (e.preventDefault) e.preventDefault(); },
+        move: (e) => { // the section goes before the first other section whose middle is below the pointer
+          const others = sectionsOf(box).filter((x) => x !== sec);
+          const target = others.find((x) => { const r = x.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+          const ref = target || (others.length ? others[others.length - 1].nextSibling : after);
+          if (ref !== sec && sec.nextSibling !== ref) { box.insertBefore(sec, ref); restripe(box); }
+        },
+        up: () => { sec.classList.remove("dragging"); saveJSON(orderKey(box), sectionsOf(box).map((x) => x.dataset.section)); },
+      });
+      head.addEventListener("click", () => { fold(sec, !collapsed[k]); saveJSON("gf:collapsed", collapsed); });
+      fold(sec, !!collapsed[k]);
+    }
+    place(loadJSON(orderKey(box), []));
+    // the buttons for all sections, at the end of the controls under the preview (they fold away with them)
+    const bar = document.createElement("div"), btn = (t, tip, fn) => { const x = document.createElement("button"); x.textContent = t; x.title = tip; x.addEventListener("click", fn); bar.appendChild(x); };
+    bar.className = "row secBar";
+    btn("▸ Collapse all", "Fold every section (handy before dragging them into a new order)", () => { for (const x of sectionsOf(box)) fold(x, true); saveJSON("gf:collapsed", collapsed); });
+    btn("▾ Expand all", "Unfold every section", () => { for (const x of sectionsOf(box)) fold(x, false); saveJSON("gf:collapsed", collapsed); });
+    btn("Reset order", "Put the sections back in their usual order", () => { saveJSON(orderKey(box), []); place(original); });
+    const label = document.createElement("div"); // says what the buttons act on
+    label.className = "subhead"; label.textContent = "Settings sections below";
+    controls.appendChild(label);
+    controls.appendChild(bar);
+  }
 }
 
 // colour keys: g0..g2 are the gradient stops, rg0..rg2 the rain's, anything else is a setting name (fg, bg, dropColor, …)
@@ -1290,6 +1362,7 @@ function syncUI() {
   for (const k of SELECTS) setSelect($(k), S[k]);
   for (const k of CHECKS) { $(k).checked = !!S[k]; if ($(k).syncChecked) $(k).syncChecked(); }
   for (const k of TEXTS) if ($(k).value !== S[k]) $(k).value = S[k];
+  refreshApply();
   $("glitchSeed").value = String(S.glitchSeed);
   $("rainSeed").value = String(S.rainSeed);
   $("undoRandom").disabled = !undoStack.length;
@@ -1339,7 +1412,10 @@ function refreshVisibility() {
   show($("rainCharsRow"), S.rainCharset === "custom");
   show(sliderEls.rainDistance.row, S.rainFrom !== "everywhere");
   show(sliderEls.rainOutside.row, S.rainFrom === "everywhere");
-  show($("rainColorRow"), S.rainColorMode !== "gradient");
+  show($("rainColorRow"), S.rainColorMode === "own");
+  show($("rainArtRow"), S.rainColorMode === "art");
+  $("rainArtInfo").textContent = S.rainArtLook ? `Kept: ${{ mono: "single colour", original: "the image's colours", gradient: "gradient" }[S.rainArtLook.colorMode] || ""}` : "Following the Colour section";
+  $("rainArtLive").disabled = !S.rainArtLook;
   show($("rainGradRows"), S.rainColorMode === "gradient");
   for (const id of ["rainMidSwatch", "rainMidHex"]) $(id).style.opacity = S.rainGradientMid ? "" : "0.35";
   $("rainHint").textContent = RAIN_HINTS[S.rainFrom] || "";

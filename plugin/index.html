@@ -38,7 +38,17 @@
   .section { border-top: 1px solid var(--uxp-host-border-color); margin: 0 -8px; padding: 6px 8px 4px 8px; background: rgba(255, 255, 255, 0.06); }
   .section.alt { background: rgba(0, 0, 0, 0.2); }
   .head { display: flex; flex-direction: row; align-items: center; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; font-size: 10px; padding: 3px 0 6px 0; cursor: pointer; }
-  .head .chev { margin-right: 6px; width: 10px; opacity: 0.7; }
+  .ctlHead { display: flex; flex-direction: row; align-items: center; font-size: 10px; cursor: pointer; padding: 1px 0 4px 0; }
+  .ctlHead .ctlLabel { opacity: 0.65; }
+  /* fold / unfold controls (section heads, Controls, the preview): small square buttons */
+  .head .chev, .ctlHead .chev, .chevBtn { box-sizing: border-box; display: flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; flex: 0 0 auto; padding: 0 5px; margin-right: 6px; border: 1px solid var(--uxp-host-border-color); border-radius: 4px; background: rgba(128, 128, 128, 0.2); font-size: 12px; font-weight: normal; letter-spacing: 0; cursor: pointer; }
+  .chevBtn { margin-right: 0; font-size: 11px; }
+  .head:hover .chev, .ctlHead:hover .chev, .chevBtn:hover { background: rgba(128, 128, 128, 0.35); }
+  .sgrip { margin-left: auto; padding: 0 4px; font-size: 14px; opacity: 0.5; cursor: grab; letter-spacing: 0; }
+  .section.dragging { outline: 1px solid rgba(80, 160, 255, 0.9); }
+  .secBar { margin: 6px 0; }
+  .secBar button { flex: 1 1 auto; }
+  .sicon { width: 18px; height: 18px; flex: 0 0 18px; margin-right: 7px; }
   .collapsed .body { display: none; }
   #previewWrap, #inkPreviewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
   #previewWrap.hidden, #inkPreviewWrap.hidden { display: none; }
@@ -96,9 +106,12 @@
  <div id="tabs"><div class="tab" id="tabAscii">ASCII</div><div class="tab" id="tabInk">Ink bleed</div></div>
  <div id="asciiTool" class="tool">
  <div id="top">
+  <div class="ctlHead" id="previewHead"><span class="chev">▾</span><span class="ctlLabel">Preview</span></div>
   <div id="previewWrap"><img id="preview" alt=""><div id="previewMsg">Open a document to begin</div></div>
   <div class="pvGrip" id="previewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
   <div class="row zoomBar" id="zoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
+  <div class="ctlHead" id="ctlHead" title="Show or hide the controls under the preview (more room for the settings)"><span class="chev">▾</span><span class="ctlLabel">Controls</span></div>
+  <div id="ctlBody">
   <div class="row btnrow" style="margin-top:5px">
     <button id="liveBtn" title="Places the result as a smart object in your document and opens its contents. Edits update it live; Save & close puts the final result into your document.">Open live smart object</button>
     <button id="resetAll" title="Reset every setting to its default" style="flex:0 0 auto">Reset all</button>
@@ -128,6 +141,7 @@
   </div>
 
   </div>
+  </div>
  <div id="scroller">
   <div class="section" data-section="look">
     <div class="head"><span class="chev">▾</span>Look</div>
@@ -153,6 +167,7 @@
         <p class="hint">Hide a message in the picture: put it in curly braces, e.g. <b>{HELLO}</b>. <b>{XO*5}</b> hides it 5 times.</p>
         <p class="hint">Fill the artwork: <b>[STAR]</b> writes STAR all over it, <b>[STAR|LOVE|★]</b> takes turns, <b>[?STAR|LOVE|★]</b> picks at random, <b>[?01]</b> random characters. Characters outside the brackets (<b>.:-= [STAR]</b>) draw the lighter tones.</p>
         <div class="row"><textarea id="customChars" placeholder="Characters, words or a phrase, e.g.  .:-=+*#%@  {HELLO}  [STAR|LOVE]"></textarea></div>
+        <div class="row"><button id="customApply" class="grow" title="Use the text above (the preview waits until you apply)">Apply text</button></div>
         <div class="row" id="hideRow"><label class="grow"><input type="checkbox" id="hideMark"> Highlight messages in the preview</label><button id="hideMove" title="Put the hidden messages somewhere else">Move</button></div>
         <div id="fillRows">
           <div id="sl-fillLevel"></div>
@@ -205,7 +220,11 @@
       <div id="rainRows" class="sub">
         <div class="row"><span class="label">Rain from</span><select id="rainFrom" class="grow"><option value="object">The shape (drips into empty space)</option><option value="everywhere">Everywhere (the whole image)</option></select></div>
         <div class="row"><span class="label">Characters</span><select id="rainCharset" class="grow"></select></div>
-        <div class="row" id="rainCharsRow"><span class="label">Your text</span><input type="text" id="rainChars" placeholder="e.g. 01  or  [STAR|LOVE]"></div>
+        <div id="rainCharsRow" class="sub">
+          <p class="hint">Plain characters fall in random order (<b>01</b>, <b>アイウ</b>). <b>[STAR]</b> writes STAR down each stream, <b>[STAR|LOVE|★]</b> takes turns, <b>[?STAR|LOVE|★]</b> picks at random, <b>[?01]</b> random characters.</p>
+          <div class="row"><textarea id="rainChars" placeholder="e.g.  01  or  [STAR|LOVE]"></textarea></div>
+          <div class="row"><button id="rainApply" class="grow" title="Use the text above (the preview waits until you apply)">Apply text</button></div>
+        </div>
         <div id="sl-rainLength"></div>
         <div id="sl-rainLengthVar"></div>
         <div id="sl-rainAmount"></div>
@@ -216,6 +235,7 @@
         <div id="sl-rainAngle"></div>
         <div class="row"><label class="grow"><input type="checkbox" id="rainHead"> Bright head</label><div class="swatch" data-color="rainHeadColor"></div><input type="text" class="hex" data-hex="rainHeadColor"></div>
         <div class="row"><span class="label">Colour</span><select id="rainColorMode" class="grow"><option value="own">Rain colour</option><option value="art">The shape's colours</option><option value="gradient">Gradient, tail → head</option></select></div>
+        <div class="row" id="rainArtRow"><span class="grow hint" id="rainArtInfo" style="margin:0"></span><button id="rainArtCapture" title="Take the characters' colours as they are now (Colour section). The rain keeps them when you change those settings later.">Refresh</button><button id="rainArtLive" title="Follow the Colour section as it changes">Follow live</button></div>
         <div class="row" id="rainColorRow"><span class="label">Rain colour</span><div class="swatch" data-color="rainColor"></div><input type="text" class="hex" data-hex="rainColor"></div>
         <div id="rainGradRows">
           <div class="row"><span class="label">Tail</span><div class="swatch" data-color="rg0"></div><input type="text" class="hex" data-hex="rg0"></div>
@@ -418,9 +438,12 @@
 
  <div id="inkTool" class="tool hidden">
  <div id="inkTop">
+  <div class="ctlHead" id="inkPreviewHead"><span class="chev">▾</span><span class="ctlLabel">Preview</span></div>
   <div id="inkPreviewWrap"><img id="inkPreview" alt=""><div id="inkPreviewMsg">Select a layer to begin</div></div>
   <div class="pvGrip" id="inkPreviewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
   <div class="row zoomBar" id="inkZoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
+  <div class="ctlHead" id="inkCtlHead" title="Show or hide the controls under the preview (more room for the settings)"><span class="chev">▾</span><span class="ctlLabel">Controls</span></div>
+  <div id="inkCtlBody">
   <div class="row">
     <select id="inkSource" class="grow">
       <option value="layer" selected>Source: Selected layer</option>
@@ -435,6 +458,7 @@
     <div class="row btnrow"><button id="inkUpdate" class="primary">Update overlay</button><button id="inkStopEdit">Done</button></div>
   </div>
   <div class="row"><button id="inkApply" class="primary grow" title="Adds a group of blend-mode layers above the source. The source layer is not changed.">Add ink bleed overlay</button></div>
+  </div>
  </div>
  <div id="inkScroller">
   <div class="section" data-section="inkType">

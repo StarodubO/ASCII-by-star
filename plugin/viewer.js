@@ -7,7 +7,7 @@
 // is rendered until it's shown again. Both are remembered per tab.
 // setEditor(ed) turns the preview into a canvas: a click or drag calls ed.down/move/up with document px
 // (Option/Alt-drag still moves the view) and ed.hover follows the pointer. setMarks(rects) outlines document
-// rects (cells; {cls} adds a class) over the image. With onEditToggle, the zoom bar gets an Edit button that calls it.
+// rects (cells; {cls} adds a class) over the image. head: the "▾ Preview" line above it, which shows and hides it. With onEditToggle, the zoom bar gets an Edit button that calls it.
 "use strict";
 const { imaging } = require("photoshop");
 const { makeSlider, trackDrag, SLIDER_HTML } = require("./slider.js");
@@ -18,7 +18,7 @@ const SIZE_MIN = 0.1, SIZE_MAX = 0.8, MIN_PX = 60; // preview height: share of t
 function load(key, d) { try { const v = JSON.parse(localStorage.getItem(key)); return v === null ? d : v; } catch (e) { return d; } }
 function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) { /* not saved */ } }
 
-function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, onError, onLayout, onEditToggle }) {
+function createViewer({ wrap, img, msg, bar, grip, head, storeKey, render, docSize, onError, onLayout, onEditToggle }) {
   let zoomT = Math.max(0, Math.min(1, Number(load(storeKey, 0)) || 0)); // slider position: 0 = Fit, 1 = 400%, logarithmic in between
   let sizeK = Math.max(SIZE_MIN, Math.min(SIZE_MAX, Number(load(storeKey + ":size", 0.38)) || 0.38));
   let hidden = !!load(storeKey + ":hidden", false), panelH = 0, dirty = true;
@@ -156,7 +156,8 @@ function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, on
     if (settle) { zTimer = setTimeout(() => pump(), settle); return Promise.resolve(); }
     return pump();
   }
-  let toggle = null, editBtn = null;
+  let editBtn = null;
+  if (head) head.addEventListener("click", () => setHidden(!hidden));
   function showEditBtn() {
     if (!editBtn) return;
     const t = editor ? "Done" : "Edit";
@@ -165,15 +166,13 @@ function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, on
     editBtn.title = editor ? "Stop editing; clicks and drags move and zoom the preview again" : "Edit symbols: click or drag on the preview to change characters";
   }
   if (bar) {
-    bar.innerHTML = `<span class="label zlabel" title="Double-click for Fit">Zoom</span>${SLIDER_HTML}<span class="val zval"></span>${onEditToggle ? '<button class="zbtn zedit"></button>' : ""}<button class="zbtn ztoggle"></button>`;
+    bar.innerHTML = `<span class="label zlabel" title="Double-click for Fit">Zoom</span>${SLIDER_HTML}<span class="val zval"></span>${onEditToggle ? '<button class="zbtn zedit"></button>' : ""}`;
     zval = bar.querySelector(".zval");
     slider = makeSlider(bar.querySelector(".slider"), 0, 1, 0.001, (t) => setZoom(t, null, 220));
     slider.value = zoomT;
     bar.querySelector(".zlabel").addEventListener("dblclick", () => setZoom(0));
-    toggle = bar.querySelector(".ztoggle");
     editBtn = bar.querySelector(".zedit");
     if (editBtn) { editBtn.addEventListener("click", () => onEditToggle()); showEditBtn(); }
-    toggle.addEventListener("click", () => setHidden(!hidden));
     label();
   }
 
@@ -184,10 +183,11 @@ function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, on
     panelH = H || panelH;
     setShown(wrap, !hidden); setShown(grip, !hidden);
     if (bar) {
-      for (const el of bar.querySelectorAll(".zlabel, .slider, .zval, .zedit")) setShown(el, !hidden);
-      toggle.classList.toggle("grow", hidden);
-      const t = hidden ? "Show preview" : "Hide";
-      if (toggle.textContent !== t) { toggle.textContent = t; toggle.title = hidden ? "" : "Hide the preview (nothing is rendered while it's hidden)"; }
+      setShown(bar, !hidden);
+    }
+    if (head) {
+      const chev = head.querySelector(".chev"), t = hidden ? "▸" : "▾";
+      if (chev.textContent !== t) { chev.textContent = t; head.title = hidden ? "Show the preview" : "Hide the preview (nothing is rendered while it's hidden)"; }
     }
     const px = Math.max(MIN_PX, Math.round(panelH * sizeK)) + "px";
     if (!hidden && wrap.style.height !== px) wrap.style.height = px;
@@ -256,6 +256,30 @@ function createViewer({ wrap, img, msg, bar, grip, storeKey, render, docSize, on
   try { img.setAttribute("draggable", "false"); } catch (e) { /* not supported */ }
   img.addEventListener("dragstart", (e) => { if (e.preventDefault) e.preventDefault(); });
   trackDrag(wrap, { down, move, up });
+  // Wheel and pinch zoom around the pointer, when Photoshop passes those events to the panel (it doesn't always:
+  // UXP may keep them). A macOS trackpad pinch arrives as a wheel event with ctrlKey, or as gesture events.
+  function zoomAround(t, cx, cy) {
+    const d = docSize(), at = toDoc(cx, cy);
+    if (!d || !centre || hidden) return;
+    const b = box(), kOld = scaleFor(d, b), old = zoomT;
+    zoomT = Math.max(0, Math.min(1, t));
+    const kNew = scaleFor(d, b);
+    zoomT = old;
+    const c = at ? { x: at.x + ((centre.x - at.x) * kOld) / kNew, y: at.y + ((centre.y - at.y) * kOld) / kNew } : null; // the point under the pointer stays put
+    setZoom(t, c, 220);
+  }
+  const onWheel = (e) => {
+    const dy = e.deltaY !== undefined ? e.deltaY : -(e.wheelDelta || 0);
+    if (!dy || !shown) return;
+    if (e.preventDefault) e.preventDefault();
+    zoomAround(zoomT + (e.ctrlKey ? -dy * 0.01 : -Math.sign(dy) * 0.05), e.clientX, e.clientY);
+  };
+  wrap.addEventListener("wheel", onWheel);
+  wrap.addEventListener("mousewheel", (e) => { if (e.deltaY === undefined) onWheel(e); });
+  let pinchFrom = null;
+  wrap.addEventListener("gesturestart", (e) => { pinchFrom = zoomT; if (e.preventDefault) e.preventDefault(); });
+  wrap.addEventListener("gesturechange", (e) => { if (pinchFrom === null || !e.scale) return; if (e.preventDefault) e.preventDefault(); zoomAround(pinchFrom + Math.log(e.scale) * 0.6, e.clientX, e.clientY); });
+  wrap.addEventListener("gestureend", () => { pinchFrom = null; });
   const hover = (e) => { if (editor && editor.hover && !drag) editor.hover(e ? toDoc(e.clientX, e.clientY) : null); };
   for (const t of ["pointermove", "mousemove"]) wrap.addEventListener(t, hover);
   for (const t of ["pointerleave", "mouseleave"]) wrap.addEventListener(t, () => hover(null));

@@ -77,6 +77,7 @@ const DEFAULTS = {
   rainFade: 0.8, rainHead: true, rainHeadColor: "#ffffff", rainOutside: 0.4, rainSeed: 1,
   rainColorMode: "own", rainColor: "#00ff41", // own | art (the shape's colours) | gradient (tail → head)
   rainGradient: ["#003b00", "#00c832", "#b8ffb8"], rainGradientMid: true,
+  rainArtLook: null, // "art" colours from these captured colour settings ({colorMode, fg, gradient, …}); null: the current ones
   // glitch (everything is inert unless glitchOn is true)
   glitchOn: false,
   glitchSeed: 1,
@@ -623,6 +624,13 @@ function editCells(e, geo) {
   }
   return out;
 }
+// Where the rain's "art" colours come from: the cells' current colours, or the colour settings captured in
+// s.rainArtLook (so the rain keeps an earlier gradient while the characters change colour).
+function rainArtSource(grid, s) {
+  if (!s.rainArtLook || s.rainColorMode !== "art") return grid.color;
+  if (!grid._rainArt) grid._rainArt = cellColors(grid, Object.assign({}, s, s.rainArtLook));
+  return grid._rainArt;
+}
 // One rain stream starting at cell i and falling (see applyRain): the head, the bright end, is lowest.
 function rainStream(grid, s, cs, i, len) {
   const { cols, rows, glyph, color } = grid, c0 = i % cols, r0 = Math.floor(i / cols), seed = (s.rainSeed | 0) + 307;
@@ -632,7 +640,7 @@ function rainStream(grid, s, cs, i, len) {
   const L = Math.max(1, Math.round(s.rainLength));
   if (len <= 0) len = Math.max(1, Math.round(L * (1 + clamp01(s.rainLengthVar) * (hash3(seed + 1, c0, r0) * 2 - 1))));
   const slope = Math.tan((Math.max(-60, Math.min(60, s.rainAngle)) * Math.PI) / 180), fade = clamp01(s.rainFade);
-  const own = hexToRgb(s.rainColor), head = hexToRgb(s.rainHeadColor), art = color.slice(i * 3, i * 3 + 3);
+  const own = hexToRgb(s.rainColor), head = hexToRgb(s.rainHeadColor), art = rainArtSource(grid, s).slice(i * 3, i * 3 + 3);
   const stops = (s.rainGradientMid ? s.rainGradient : [s.rainGradient[0], s.rainGradient[2]]).map(hexToRgb);
   for (let k = 0; k < len; k++) {
     const g = next(), r = r0 + k, c = c0 + Math.round(k * slope);
@@ -682,7 +690,7 @@ function applyEdits(grid, s, cs) {
 // that got a blank count as empty. Randomness is hashed from rainSeed and cell positions, so the preview,
 // apply and batch match. Hidden messages are left alone.
 function applyRain(grid, s, cs) {
-  const { cols, rows, glyph, color } = grid, cells = cols * rows, seed = (s.rainSeed | 0) + 307;
+  const { cols, rows, glyph, color } = grid, cells = cols * rows, seed = (s.rainSeed | 0) + 307, artSrc = rainArtSource(grid, s);
   if (!cs.rain || !itemStream(cs, cs.rain, seed)) return;
   const shape = new Uint8Array(cells);
   for (let i = 0; i < cells; i++) shape[i] = glyph[i] >= 0 && cs.cov[glyph[i]] > 0 ? 1 : 0;
@@ -703,7 +711,7 @@ function applyRain(grid, s, cs) {
       const r = r0 + k, c = c0 + Math.round(k * slope);
       if (r < 0 || r >= rows || c < 0 || c >= cols) continue;
       const i = r * cols + c;
-      if (shape[i]) { if (!everywhere) break; art = color.slice(i * 3, i * 3 + 3); }
+      if (shape[i]) { if (!everywhere) break; art = artSrc.slice(i * 3, i * 3 + 3); }
       if (g < 0 || (hidden && hidden[i]) || (gaps && hash3(seed + 2, c, r) < gaps)) continue;
       const t = (k - k0 + 1) / len, isHead = k === k1 && s.rainHead;
       const col = isHead ? head : s.rainColorMode === "gradient" ? gradientAt(stops, t) : s.rainColorMode === "art" && art ? art : own;
@@ -719,7 +727,7 @@ function applyRain(grid, s, cs) {
       if (!shape[i] || below < 0 || below >= cols || shape[(r + 1) * cols + below]) continue; // not a lower edge
       if (hash3(seed, c, r) >= amount) continue;
       const len = lenOf(c, r), far = 1 + Math.floor(hash3(seed + 3, c, r) * D);
-      stream(c, r, Math.max(1, far - len + 1), far, color.slice(i * 3, i * 3 + 3));
+      stream(c, r, Math.max(1, far - len + 1), far, artSrc.slice(i * 3, i * 3 + 3));
     }
   } else {
     // a line of streams per column, starting above the top row (slanted lines also from beyond the sides)
