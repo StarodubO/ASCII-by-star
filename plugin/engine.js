@@ -212,7 +212,7 @@ function charsetParts(s, presetChars, rainPresetChars) {
   const custom = s.charset === "custom" ? parseCustom(s.customChars) : null;
   let extra = custom ? custom.messages.map((m) => m.text).join("") + specChars(custom.fill) : "";
   if (s.outlineOn) extra += (s.outlineStyle === "chars" ? s.outlineChars : OUTLINE_LINES) + (s.outlineFill === "chars" || s.outlineFill === "random" ? s.outlineFillChars : "");
-  const rain = s.rainOn ? rainSpec(s, rainPresetChars) : null;
+  const rain = s.rainOn || (s.cellEdits || []).some((x) => x && x.op === "rain") ? rainSpec(s, rainPresetChars) : null;
   extra += specChars(rain);
   if (s.cellEdits && s.cellEdits.length) extra += s.cellEdits.map((e) => (e.op === "write" && e.text) || "").join("");
   return { ramp: custom ? custom.text : presetChars, extra, spread: s.dither === "none", rain };
@@ -601,6 +601,8 @@ function hideMessages(grid, s, cs, messages) {
 //   color   recolours the cells that have a character
 //   erase   empties the cells
 //   restore puts back what the image gave the cells (undoes earlier edits there)
+//   rain    a Matrix rain stream falls from each cell, e.len cells long (0: the rain settings' length ± spread),
+//           drawn with the rain's characters, colours, fade, head and angle
 function editCells(e, geo) {
   const { cols, rows, cellW, cellH, docW, docH } = geo, out = [];
   if (Array.isArray(e.rect) && e.rect.length === 4) {
@@ -621,12 +623,36 @@ function editCells(e, geo) {
   }
   return out;
 }
+// One rain stream starting at cell i and falling (see applyRain): the head, the bright end, is lowest.
+function rainStream(grid, s, cs, i, len) {
+  const { cols, rows, glyph, color } = grid, c0 = i % cols, r0 = Math.floor(i / cols), seed = (s.rainSeed | 0) + 307;
+  const next = cs.rain && itemStream(cs, cs.rain, seed + 5000 + i);
+  if (!next) return;
+  if (!grid.shade) grid.shade = new Float32Array(cols * rows).fill(1);
+  const L = Math.max(1, Math.round(s.rainLength));
+  if (len <= 0) len = Math.max(1, Math.round(L * (1 + clamp01(s.rainLengthVar) * (hash3(seed + 1, c0, r0) * 2 - 1))));
+  const slope = Math.tan((Math.max(-60, Math.min(60, s.rainAngle)) * Math.PI) / 180), fade = clamp01(s.rainFade);
+  const own = hexToRgb(s.rainColor), head = hexToRgb(s.rainHeadColor), art = color.slice(i * 3, i * 3 + 3);
+  const stops = (s.rainGradientMid ? s.rainGradient : [s.rainGradient[0], s.rainGradient[2]]).map(hexToRgb);
+  for (let k = 0; k < len; k++) {
+    const g = next(), r = r0 + k, c = c0 + Math.round(k * slope);
+    if (r >= rows || c < 0 || c >= cols) break;
+    if (g < 0) continue;
+    const j = r * cols + c, t = (k + 1) / len, isHead = k === len - 1 && s.rainHead;
+    const cl = isHead ? head : s.rainColorMode === "gradient" ? gradientAt(stops, t) : s.rainColorMode === "art" ? art : own;
+    glyph[j] = g;
+    color[j * 3] = clamp255(cl[0]); color[j * 3 + 1] = clamp255(cl[1]); color[j * 3 + 2] = clamp255(cl[2]);
+    grid.shade[j] = isHead ? 1 : 1 - fade * (1 - t);
+    if (grid.hidden) grid.hidden[j] = 0;
+  }
+}
 function applyEdits(grid, s, cs) {
   const { glyph, color, geo } = grid;
   const orig = { glyph: glyph.slice(), color: color.slice(), shade: grid.shade ? grid.shade.slice() : null, hidden: grid.hidden ? grid.hidden.slice() : null };
   for (const e of s.cellEdits) {
     if (!e) continue;
     const cells = editCells(e, geo), col = e.color ? hexToRgb(e.color) : null;
+    if (e.op === "rain") { cells.forEach((i) => rainStream(grid, s, cs, i, e.len | 0)); continue; }
     const seq = e.op === "write" ? Array.from(String(e.text || ""), (ch) => (ch === " " ? -1 : charAt(cs, ch))) : [];
     cells.forEach((i, k) => {
       if (e.op === "restore") {

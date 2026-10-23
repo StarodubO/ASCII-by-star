@@ -760,20 +760,21 @@ async function importPresets() {
 // edit in S.cellEdits, which the engine applies after the grid (engine applyEdits). Positions are stored as
 // fractions of the area, so they stay on the picture when the size changes. The tool's own settings belong to
 // the panel, not to the look, so they're stored apart.
-let tool = Object.assign({ op: "write", drag: "paint", fill: false, text: "#", color: "#00e6ff", useColor: false }, loadJSON("gf:editTool", {}), { on: false });
-const saveTool = () => saveJSON("gf:editTool", { op: tool.op, drag: tool.drag, fill: tool.fill, text: tool.text, color: tool.color, useColor: tool.useColor });
+let tool = Object.assign({ op: "write", drag: "paint", fill: false, rainLen: "", text: "#", color: "#00e6ff", useColor: false }, loadJSON("gf:editTool", {}), { on: false });
+const saveTool = () => saveJSON("gf:editTool", { op: tool.op, drag: tool.drag, fill: tool.fill, rainLen: tool.rainLen, text: tool.text, color: tool.color, useColor: tool.useColor });
 let cellSel = null; // the selected cells: {rect: [x0, y0, x1, y1]} or {pts: [[x, y], …]} as fractions of the area, or null
 const EDIT_HINTS = {
   write: "Click a character or drag across several. More than one character is written in turn along the drag; a space empties a cell.",
   color: "Click or drag over characters to give them the colour.",
   erase: "Click or drag to empty cells.",
   restore: "Click or drag to give cells back what the image puts there.",
+  rain: "Click a character and a Matrix rain stream falls from it (drag for several). Characters, colours, fade, head and angle come from Matrix rain; length from Rain length.",
   line: "Drag from one end to the other. Shift keeps it straight across, down or diagonal.",
   rect: "Drag from corner to corner. Shift makes a square.",
   ellipse: "Drag over the box the ellipse fits in. Shift makes a circle.",
   select: "Drag a box over the preview (a click picks one cell), then Apply, or press Enter in Characters. Several characters fill the box left to right. The box stays selected, so you can apply more to it.",
 };
-const EDIT_OPS = { write: "write", color: "recolour", erase: "erase", restore: "restore" };
+const EDIT_OPS = { write: "write", color: "recolour", erase: "erase", restore: "restore", rain: "start Matrix rain" };
 const frac = (v) => Math.round(Math.max(0, Math.min(1, v)) * 1e6) / 1e6;
 // A new edit from the tool settings, or null (with a message) when there's nothing to write.
 function newEdit() {
@@ -783,6 +784,7 @@ function newEdit() {
     e.text = tool.text;
   }
   if (tool.op === "color" || (tool.op === "write" && tool.useColor)) e.color = tool.color;
+  if (tool.op === "rain") e.len = Math.max(0, Math.min(500, parseInt(tool.rainLen, 10) || 0));
   return e;
 }
 function addEdit(e) { S.cellEdits = (S.cellEdits || []).concat([e]); refreshEditUI(); schedulePreview(0); }
@@ -963,6 +965,8 @@ function refreshEditUI() {
   uc.checked = forced || tool.useColor; uc.disabled = forced;
   if (uc.syncChecked) uc.syncChecked();
   show($("editTextRow"), tool.op === "write");
+  show($("editRainRow"), tool.op === "rain");
+  if ($("editRainLen").value !== tool.rainLen) $("editRainLen").value = tool.rainLen;
   show($("editFillRow"), tool.drag === "rect" || tool.drag === "ellipse");
   if ($("editFill").checked !== tool.fill) { $("editFill").checked = tool.fill; if ($("editFill").syncChecked) $("editFill").syncChecked(); }
   show($("editColorRow"), tool.op === "write" || tool.op === "color");
@@ -1170,6 +1174,7 @@ function buildUI() {
   $("editFromSel").addEventListener("click", editFromSelection);
   $("editApply").addEventListener("click", applySelection);
   onCheck($("editFill"), (v) => { tool.fill = v; saveTool(); });
+  $("editRainLen").addEventListener("input", () => { tool.rainLen = $("editRainLen").value.trim(); saveTool(); });
   $("editDeselect").addEventListener("click", () => { cellSel = null; refreshEditUI(); });
   $("editText").addEventListener("keydown", (e) => { if (e.key === "Enter" && cellSel) setTimeout(applySelection, 0); });
   $("editUndo").addEventListener("click", () => { if (!(S.cellEdits || []).length) return; S.cellEdits = S.cellEdits.slice(0, -1); refreshEditUI(); schedulePreview(0); });
