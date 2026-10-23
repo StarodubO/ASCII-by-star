@@ -7,6 +7,7 @@ const PRESETS = [
   { id: "mosaic", name: "Colour Mosaic", settings: { charset: "standard", size: 14, colorMode: "original", saturation: 1.2, colorBoost: 0.5, bgMode: "mosaic", mosaicAmount: 0.3, bg: "#000000" } },
   { id: "newspaper", name: "Newspaper", settings: { charset: "bourke", size: 10, colorMode: "mono", fg: "#1a1a1a", bg: "#f2eee3", contrast: 1.15 } },
   { id: "matrix", name: "Matrix", settings: { charset: "katakana_half", size: 14, colorMode: "gradient", gradient: ["#001a00", "#00c832", "#d4ffd4"], gradientMid: true, bg: "#000800", contrast: 1.3 } },
+  { id: "matrixrain", name: "Matrix Rain", settings: { charset: "katakana_half", size: 14, colorMode: "gradient", gradient: ["#001a00", "#00c832", "#d4ffd4"], gradientMid: true, bg: "#000800", contrast: 1.3, rainOn: true, rainFrom: "everywhere", rainLength: 10, rainAmount: 0.55 } },
   { id: "braille", name: "Braille Fine", settings: { charset: "braille", size: 14, detail: 0.85, colorMode: "mono", fg: "#f4f4f4", bg: "#0a0a0a", contrast: 1.35, gamma: 1.3 } },
   { id: "blocks", name: "Quadrant Blocks", settings: { charset: "quadrant", size: 12, detail: 0.9, colorMode: "original", saturation: 1.1, bg: "#000000" } },
   { id: "blueprint", name: "Blueprint", settings: { charset: "circuit", size: 12, detail: 0.7, colorMode: "mono", fg: "#e6f1ff", bg: "#0d3b66" } },

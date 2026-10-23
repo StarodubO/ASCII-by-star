@@ -66,6 +66,16 @@ const DEFAULTS = {
   outlineStyle: "lines", outlineChars: "#", outlineColor: "#ff2a6d", // lines (follow the edge) | chars
   outlineFill: "image", outlineFillChars: ".", // image | none | chars (in order) | random (your characters, shuffled)
   hideSeed: 1, // where hidden {messages} go
+  // [ ] fill in custom text (see parseCustom)
+  fillLevel: 0.5, // with ramp characters outside the brackets: cells darker than this get the fill
+  fillSeed: 1, // order of [?random] items
+  // Matrix rain (inert unless rainOn; see applyRain). Lengths and distances are in character cells.
+  rainOn: false, rainFrom: "object", // object (falls from the shape's lower edges) | everywhere (the whole image)
+  rainCharset: "katakana_half", rainChars: "01", // a character set id, or "custom" for rainChars ([ ] syntax works)
+  rainLength: 8, rainLengthVar: 0.5, rainAmount: 0.5, rainDistance: 24, rainGaps: 0, rainAngle: 0,
+  rainFade: 0.8, rainHead: true, rainHeadColor: "#ffffff", rainOutside: 0.4, rainSeed: 1,
+  rainColorMode: "own", rainColor: "#00ff41", // own | art (the shape's colours) | gradient (tail → head)
+  rainGradient: ["#003b00", "#00c832", "#b8ffb8"], rainGradientMid: true,
   // glitch (everything is inert unless glitchOn is true)
   glitchOn: false,
   glitchSeed: 1,
@@ -147,32 +157,66 @@ function buildCharset(atlas, str, sortByDensity, opts) {
   }
   const chars = Array.from(glyphs, (g) => atlas.chars[g]), charIndex = new Map();
   chars.forEach((ch, i) => { if (!charIndex.has(ch)) charIndex.set(ch, i); });
-  return { n, glyphs, cov, level, vec, lut, chars, charIndex };
+  return { n, glyphs, cov, level, vec, lut, chars, charIndex, rain: (opts && opts.rain) || null };
 }
 
-// Custom text syntax: {message} hides "message" once somewhere in the picture, {message*5} five times.
-// Everything outside the braces is the ramp, words or phrase as usual; "{}" stays two plain characters.
+// Custom text syntax:
+//   {message} hides "message" once somewhere in the picture, {message*5} five times.
+//   [STAR] fills the artwork with STAR written out over and over; [STAR|LOVE|★] cycles through the items and
+//   [?STAR|LOVE|★] picks them at random; [?01] (one item, random) picks single characters. Items longer than
+//   one character get a space between them. Several [ ] groups make one fill.
+// Everything outside the braces and brackets is the ramp, words or phrase as usual (with a fill, it draws the
+// lighter tones and the fill takes cells darker than fillLevel); "{}" and "[]" stay plain characters.
+function fillSpec(items, random) {
+  const sep = items.length > 1 && items.some((t) => Array.from(t).length > 1) ? " " : "";
+  return { items, random, sep };
+}
+function parseFill(body) {
+  body = body.trim();
+  const random = body[0] === "?";
+  let items = (random ? body.slice(1) : body).split("|").map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean);
+  if (random && items.length === 1) items = Array.from(items[0]).filter((ch) => ch !== " ");
+  return items.length ? fillSpec(items, random) : null;
+}
 function parseCustom(str) {
-  const messages = [];
+  const messages = [], fills = [];
   const text = String(str || "").replace(/\{([^{}]+)\}/g, (all, body) => {
     const m = body.match(/^([\s\S]*?)\*(\d+)$/), t = (m ? m[1] : body).replace(/\s+/g, " ").trim();
     if (!t) return all;
     messages.push({ text: t, count: m ? Math.min(99, Math.max(1, Number(m[2]))) : 1 });
     return "";
+  }).replace(/\[([^[\]]+)\]/g, (all, body) => {
+    const f = parseFill(body);
+    if (!f) return all;
+    fills.push(f);
+    return "";
   });
-  return { text, messages };
+  const fill = fills.length ? fillSpec([].concat(...fills.map((f) => f.items)), fills.some((f) => f.random)) : null;
+  return { text, messages, fill };
+}
+const specChars = (spec) => (spec ? spec.items.join("") + spec.sep : "");
+// What the rain draws with: its preset's characters at random, or its custom text (plain characters at random,
+// or a [ ] expression).
+function rainSpec(s, rainPresetChars) {
+  const p = s.rainCharset === "custom" ? parseCustom(s.rainChars) : null;
+  if (p && p.fill) return p.fill;
+  const chars = Array.from(new Set(Array.from(p ? p.text : rainPresetChars || ""))).filter((ch) => ch.trim());
+  return chars.length ? fillSpec(chars, true) : null;
 }
 
 const OUTLINE_LINES = "|/-\\"; // edge lines by direction: vertical, rising, horizontal, falling
-// The characters the settings draw with: the ramp (custom text without its hidden messages) and the extras.
-function charsetParts(s, presetChars) {
+// The characters the settings draw with: the ramp (custom text without its hidden messages and fill) and the
+// extras. rainPresetChars: the characters of the rain's character set (s.rainCharset).
+function charsetParts(s, presetChars, rainPresetChars) {
   const custom = s.charset === "custom" ? parseCustom(s.customChars) : null;
-  let extra = custom ? custom.messages.map((m) => m.text).join("") : "";
+  let extra = custom ? custom.messages.map((m) => m.text).join("") + specChars(custom.fill) : "";
   if (s.outlineOn) extra += (s.outlineStyle === "chars" ? s.outlineChars : OUTLINE_LINES) + (s.outlineFill === "chars" || s.outlineFill === "random" ? s.outlineFillChars : "");
-  return { ramp: custom ? custom.text : presetChars, extra, spread: s.dither === "none" };
+  const rain = s.rainOn ? rainSpec(s, rainPresetChars) : null;
+  extra += specChars(rain);
+  return { ramp: custom ? custom.text : presetChars, extra, spread: s.dither === "none", rain };
 }
-function charsetOf(atlas, s, presetChars) {
-  const p = charsetParts(s, presetChars);
+function charsetOf(atlas, s, presetChars, rainPresetChars) {
+  const p = charsetParts(s, presetChars, rainPresetChars);
   return buildCharset(atlas, p.ramp, s.sortByDensity, p);
 }
 
@@ -250,8 +294,11 @@ function computeGrid(src, geo, s, cs) {
     }
   }
   const grid = selectGlyphs({ cols, rows, ink, sub, rgb, alpha, geo }, s, cs);
+  const custom = s.charset === "custom" ? parseCustom(s.customChars) : null;
+  if (custom && custom.fill) applyFill(grid, s, cs, custom.fill, custom.text.trim() !== "");
   if (s.outlineOn) applyOutline(grid, s, cs);
-  if (s.charset === "custom") hideMessages(grid, s, cs, parseCustom(s.customChars).messages);
+  if (custom) hideMessages(grid, s, cs, custom.messages);
+  if (s.rainOn) applyRain(grid, s, cs);
   return s.glitchOn ? glitchGrid(grid, cs, s) : grid;
 }
 
@@ -324,6 +371,35 @@ function writeSeq(glyph, cols, rows, seq, pick, wrap) {
   for (let r = 0; r < rows; r++) {
     if (!wrap) k = 0;
     for (let c = 0; c < cols && seq.length; c++) { const ci = r * cols + c; if (pick(ci)) glyph[ci] = seq[k++ % seq.length]; }
+  }
+}
+
+// The glyphs of a fill or rain spec, one per call: the items in order, or picked at random from `seed`, each
+// followed by spec.sep. Spaces are -1 (empty cells); characters the charset lacks are dropped. null: nothing to draw.
+function itemStream(cs, spec, seed) {
+  const items = spec.items.map((t) => Array.from(t).filter((ch) => ch === " " || cs.charIndex.has(ch)).map((ch) => (ch === " " ? -1 : cs.charIndex.get(ch)))).filter((it) => it.length);
+  if (!items.length) return null;
+  const sep = spec.sep ? [-1] : [];
+  let n = 0, queue = [], q = 0;
+  return () => {
+    if (q >= queue.length) {
+      queue = (spec.random ? items[Math.floor(hash3(seed, n, 3) * items.length)] : items[n % items.length]).concat(sep);
+      n++; q = 0;
+    }
+    return queue[q++];
+  };
+}
+
+// [ ] fill (see parseCustom): writes the items in reading order into every inked cell or, when ramp characters
+// stand outside the brackets, only into cells darker than fillLevel, leaving the rest to the ramp. Solid letters.
+function applyFill(grid, s, cs, fill, withRamp) {
+  const { cols, rows, glyph, ink } = grid, cells = cols * rows;
+  const next = itemStream(cs, fill, (s.fillSeed | 0) + 211);
+  if (!next) return;
+  const lvl = withRamp ? s.fillLevel : Math.max(s.threshold, 0.04);
+  for (let i = 0; i < cells; i++) {
+    if (ink[i] > lvl) { glyph[i] = next(); if (grid.shade) grid.shade[i] = 1; }
+    else if (!withRamp) glyph[i] = -1;
   }
 }
 
@@ -510,6 +586,68 @@ function hideMessages(grid, s, cs, messages) {
   }
   grid.hidden = hidden;
   grid.hiddenPlaced = placed;
+}
+
+// ---------- Matrix rain ----------
+// Streams of characters falling from the shape (rainFrom "object": from its lower edges into the empty space
+// below, heads 1..rainDistance cells from the edge, stopping at the next shape) or over the whole image
+// ("everywhere": full strength where they cross the shape, rainOutside elsewhere, picking up the shape's colours
+// in "art" mode). A stream is rainLength cells (± rainLengthVar) with its head, the bright end, lowest; the tail
+// fades by rainFade through the per-cell opacity grid.shade. rainAngle slants the fall. Characters come from
+// cs.rain (see rainSpec). The shape is every cell with a visible character before the rain, so light areas
+// that got a blank count as empty. Randomness is hashed from rainSeed and cell positions, so the preview,
+// apply and batch match. Hidden messages are left alone.
+function applyRain(grid, s, cs) {
+  const { cols, rows, glyph, color } = grid, cells = cols * rows, seed = (s.rainSeed | 0) + 307;
+  if (!cs.rain || !itemStream(cs, cs.rain, seed)) return;
+  const shape = new Uint8Array(cells);
+  for (let i = 0; i < cells; i++) shape[i] = glyph[i] >= 0 && cs.cov[glyph[i]] > 0 ? 1 : 0;
+  if (!grid.shade) grid.shade = new Float32Array(cells).fill(1);
+  const shade = grid.shade, hidden = grid.hidden, everywhere = s.rainFrom === "everywhere";
+  const slope = Math.tan((Math.max(-60, Math.min(60, s.rainAngle)) * Math.PI) / 180), L = Math.max(1, Math.round(s.rainLength));
+  const fade = clamp01(s.rainFade), outside = clamp01(s.rainOutside), amount = clamp01(s.rainAmount), gaps = clamp01(s.rainGaps) * 0.7;
+  const own = hexToRgb(s.rainColor), head = hexToRgb(s.rainHeadColor);
+  const stops = (s.rainGradientMid ? s.rainGradient : [s.rainGradient[0], s.rainGradient[2]]).map(hexToRgb);
+  const lenOf = (a, b) => Math.max(1, Math.round(L * (1 + clamp01(s.rainLengthVar) * (hash3(seed + 1, a, b) * 2 - 1))));
+  let id = 0;
+  // one stream along the fall from cell (c0, r0): steps k0..k1 (k1 = the head), step k at row r0 + k
+  const stream = (c0, r0, k0, k1, artRgb) => {
+    const next = itemStream(cs, cs.rain, seed + 1000 + id++), len = k1 - k0 + 1;
+    let art = artRgb;
+    for (let k = k0; k <= k1; k++) {
+      const g = next(); // taken even for skipped cells, so words stay in order along the stream
+      const r = r0 + k, c = c0 + Math.round(k * slope);
+      if (r < 0 || r >= rows || c < 0 || c >= cols) continue;
+      const i = r * cols + c;
+      if (shape[i]) { if (!everywhere) break; art = color.slice(i * 3, i * 3 + 3); }
+      if (g < 0 || (hidden && hidden[i]) || (gaps && hash3(seed + 2, c, r) < gaps)) continue;
+      const t = (k - k0 + 1) / len, isHead = k === k1 && s.rainHead;
+      const col = isHead ? head : s.rainColorMode === "gradient" ? gradientAt(stops, t) : s.rainColorMode === "art" && art ? art : own;
+      glyph[i] = g;
+      color[i * 3] = clamp255(col[0]); color[i * 3 + 1] = clamp255(col[1]); color[i * 3 + 2] = clamp255(col[2]);
+      shade[i] = isHead ? 1 : (1 - fade * (1 - t)) * (everywhere && !shape[i] ? outside : 1);
+    }
+  };
+  if (!everywhere) {
+    const D = Math.max(1, Math.round(s.rainDistance)), dc = Math.round(slope);
+    for (let r = 0; r < rows - 1; r++) for (let c = 0; c < cols; c++) {
+      const i = r * cols + c, below = c + dc;
+      if (!shape[i] || below < 0 || below >= cols || shape[(r + 1) * cols + below]) continue; // not a lower edge
+      if (hash3(seed, c, r) >= amount) continue;
+      const len = lenOf(c, r), far = 1 + Math.floor(hash3(seed + 3, c, r) * D);
+      stream(c, r, Math.max(1, far - len + 1), far, color.slice(i * 3, i * 3 + 3));
+    }
+  } else {
+    // a line of streams per column, starting above the top row (slanted lines also from beyond the sides)
+    const span = Math.ceil(rows * Math.abs(slope)) + 1, slot = L * (1.3 + (1 - amount) * 3);
+    for (let c = -span; c < cols + span; c++) {
+      for (let j = 0, y = -L - hash3(seed + 4, c, 0) * slot; y < rows; j++, y += slot) {
+        if (hash3(seed + 5, c, j) >= amount) continue;
+        const len = lenOf(c, j + 7919), hy = Math.round(y + hash3(seed + 6, c, j) * slot);
+        stream(c, 0, hy - len + 1, hy, null);
+      }
+    }
+  }
 }
 
 // Glyph colour per cell: one colour, the image's own colours, or a gradient map of the ink.
@@ -955,13 +1093,20 @@ function toText(grid, cs) { return gridLines(grid, cs).map((l) => l.replace(/\s+
 
 const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+// Per-cell colours in text exports: colour modes other than mono, and the rain (its own colours, with the fade
+// mixed into the background where there is one).
+const perCellColor = (s) => s.colorMode !== "mono" || s.rainOn;
 function colorRuns(grid, cs, r, s) {
-  const runs = [];
+  const runs = [], fadeTo = s.rainOn && grid.shade && s.bgMode !== "transparent" ? hexToRgb(s.bg) : null;
   let cur = null;
   for (let c = 0; c < grid.cols; c++) {
     const ci = r * grid.cols + c, gi = grid.glyph[ci];
     const ch = gi < 0 ? " " : cs.chars[gi];
-    const hex = s.colorMode === "mono" ? s.fg : rgbToHex(grid.color[ci * 3], grid.color[ci * 3 + 1], grid.color[ci * 3 + 2]);
+    let hex = s.fg;
+    if (perCellColor(s)) {
+      const a = fadeTo ? grid.shade[ci] : 1, mix = (k) => clamp255(fadeTo ? fadeTo[k] + (grid.color[ci * 3 + k] - fadeTo[k]) * a : grid.color[ci * 3 + k]);
+      hex = rgbToHex(mix(0), mix(1), mix(2));
+    }
     if (ch === " " && cur) { cur.text += ch; continue; }
     if (cur && cur.hex === hex) cur.text += ch;
     else { cur = { hex, text: ch }; runs.push(cur); }
@@ -975,7 +1120,7 @@ function toHTML(grid, cs, s) {
   const bg = s.bgMode === "transparent" ? "transparent" : s.bg;
   let body = "";
   for (let r = 0; r < grid.rows; r++) {
-    for (const run of colorRuns(grid, cs, r, s)) body += s.colorMode === "mono" ? esc(run.text) : `<span style="color:${run.hex}">${esc(run.text)}</span>`;
+    for (const run of colorRuns(grid, cs, r, s)) body += !perCellColor(s) ? esc(run.text) : `<span style="color:${run.hex}">${esc(run.text)}</span>`;
     body += "\n";
   }
   return `<!doctype html>\n<html><head><meta charset="utf-8"><title>ASCII by Star</title></head>\n<body style="margin:0;background:${bg}">\n<pre style="margin:0;font-family:Menlo,Consolas,'DejaVu Sans Mono',monospace;font-size:${fs}px;line-height:${lh};letter-spacing:${ls}em;color:${s.fg};background:${bg}">\n${body}</pre>\n</body></html>\n`;
@@ -1007,7 +1152,7 @@ function toSVG(grid, cs, s) {
   for (let r = 0; r < grid.rows; r++) {
     const runs = colorRuns(grid, cs, r, s);
     const y = (r * g.cellH + baseOff).toFixed(2);
-    const inner = s.colorMode === "mono" ? esc(runs.map((x) => x.text).join("")) : runs.map((x) => `<tspan fill="${x.hex}">${esc(x.text)}</tspan>`).join("");
+    const inner = !perCellColor(s) ? esc(runs.map((x) => x.text).join("")) : runs.map((x) => `<tspan fill="${x.hex}">${esc(x.text)}</tspan>`).join("");
     parts.push(`<text x="${((g.cellW - g.glyphW) / 2).toFixed(2)}" y="${y}" textLength="${((grid.cols - 1) * g.cellW + g.glyphW).toFixed(2)}" lengthAdjust="spacing">${inner}</text>`);
   }
   parts.push("</g></svg>");

@@ -50,7 +50,8 @@ for (const p of PRESETS) {
   if (only && p.id !== only) continue;
   const s = Object.assign({}, E.DEFAULTS, p.settings);
   const t0 = Date.now();
-  const cs = E.charsetOf(atlas, s, (CHARSETS.find((c) => c.id === s.charset) || {}).chars);
+  const chars = (id) => (CHARSETS.find((c) => c.id === id) || {}).chars;
+  const cs = E.charsetOf(atlas, s, chars(s.charset), chars(s.rainCharset));
   const geo = E.computeGeometry(src.w, src.h, s, atlas);
   const grid = E.computeGrid(src, geo, s, cs);
   const out = E.render(grid, cs, atlas, s, { x: 0, y: 0, w: src.w, h: src.h, scale: 1 });

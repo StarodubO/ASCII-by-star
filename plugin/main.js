@@ -17,6 +17,8 @@ const $ = (id) => document.getElementById(id);
 const OUR_RE = /(\s*ASCII by Star|\s*#[a-z0-9]{6})$/;
 const TAG_RE = /#([a-z0-9]{6})$/;
 const ANALYSIS_MAX = 1600; // long side of the cached analysis image
+// The monospaced system font for text layers and for characters missing from the built-in atlas
+const MONO_FONT = (() => { try { return require("os").platform() === "win32" ? "Consolas" : "Menlo-Regular"; } catch (e) { return "Menlo-Regular"; } })();
 
 let atlas = null; // glyph atlas in use: the built-in one, or one rendered from the chosen font
 let baseAtlas = null;
@@ -54,11 +56,12 @@ function checkDoc(doc) {
   if (!/rgb|gray/i.test(String(doc.mode))) throw new Error("ASCII by Star needs an RGB or Grayscale document (Image ▸ Mode ▸ RGB Color).");
 }
 function charsetInfo() { return CHARSETS.find((c) => c.id === S.charset) || CHARSETS[0]; }
+function rainPresetChars() { return (CHARSETS.find((c) => c.id === S.rainCharset) || {}).chars || ""; }
 function docBaseName(doc) { return String((doc && doc.title) || "ascii").replace(/\.[^.]+$/, ""); }
 
 let csCache = { key: null, cs: null };
 function currentCharset() {
-  const parts = Engine.charsetParts(S, charsetInfo().chars);
+  const parts = Engine.charsetParts(S, charsetInfo().chars, rainPresetChars());
   const key = atlas.id + "|" + JSON.stringify(parts) + "|" + S.sortByDensity;
   if (csCache.key !== key) csCache = { key, cs: Engine.buildCharset(atlas, parts.ramp, S.sortByDensity, parts) };
   return csCache.cs;
@@ -168,12 +171,13 @@ const TEXT_MODE_HINTS = {
 // Atlases are cached in memory and in the plugin's data folder.
 const fontAtlases = new Map();
 let fontBuild = null; // {key, promise}
-function charsetString() { const p = Engine.charsetParts(S, charsetInfo().chars); return p.ramp + p.extra; }
-// The font to draw with: the chosen one, or Menlo drawn by Photoshop when the text has characters the
-// built-in atlas lacks (lowercase Cyrillic, other scripts, emoji…), so nothing typed is dropped.
+function charsetString() { const p = Engine.charsetParts(S, charsetInfo().chars, rainPresetChars()); return p.ramp + p.extra; }
+// The font to draw with: the chosen one, or Menlo (Consolas on Windows, which has no Menlo) drawn by Photoshop
+// when the text has characters the built-in atlas lacks (lowercase Cyrillic, other scripts, emoji…), so nothing
+// typed is dropped.
 function effectiveFont() {
   if (S.font) return S.font;
-  if (baseAtlas) for (const ch of Array.from(charsetString())) if (ch > " " && !baseAtlas.index.has(ch)) return "Menlo-Regular";
+  if (baseAtlas) for (const ch of Array.from(charsetString())) if (ch > " " && !baseAtlas.index.has(ch)) return MONO_FONT;
   return "";
 }
 function fontKey() { const set = new Set(Array.from(" " + charsetString()).filter((c) => c !== "\n" && c !== "\r" && c !== "\t")); return { chars: Array.from(set), key: effectiveFont() + "|" + Array.from(set).join("") }; }
@@ -559,7 +563,7 @@ async function makeTextLayer() {
         const layer = await doc.createTextLayer({
           contents: lines.join("\r"),
           fontSize: geo.size,
-          fontName: S.font || "Menlo-Regular",
+          fontName: S.font || MONO_FONT,
           textColor: color,
           position: { x: src.frame.x + (geo.cellW - geo.glyphW) / 2, y: src.frame.y + baseline },
         });
@@ -787,6 +791,19 @@ const SLIDERS = {
   glowSize: ["Size", 0.05, 2, 0.01, pct],
   outlineLevel: ["Shape at", 0.05, 0.95, 0.01, pct],
   outlineWidth: ["Width", 1, 6, 1, (v) => String(v)],
+  fillLevel: ["Fill from", 0.05, 0.95, 0.01, pct],
+  rainLength: ["Length", 1, 60, 1, (v) => v + " ch"],
+  rainLengthVar: ["Length spread", 0, 1, 0.01, pct],
+  rainAmount: ["Amount", 0, 1, 0.01, pct],
+  rainDistance: ["Fall distance", 1, 200, 1, (v) => v + " ch"],
+  rainOutside: ["Off the shape", 0, 1, 0.01, pct],
+  rainFade: ["Tail fade", 0, 1, 0.01, pct],
+  rainGaps: ["Gaps", 0, 1, 0.01, pct],
+  rainAngle: ["Angle", -60, 60, 1, (v) => Math.round(v) + "°"],
+};
+const RAIN_HINTS = {
+  object: "Streams drip from the shape's lower edges into empty space (cells without a character). Fall distance: how far the lowest ones get. Raise Tone ▸ Threshold to empty more of the background.",
+  everywhere: "Rain falls over the whole image. Where it crosses the shape it is at full strength (and, with The shape's colours, takes on its colour); Off the shape sets its strength elsewhere.",
 };
 const GLITCH_KEYS = Object.keys(Engine.DEFAULTS).filter((k) => /^g[A-Z]/.test(k));
 
@@ -871,9 +888,9 @@ function visibleShadow(key) {
 }
 const sliderEls = {};
 // controls whose id is the setting they edit
-const SELECTS = ["charset", "textMode", "sizeMode", "dither", "colorMode", "bgMode", "gSortDir", "gChannelSwap", "outlinePos", "outlineStyle", "outlineFill"];
-const CHECKS = ["sortByDensity", "invert", "serpentine", "glitchOn", "gradientMid", "keepAlpha", "phraseShade", "phraseWrap", "dropOn", "longOn", "offOn", "glowOn", "glowTextColor", "outlineOn"];
-const TEXTS = ["customChars", "outlineChars", "outlineFillChars"];
+const SELECTS = ["charset", "textMode", "sizeMode", "dither", "colorMode", "bgMode", "gSortDir", "gChannelSwap", "outlinePos", "outlineStyle", "outlineFill", "rainFrom", "rainCharset", "rainColorMode"];
+const CHECKS = ["sortByDensity", "invert", "serpentine", "glitchOn", "gradientMid", "keepAlpha", "phraseShade", "phraseWrap", "dropOn", "longOn", "offOn", "glowOn", "glowTextColor", "outlineOn", "rainOn", "rainHead", "rainGradientMid"];
+const TEXTS = ["customChars", "outlineChars", "outlineFillChars", "rainChars"];
 let markHidden = loadJSON("gf:markHidden", false); // preview only: show where hidden messages went
 
 function buildUI() {
@@ -891,12 +908,16 @@ function buildUI() {
     html += `<option value="${c.id}">${c.name}</option>`;
   }
   $("charset").innerHTML = html;
+  $("rainCharset").innerHTML = html; // the rain picks from the same character sets
 
   for (const k of SELECTS) $(k).addEventListener("change", () => { S[k] = $(k).value; refreshVisibility(); schedulePreview(); });
   $("glitchSeed").addEventListener("change", () => { const v = parseInt($("glitchSeed").value, 10); if (v > 0) S.glitchSeed = v; syncUI(); schedulePreview(0); });
   $("glitchReseed").addEventListener("click", () => { S.glitchSeed = Math.floor(Math.random() * 99999) + 1; syncUI(); schedulePreview(0); });
   $("glitchReset").addEventListener("click", () => { for (const k of GLITCH_KEYS) S[k] = Engine.DEFAULTS[k]; syncUI(); schedulePreview(0); });
   $("glitchRandom").addEventListener("click", randomGlitch);
+  $("rainSeed").addEventListener("change", () => { const v = parseInt($("rainSeed").value, 10); if (v > 0) S.rainSeed = v; syncUI(); schedulePreview(0); });
+  $("rainReseed").addEventListener("click", () => { S.rainSeed = Math.floor(Math.random() * 99999) + 1; syncUI(); schedulePreview(0); });
+  $("fillShuffle").addEventListener("click", () => { S.fillSeed = Math.floor(Math.random() * 99999) + 1; schedulePreview(0); });
   for (const k of CHECKS) onCheck($(k), (v) => { S[k] = v; if (v) visibleShadow(k); refreshVisibility(); schedulePreview(); });
   for (const k of TEXTS) $(k).addEventListener("input", () => { S[k] = $(k).value; refreshVisibility(); schedulePreview(120); });
   $("hideMark").checked = markHidden;
@@ -985,10 +1006,13 @@ function buildUI() {
   buildPresetSelect();
 }
 
-// colour keys: g0..g2 are the gradient stops, anything else is a setting name (fg, bg, dropColor, …)
-function getColor(k) { return /^g\d$/.test(k) ? S.gradient[Number(k[1])] : S[k]; }
+// colour keys: g0..g2 are the gradient stops, rg0..rg2 the rain's, anything else is a setting name (fg, bg, dropColor, …)
+const GRADIENTS = { g: "gradient", rg: "rainGradient" };
+const gradKey = (k) => { const m = /^(r?g)(\d)$/.exec(k); return m ? [GRADIENTS[m[1]], Number(m[2])] : null; };
+function getColor(k) { const g = gradKey(k); return g ? S[g[0]][g[1]] : S[k]; }
 function setColor(k, hex) {
-  if (/^g\d$/.test(k)) S.gradient[Number(k[1])] = hex; else S[k] = hex;
+  const g = gradKey(k);
+  if (g) S[g[0]][g[1]] = hex; else S[k] = hex;
   syncUI(); schedulePreview(0);
 }
 // Photoshop's colour picker; resolves to the chosen "#rrggbb", or null when cancelled.
@@ -1012,6 +1036,7 @@ function syncUI() {
   for (const k of CHECKS) { $(k).checked = !!S[k]; if ($(k).syncChecked) $(k).syncChecked(); }
   for (const k of TEXTS) if ($(k).value !== S[k]) $(k).value = S[k];
   $("glitchSeed").value = String(S.glitchSeed);
+  $("rainSeed").value = String(S.rainSeed);
   $("undoRandom").disabled = !undoStack.length;
   if (allFonts.length) fillFontSelect();
   document.querySelectorAll(".swatch").forEach((el) => { el.style.backgroundColor = getColor(el.dataset.color); });
@@ -1022,7 +1047,11 @@ function refreshVisibility() {
   const show = (el, on) => el.classList.toggle("hidden", !on);
   const custom = S.charset === "custom", mode = custom ? S.textMode : "ramp";
   show($("customRows"), custom);
-  show($("hideRow"), custom && Engine.parseCustom(S.customChars).messages.length > 0);
+  const parsed = custom ? Engine.parseCustom(S.customChars) : null;
+  show($("hideRow"), !!parsed && parsed.messages.length > 0);
+  show($("fillRows"), !!(parsed && parsed.fill));
+  show(sliderEls.fillLevel.row, !!(parsed && parsed.fill && parsed.text.trim()));
+  show($("fillShuffleRow"), !!(parsed && parsed.fill && parsed.fill.random));
   show($("textModeRows"), custom);
   show($("phraseRows"), mode === "phrase");
   show($("sortRow"), mode === "ramp");
@@ -1050,6 +1079,14 @@ function refreshVisibility() {
   show($("serpRow"), !!Engine.DIFFUSION[S.dither]);
   show($("ditherHint"), S.dither !== "none");
   show($("glitchBody"), !!S.glitchOn);
+  show($("rainRows"), !!S.rainOn);
+  show($("rainCharsRow"), S.rainCharset === "custom");
+  show(sliderEls.rainDistance.row, S.rainFrom !== "everywhere");
+  show(sliderEls.rainOutside.row, S.rainFrom === "everywhere");
+  show($("rainColorRow"), S.rainColorMode !== "gradient");
+  show($("rainGradRows"), S.rainColorMode === "gradient");
+  for (const id of ["rainMidSwatch", "rainMidHex"]) $(id).style.opacity = S.rainGradientMid ? "" : "0.35";
+  $("rainHint").textContent = RAIN_HINTS[S.rainFrom] || "";
 }
 
 let allFonts = [];

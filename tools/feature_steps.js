@@ -5,7 +5,7 @@ let doc;
 await step("create doc with a text layer", async () => {
   doc = await M(() => app.documents.add({ width: 900, height: 400, resolution: 72, mode: "RGBColorMode", depth: 8, fill: "white" }));
   const black = new app.SolidColor(); black.rgb.hexValue = "000000";
-  await M(() => doc.createTextLayer({ contents: "STAR", fontSize: 260, fontName: "Menlo-Bold", textColor: black, position: { x: 140, y: 300 } }));
+  await M(() => doc.createTextLayer({ contents: "STAR", fontSize: 260, fontName: MONO_FONT.replace(/-Regular$/, "") + "-Bold", textColor: black, position: { x: 140, y: 300 } }));
   return findLayers(doc.layers, () => true).map((l) => l.name);
 });
 const used = (cs, grid) => { const u = new Set(); for (const g of grid.glyph) if (g >= 0) u.add(cs.chars[g]); return [...u].join(""); };

@@ -136,8 +136,13 @@
       <p class="hint" id="fontHint">Any installed font works, including your own. Photoshop draws its characters once (a few seconds), then they're cached.</p>
       <div id="customRows">
         <p class="hint">Hide a message in the picture: put it in curly braces, e.g. <b>{HELLO}</b>. <b>{XO*5}</b> hides it 5 times.</p>
-        <div class="row"><textarea id="customChars" placeholder="Characters, words or a phrase, e.g.  .:-=+*#%@  {HELLO}"></textarea></div>
+        <p class="hint">Fill the artwork: <b>[STAR]</b> writes STAR all over it, <b>[STAR|LOVE|★]</b> takes turns, <b>[?STAR|LOVE|★]</b> picks at random, <b>[?01]</b> random characters. Characters outside the brackets (<b>.:-= [STAR]</b>) draw the lighter tones.</p>
+        <div class="row"><textarea id="customChars" placeholder="Characters, words or a phrase, e.g.  .:-=+*#%@  {HELLO}  [STAR|LOVE]"></textarea></div>
         <div class="row" id="hideRow"><label class="grow"><input type="checkbox" id="hideMark"> Highlight messages in the preview</label><button id="hideMove" title="Put the hidden messages somewhere else">Move</button></div>
+        <div id="fillRows">
+          <div id="sl-fillLevel"></div>
+          <div class="row" id="fillShuffleRow"><span class="grow hint" style="margin:0">Random fill order</span><button id="fillShuffle" title="Pick the random items again">Shuffle</button></div>
+        </div>
       </div>
       <div id="textModeRows">
         <div class="row"><span class="label">Use the text</span><select id="textMode" class="grow">
@@ -174,6 +179,36 @@
         <div class="row"><span class="label">Inside</span><select id="outlineFill" class="grow"><option value="image">The image</option><option value="none">Empty</option><option value="chars">Your characters, in order</option><option value="random">Your characters, random</option></select></div>
         <div class="row" id="outlineFillRow"><span class="label">Characters</span><input type="text" id="outlineFillChars"></div>
         <p class="hint">The shape is where characters are drawn (Tone ▸ Invert swaps it). Shape at: how dark a cell must be to belong to it. The inside follows the Colour settings.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" data-section="rain">
+    <div class="head"><span class="chev">▾</span>Matrix rain</div>
+    <div class="body">
+      <div class="row"><label><input type="checkbox" id="rainOn"> Characters fall like in The Matrix</label></div>
+      <div id="rainRows" class="sub">
+        <div class="row"><span class="label">Rain from</span><select id="rainFrom" class="grow"><option value="object">The shape (drips into empty space)</option><option value="everywhere">Everywhere (the whole image)</option></select></div>
+        <div class="row"><span class="label">Characters</span><select id="rainCharset" class="grow"></select></div>
+        <div class="row" id="rainCharsRow"><span class="label">Your text</span><input type="text" id="rainChars" placeholder="e.g. 01  or  [STAR|LOVE]"></div>
+        <div id="sl-rainLength"></div>
+        <div id="sl-rainLengthVar"></div>
+        <div id="sl-rainAmount"></div>
+        <div id="sl-rainDistance"></div>
+        <div id="sl-rainOutside"></div>
+        <div id="sl-rainFade"></div>
+        <div id="sl-rainGaps"></div>
+        <div id="sl-rainAngle"></div>
+        <div class="row"><label class="grow"><input type="checkbox" id="rainHead"> Bright head</label><div class="swatch" data-color="rainHeadColor"></div><input type="text" class="hex" data-hex="rainHeadColor"></div>
+        <div class="row"><span class="label">Colour</span><select id="rainColorMode" class="grow"><option value="own">Rain colour</option><option value="art">The shape's colours</option><option value="gradient">Gradient, tail → head</option></select></div>
+        <div class="row" id="rainColorRow"><span class="label">Rain colour</span><div class="swatch" data-color="rainColor"></div><input type="text" class="hex" data-hex="rainColor"></div>
+        <div id="rainGradRows">
+          <div class="row"><span class="label">Tail</span><div class="swatch" data-color="rg0"></div><input type="text" class="hex" data-hex="rg0"></div>
+          <div class="row"><span class="label">Middle</span><div class="swatch" data-color="rg1" id="rainMidSwatch"></div><input type="text" class="hex" data-hex="rg1" id="rainMidHex"><label title="Off: the gradient runs straight from Tail to Head"><input type="checkbox" id="rainGradientMid"> Use</label></div>
+          <div class="row"><span class="label">Head</span><div class="swatch" data-color="rg2"></div><input type="text" class="hex" data-hex="rg2"></div>
+        </div>
+        <div class="row"><span class="label">Seed</span><input type="text" id="rainSeed" style="width:60px;flex:0 0 60px"><button id="rainReseed" title="New random rain">New seed</button></div>
+        <p class="hint" id="rainHint"></p>
       </div>
     </div>
   </div>

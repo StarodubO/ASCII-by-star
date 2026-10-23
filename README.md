@@ -9,7 +9,7 @@ A Photoshop plugin that turns any image into ASCII and glyph art with a live pre
 2. Double-click it. Creative Cloud installs it and warns that it isn't from the marketplace; confirm.
 3. Restart Photoshop and open **Plugins ▸ ASCII by Star**.
 
-Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, including artboard documents. Developed and tested on macOS.
+Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, including artboard documents. Developed and tested on macOS and Windows.
 
 ## ASCII tab
 - **Characters:** 60+ character sets (classic ASCII ramps, blocks, Braille, box drawing, katakana "Matrix", runes, symbols) or your own text, in three ways:
@@ -17,8 +17,10 @@ Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, includi
   - **As words:** words or letter pairs, e.g. `· oo OK WOW ###`. Each covers as many cells as it has letters; darker areas get inkier words.
   - **Written out, repeating:** a phrase fills the image like a typed page, with the picture showing through the letters' shade and colour.
   - **Hidden messages:** text in curly braces is written somewhere inside the picture, e.g. `.:-=+*#%@{HELLO}`; `{XO*5}` hides it five times. The preview can highlight where they went, and **Move** puts them elsewhere.
+  - **Fill the artwork:** text in square brackets fills it, in any mode. `[STAR]` writes STAR all over it, `[STAR|LOVE|★]` takes turns, `[?STAR|LOVE|★]` picks at random (**Shuffle** picks again) and `[?01]` scatters single characters. Characters outside the brackets keep drawing the lighter tones (`.:-= [STAR]`), with **Fill from** setting where the fill starts.
 - **Any installed font**, including your own: browse every installed font (each shown in its own typeface) or take it from a text layer. Photoshop renders it once, then it's cached. Characters missing from the built-in font are drawn by Photoshop, so nothing you type is dropped.
 - **Shape matching:** picks characters that follow edges, not just brightness.
+- **Matrix rain:** characters stream down out of the shape into the empty space below it, or fall over the whole image and light up where they cross it. The rain has its own characters (any character set, or your own text, `[ ]` included), length and length spread, amount, fall distance, tail fade, gaps, angle and a bright head. It can use its own colour, the shape's colours or a tail-to-head gradient. A seed fixes the pattern so the preview, the layer and batch output match.
 - **Outline** (for text, logos and other high-contrast shapes): a stroke around the shape, outside, centred or inside, 1–6 characters wide, made of lines that follow the edge (`| / - \`) or your own characters, in its own colour. The inside keeps the image, is emptied or is filled with other characters, in order or at random.
 - **Tone:** contrast, brightness, gamma, threshold, invert, and 21 dithering modes (error diffusion, ordered Bayer, halftone screens, blue/white noise).
 - **Colour:** a single colour, the image's own colours, or a 2–3 stop gradient map. The background can be solid, transparent or a colour mosaic. By default the output keeps the source's transparency (cut-out PNGs stay cut out).
@@ -32,7 +34,7 @@ Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, includi
 - **Live smart object:** places the result as a smart object and updates it as you change settings, with Photoshop's own zoom and pan.
 - **Preview:** drag the grip under it to make it taller or shorter, or **Hide** it (nothing is rendered while hidden, handy in live mode). Each tab remembers its own.
 - **Re-edit:** select a generated layer, adjust and **Update layer**.
-- **Presets:** 24 built-in looks, plus your own presets, which you can import and export. **Reset** takes you back to the chosen look; **Randomize** tries a random one (↶ goes back).
+- **Presets:** 25 built-in looks, plus your own presets, which you can import and export. **Reset** takes you back to the chosen look; **Randomize** tries a random one (↶ goes back).
 - **Batch:** process a folder of images to PNG (and optionally .txt).
 
 ## Ink bleed tab
@@ -56,7 +58,7 @@ Adds an ink-on-paper overlay to any layer (or the whole visible image) without t
 | Built-in looks | `plugin/presets.js` |
 | Logo and icons | `tools/make_logo.js` writes `logo/` and `plugin/icons/` |
 
-**Build and install:** `tools/package.sh --install`, then restart Photoshop. Without `--install` it only builds the `.ccx`. Bump `"version"` in `plugin/manifest.json` for each release.
+**Build and install:** `node tools/package.js --install` (macOS and Windows; `tools/package.sh` does the same), then restart Photoshop. Without `--install` it only builds the `.ccx`. Bump `"version"` in `plugin/manifest.json` for each release.
 
 **Rebuild the glyph atlas** (after editing charsets; needs macOS for the Menlo font):
 ```
@@ -70,7 +72,7 @@ swift tools/gen_atlas.swift tools/chars.json plugin
 - `node tools/ui_smoke.js` checks the panel builds.
 - `test/sample.png` is drawn by `node tools/make_sample.js`.
 
-**Tests in Photoshop:** `node tools/build_test.js` writes `test/gf_test.psjs` (set `TEST=ink`, `shadow`, `text`, `feature`, `png` or `depth` for the other suites; `LOG_MIRROR=<file>` also writes the log there). Then run `open -a "Adobe Photoshop 2026" test/gf_test.psjs`.
+**Tests in Photoshop:** `node tools/build_test.js` writes `test/gf_test.psjs` (set `TEST=ink`, `shadow`, `text`, `feature`, `rain`, `png` or `depth` for the other suites; `LOG_MIRROR=<file>` also writes the log there). Then run `open -a "Adobe Photoshop 2026" test/gf_test.psjs` on macOS, or on Windows `"C:\Program Files\Adobe\Adobe Photoshop 2026\Photoshop.exe" test\gf_test.psjs` (Photoshop already running; **File ▸ Scripts ▸ Browse…** also works).
 
 ## License
 [MIT](LICENSE). The built-in glyph atlas (`plugin/atlas.bin`) is rasterised from the Menlo typeface that ships with macOS.
