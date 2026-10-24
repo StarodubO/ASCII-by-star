@@ -61,12 +61,34 @@ const DEFAULTS = {
   longOn: false, longColor: "#000000", longOpacity: 0.4, longLength: 1.5, longFade: 1,
   offOn: false, offColor: "#ff2a6d", offOpacity: 1, offDistance: 0.12,
   glowOn: false, glowTextColor: true, glowColor: "#ffffff", glowOpacity: 0.8, glowSize: 0.4,
+  // cell backgrounds: an effect behind each character, made from its colour (see drawCellFx)
+  cfOn: false, cfFill: "gradient", cfFrom: "glyph", cfShade: -0.45, cfTo: "transparent", cfToColor: "#000000", // solid | gradient | glow | bleed
+  cfAngle: 90, cfOpacity: 0.85, cfOnlyGlyphs: true, cfGap: 0.06, cfRound: 0.2, cfSpread: 1.5, cfBlend: "normal", // normal | screen | multiply | add
+  cfGlitch: 0, cfLines: 0, cfLineCount: 4, cfGrain: 0, cfGrainSize: 0.06, cfSeed: 1,
+  cfGradShape: "linear", cfGradSpan: "cell", cfGradReverse: false, cfGradMidOn: false, cfGradMid: "#ffffff", // linear | reflected | radial | diamond | angle; cell | image
+  cfGradMidpoint: 0.5, cfGradSteps: 0, cfGradRepeat: 1, // where the halfway colour sits; 0 = smooth; ping-pong repeats
+  cfDepthCount: 5, cfDepthPull: 0.3, cfDepthWidth: 0.08, cfDepthAim: 0, cfDepthFade: 0.6, // the "depth" fill: nested outlines
+  // depth echo: copies of parts scaled around a vanishing point (see drawEcho)
+  echoOn: false, echoOutline: true, echoRain: false, echoText: false, echoDir: "out", echoCount: 6, echoStep: 0.18, echoFade: 0.6, // out | in
+  echoCentre: "shape", echoX: 0.5, echoY: 0.5, echoColorMode: "same", echoColor: "#000000", // shape | point; same | tint
   // outline for hard-edged shapes (text, logos); see applyOutline
   outlineOn: false, outlineLevel: 0.5, outlineWidth: 1, outlinePos: "outside", // outside | center | inside
-  outlineStyle: "lines", outlineChars: "#", outlineColor: "#ff2a6d", // lines (follow the edge) | chars
-  outlineFill: "image", outlineFillChars: ".", // image | none | chars (in order) | random (your characters, shuffled)
+  outlineStyle: "lines", outlineChars: "#", outlineColor: "#ff2a6d", // lines (follow the edge) | chars (your text)
+  outlineFill: "image", outlineFillChars: ".", outlineFillMode: "ramp", // image | none | text (your text: ramp | words | phrase)
+  outlineOpacity: 1, outlineFillOpacity: 1, // of the stroke's and the inside's characters
+  outlineColorFrom: "own", // own (outlineColor) | under (the layer below) | image (the source's colours)
+  // outer ring: the shape scaled around its centre, and what fills the band between (see outlineRing)
+  outlineRingOn: false, outlineRingScale: 1.8, outlineRingStroke: true, outlineRingFill: "rain", outlineRingChars: "[?01]", // none | text | rays | rain
+  outlineRingDensity: 0.6, outlineRingDir: "out", outlineRingTwist: 0, // out | in
+  outlineRingOpacity: 1, outlineRingFillOpacity: 1, outlineRingFade: 0, // the outer ring's, the band's; band fade: + towards the ring, − towards the shape
+  outlineRingColorFrom: "stroke", outlineRingColor: "#ffffff", outlineRingTextColorFrom: "stroke", outlineRingTextColor: "#ffffff", // stroke | own | under | image
+  // the ring's own rain (see RING_RAIN): characters, streams, head, colours and seed, like the Matrix rain's
+  rrCharset: "katakana_half", rrChars: "01", rrLength: 8, rrLengthVar: 0.5, rrGaps: 0, rrFade: 0.8, rrHead: true, rrHeadColor: "#ffffff",
+  rrColorMode: "own", rrColor: "#00ff41", rrGradient: ["#003b00", "#00c832", "#b8ffb8"], rrGradientMid: true, rrSeed: 1,
   hideSeed: 1, // where hidden {messages} go
   cellEdits: [], // symbols changed by hand (Edit symbols; see applyEdits)
+  // text art (the Text art tab): with textArtOn the grid is this text instead of the image (see textArtAnalysis)
+  textArtOn: false, textArt: "", textArtFont: "", textArtFit: true, textArtMargin: 2, // fit: the font size makes the art fill the area, margin cells around it
   // [ ] fill in custom text (see parseCustom)
   fillLevel: 0.5, // with ramp characters outside the brackets: cells darker than this get the fill
   fillSeed: 1, // order of [?random] items
@@ -74,8 +96,9 @@ const DEFAULTS = {
   rainOn: false, rainFrom: "object", // object (falls from the shape's lower edges) | everywhere (the whole image)
   rainCharset: "katakana_half", rainChars: "01", // a character set id, or "custom" for rainChars ([ ] syntax works)
   rainLength: 8, rainLengthVar: 0.5, rainAmount: 0.5, rainDistance: 24, rainGaps: 0, rainAngle: 0,
+  rainDir: "down", rainCentre: "shape", rainCX: 0.5, rainCY: 0.5, rainTwist: 0, rainHole: 0.05, // down | out | in (along rays); shape | point
   rainFade: 0.8, rainHead: true, rainHeadColor: "#ffffff", rainOutside: 0.4, rainSeed: 1,
-  rainColorMode: "own", rainColor: "#00ff41", // own | art (the shape's colours) | gradient (tail → head)
+  rainColorMode: "own", rainColor: "#00ff41", // own | art (the shape's colours) | gradient (tail → head) | under (the layer below)
   rainGradient: ["#003b00", "#00c832", "#b8ffb8"], rainGradientMid: true,
   rainArtLook: null, // "art" colours from these captured colour settings ({colorMode, fg, gradient, …}); null: the current ones
   // glitch (everything is inert unless glitchOn is true)
@@ -86,6 +109,21 @@ const DEFAULTS = {
   gCorrupt: 0, gRowShift: 0, gStutter: 0,
   gRgbSplit: 0, gInterlace: 0, gTracking: 0, gScanlines: 0, gNoise: 0,
 };
+
+// Settings saved by older versions, brought up to date (in place; returns s). The panel runs every loaded
+// setting through it (freshSettings), so the rest of the engine only knows current values.
+function migrateSettings(s) {
+  if (s.dither === "bayer") s.dither = "bayer4"; // renamed in 1.2
+  // 2.0.1: the outline's inside is "Your text": "in order" became its phrase, "random" a [? ] fill
+  if (s.outlineFill === "chars") Object.assign(s, { outlineFill: "text", outlineFillMode: "phrase" });
+  else if (s.outlineFill === "random") {
+    const t = Array.from(String(s.outlineFillChars || "")).filter((ch) => ch.trim() && !"[]|?".includes(ch)).join("");
+    Object.assign(s, { outlineFill: "text", outlineFillMode: "ramp", outlineFillChars: t ? "[?" + t + "]" : "" });
+  }
+  // 2.1.1: the cell "glow" fill is the radial gradient shape
+  if (s.cfFill === "glow") Object.assign(s, { cfFill: "gradient", cfGradShape: "radial", cfGradSpan: "cell", cfGradMidOn: false, cfGradReverse: false });
+  return s;
+}
 
 // ---------- atlas ----------
 function prepareAtlas(meta, bytes) {
@@ -159,7 +197,7 @@ function buildCharset(atlas, str, sortByDensity, opts) {
   }
   const chars = Array.from(glyphs, (g) => atlas.chars[g]), charIndex = new Map();
   chars.forEach((ch, i) => { if (!charIndex.has(ch)) charIndex.set(ch, i); });
-  return { n, glyphs, cov, level, vec, lut, chars, charIndex, rain: (opts && opts.rain) || null };
+  return { n, glyphs, cov, level, vec, lut, chars, charIndex, rain: (opts && opts.rain) || null, ringRain: (opts && opts.ringRain) || null, atlas };
 }
 
 // Custom text syntax:
@@ -206,20 +244,44 @@ function rainSpec(s, rainPresetChars) {
   return chars.length ? fillSpec(chars, true) : null;
 }
 
+// The outer ring's rain has its own copy of the rain settings: rain setting → ring setting. ringRainSettings(s)
+// is s with those in the rain's places, so the rain code draws the ring's rain as it is.
+const RING_RAIN = { rainCharset: "rrCharset", rainChars: "rrChars", rainLength: "rrLength", rainLengthVar: "rrLengthVar", rainGaps: "rrGaps", rainFade: "rrFade",
+  rainHead: "rrHead", rainHeadColor: "rrHeadColor", rainColorMode: "rrColorMode", rainColor: "rrColor", rainGradient: "rrGradient", rainGradientMid: "rrGradientMid", rainSeed: "rrSeed" };
+function ringRainSettings(s) {
+  const v = Object.assign({}, s, { rainArtLook: null }); // "the shape's colours": the cells' colours as they are
+  for (const [k, rk] of Object.entries(RING_RAIN)) v[k] = s[rk];
+  return v;
+}
+const ringRainOn = (s) => s.outlineOn && s.outlineRingOn && s.outlineRingFill === "rain";
+
+// {messages} hidden in the rain (its custom text).
+const rainMessages = (s) => (s.rainCharset === "custom" ? parseCustom(s.rainChars).messages : []);
+
 const OUTLINE_LINES = "|/-\\"; // edge lines by direction: vertical, rising, horizontal, falling
 // The characters the settings draw with: the ramp (custom text without its hidden messages and fill) and the
-// extras. rainPresetChars: the characters of the rain's character set (s.rainCharset).
-function charsetParts(s, presetChars, rainPresetChars) {
+// extras. rainPresetChars / ringPresetChars: the characters of the rain's and the ring rain's character sets.
+function charsetParts(s, presetChars, rainPresetChars, ringPresetChars) {
   const custom = s.charset === "custom" ? parseCustom(s.customChars) : null;
+  const own = (p) => p.text + p.messages.map((m) => m.text).join("") + specChars(p.fill); // every character a custom text draws
   let extra = custom ? custom.messages.map((m) => m.text).join("") + specChars(custom.fill) : "";
-  if (s.outlineOn) extra += (s.outlineStyle === "chars" ? s.outlineChars : OUTLINE_LINES) + (s.outlineFill === "chars" || s.outlineFill === "random" ? s.outlineFillChars : "");
+  if (s.outlineOn) {
+    const stroke = s.outlineStyle === "chars" ? parseCustom(s.outlineChars) : null, inner = outlineFillText(s);
+    extra += stroke ? own(stroke) : OUTLINE_LINES;
+    if (inner) extra += own(parseCustom(inner.text));
+    if (s.outlineRingOn && (s.outlineRingFill === "text" || s.outlineRingFill === "rays")) extra += own(parseCustom(s.outlineRingChars));
+  }
   const rain = s.rainOn || (s.cellEdits || []).some((x) => x && x.op === "rain") ? rainSpec(s, rainPresetChars) : null;
   extra += specChars(rain);
-  if (s.cellEdits && s.cellEdits.length) extra += s.cellEdits.map((e) => (e.op === "write" && e.text) || "").join("");
-  return { ramp: custom ? custom.text : presetChars, extra, spread: s.dither === "none", rain };
+  if (rain) extra += rainMessages(s).map((m) => m.text).join("");
+  const rs = ringRainOn(s) ? ringRainSettings(s) : null, ringRain = rs ? rainSpec(rs, ringPresetChars) : null;
+  if (ringRain) extra += specChars(ringRain) + rainMessages(rs).map((m) => m.text).join("");
+  if (s.textArtOn) extra += textArtLines(s).join("");
+  if (s.cellEdits && s.cellEdits.length) extra += s.cellEdits.map((e) => (e.op === "write" && e.text ? own(parseCustom(e.text)) : "")).join("");
+  return { ramp: custom ? custom.text : presetChars, extra, spread: s.dither === "none", rain, ringRain };
 }
-function charsetOf(atlas, s, presetChars, rainPresetChars) {
-  const p = charsetParts(s, presetChars, rainPresetChars);
+function charsetOf(atlas, s, presetChars, rainPresetChars, ringPresetChars) {
+  const p = charsetParts(s, presetChars, rainPresetChars, ringPresetChars);
   return buildCharset(atlas, p.ramp, s.sortByDensity, p);
 }
 
@@ -228,6 +290,11 @@ function computeGeometry(docW, docH, s, atlas) {
   const adv = atlas.cellW / atlas.fontSize, line = atlas.cellH / atlas.fontSize;
   let size = s.size;
   if (s.sizeMode === "cols") size = docW / (Math.max(1, s.columns) * adv * s.spacingX);
+  if (s.textArtOn && s.textArtFit) { // the text art and its margin fill the area, as wide or as tall as it allows
+    const lines = textArtLines(s), m = 2 * Math.max(0, Math.round(s.textArtMargin));
+    const w = Math.max(1, ...lines.map((l) => Array.from(l).length)) + m, h = lines.length + m;
+    size = Math.min(docW / (w * adv * s.spacingX), docH / (h * line * s.lineHeight));
+  }
   size = Math.max(1, size);
   const glyphW = size * adv, glyphH = size * line;
   const cellW = glyphW * s.spacingX, cellH = glyphH * s.lineHeight;
@@ -236,7 +303,8 @@ function computeGeometry(docW, docH, s, atlas) {
 
 function inkFromBright(s) {
   let fromBright;
-  if (s.bgMode === "transparent") fromBright = s.colorMode !== "mono" || luma(hexToRgb(s.fg)) > 0.5;
+  // a source coloured from the layer below is usually dark text or a shape on its own layer: dark is ink
+  if (s.bgMode === "transparent") fromBright = s.colorMode === "under" ? false : s.colorMode !== "mono" || luma(hexToRgb(s.fg)) > 0.5;
   else if (s.colorMode === "mono") fromBright = luma(hexToRgb(s.fg)) >= luma(hexToRgb(s.bg));
   else fromBright = luma(hexToRgb(s.bg)) < 0.5;
   return s.invert ? !fromBright : fromBright;
@@ -245,6 +313,7 @@ function inkFromBright(s) {
 // ---------- analysis: source -> grid of glyphs ----------
 // src: {w, h, data: Uint8Array RGBA} covering the whole document at any resolution.
 function computeGrid(src, geo, s, cs) {
+  if (s.textArtOn) { const an = textArtAnalysis(src, geo, s); return finishGrid(an, textArtGlyphs(an, s, cs), s, cs); }
   if (s.glitchOn) src = glitchSource(src, s);
   const { cols, rows, cellW, cellH, docW, docH } = geo;
   const sx = src.w / docW, sy = src.h / docH, d = src.data, sw = src.w;
@@ -296,14 +365,112 @@ function computeGrid(src, geo, s, cs) {
       alpha[ci] = tn ? clamp255(ta / tn) : 0;
     }
   }
-  const grid = selectGlyphs({ cols, rows, ink, sub, rgb, alpha, geo }, s, cs);
+  const under = src.under ? cellUnder(src, geo, rgb) : null, an = { cols, rows, ink, sub, rgb, alpha, geo, under };
+  return finishGrid(an, selectGlyphs(an, s, cs), s, cs);
+}
+// Everything after the characters are chosen: fills, outline, hidden messages, rain, edits, glitch.
+function finishGrid(an, grid, s, cs) {
+  if (an.under) grid.under = an.under;
   const custom = s.charset === "custom" ? parseCustom(s.customChars) : null;
   if (custom && custom.fill) applyFill(grid, s, cs, custom.fill, custom.text.trim() !== "");
-  if (s.outlineOn) applyOutline(grid, s, cs);
+  const track = s._parts || s.echoOn ? partTracker(grid) : null; // which stage drew each cell (grid.part): separate layers, depth echo
+  if (s.outlineOn) { applyOutline(grid, s, cs, an); if (track) track(PART.outline); }
   if (custom) hideMessages(grid, s, cs, custom.messages);
-  if (s.rainOn) applyRain(grid, s, cs);
-  if (s.cellEdits && s.cellEdits.length) applyEdits(grid, s, cs);
+  if (s.rainOn) { applyRain(grid, s, cs); if (track) track(PART.rain); }
+  if (s.cellEdits && s.cellEdits.length) { applyEdits(grid, s, cs); if (track) track(PART.edits); }
+  if (track && grid.hidden) grid.hidden.forEach((h, i) => { if (h) grid.part[i] = PART.hidden; });
   return s.glitchOn ? glitchGrid(grid, cs, s) : grid;
+}
+
+// ---------- text art ----------
+// The Text art tab's FIGlet text, used as the picture: its characters sit in the middle of the grid, as they are
+// (no tone matching). Cells with a character count as fully inked, so outline, rain, hidden messages and fills
+// treat the letters as the shape; the gradient colour mode runs top to bottom over the art.
+const textArtLines = (s) => String(s.textArt || "").replace(/\r/g, "").replace(/\n+$/, "").split("\n");
+function textArtAnalysis(src, geo, s) {
+  const { cols, rows } = geo, cells = cols * rows, lines = textArtLines(s).map((l) => Array.from(l));
+  const w = Math.max(0, ...lines.map((l) => l.length)), h = lines.length, c0 = Math.floor((cols - w) / 2), r0 = Math.floor((rows - h) / 2);
+  const ink = new Float32Array(cells), sub = new Float32Array(cells * 9), rgb = new Uint8Array(cells * 3), alpha = new Uint8Array(cells).fill(255);
+  const tone = new Float32Array(cells), chars = new Array(cells).fill(null), fg = hexToRgb(s.fg);
+  for (let i = 0; i < cells; i++) rgb.set(fg, i * 3);
+  lines.forEach((line, r) => line.forEach((ch, c) => {
+    const y = r0 + r, x = c0 + c;
+    if (ch === " " || y < 0 || x < 0 || y >= rows || x >= cols) return;
+    const i = y * cols + x;
+    chars[i] = ch; ink[i] = 1; sub.fill(1, i * 9, i * 9 + 9); tone[i] = h > 1 ? r / (h - 1) : 1;
+  }));
+  const under = src && src.under ? cellUnder(src, geo, rgb) : null;
+  return { cols, rows, ink, sub, rgb, alpha, geo, under, chars, tone };
+}
+function textArtGlyphs(an, s, cs) {
+  const glyph = Int16Array.from(an.chars, (ch) => (ch === null ? -1 : charAt(cs, ch)));
+  return { cols: an.cols, rows: an.rows, geo: an.geo, glyph, color: cellColors(Object.assign({}, an, { ink: an.tone }), s), rgb: an.rgb, alpha: an.alpha, ink: an.ink };
+}
+
+// "The layer below": src.under is the visible image under the source layer (RGBA, the same size as src.data).
+// Each cell gets its average colour there, or its own image colour where nothing lies below.
+function cellUnder(src, geo, rgb) {
+  const { cols, rows, cellW, cellH, docW, docH } = geo, u = src.under, sw = src.w, sh = src.h, sx = sw / docW, sy = sh / docH;
+  const out = Uint8Array.from(rgb);
+  for (let r = 0; r < rows; r++) {
+    const y0 = Math.min(sh - 1, Math.floor(r * cellH * sy)), y1 = Math.min(sh, Math.max(y0 + 1, Math.floor((r + 1) * cellH * sy)));
+    for (let c = 0; c < cols; c++) {
+      const x0 = Math.min(sw - 1, Math.floor(c * cellW * sx)), x1 = Math.min(sw, Math.max(x0 + 1, Math.floor((c + 1) * cellW * sx)));
+      let tr = 0, tg = 0, tb = 0, ta = 0;
+      for (let y = y0; y < y1; y++) for (let x = x0, o = (y * sw + x0) * 4; x < x1; x++, o += 4) { const a = u[o + 3]; tr += u[o] * a; tg += u[o + 1] * a; tb += u[o + 2] * a; ta += a; }
+      if (ta > 0) { const ci = (r * cols + c) * 3; out[ci] = tr / ta; out[ci + 1] = tg / ta; out[ci + 2] = tb / ta; }
+    }
+  }
+  return out;
+}
+const underOf = (grid) => grid.under || grid.rgb; // without a layer below: the source's own colours
+
+// ---------- separate layers ----------
+// "Apply as separate layers" renders each part of the picture on its own layer, bottom to top: background,
+// cell backgrounds, shadows, then the characters split by the stage that drew them (grid.part: the image's
+// characters, outline, hidden messages, rain, hand edits), and on top the glitch: only the pixels the glitch
+// changes, so hiding that layer shows the clean picture. Stacked, they make the one-layer render.
+const PART = { text: 0, outline: 1, hidden: 2, rain: 3, edits: 4 };
+const PART_NAMES = { bg: "Background", cells: "Cell backgrounds", shadows: "Shadows", echo: "Depth echo", text: "Characters", outline: "Outline", hidden: "Hidden messages", rain: "Rain", edits: "Edits", glitch: "Glitch" };
+const NO_FX = { dropOn: false, longOn: false, offOn: false, glowOn: false, glitchOn: false, cfOn: false, echoOn: false, _markHidden: false };
+function partTracker(grid) {
+  const { glyph, color } = grid;
+  grid.part = new Uint8Array(glyph.length); // PART.text
+  let g0 = glyph.slice(), c0 = color.slice();
+  return (p) => { // cells whose character or colour changed since the last call belong to part p
+    for (let i = 0; i < glyph.length; i++) if (glyph[i] !== g0[i] || color[i * 3] !== c0[i * 3] || color[i * 3 + 1] !== c0[i * 3 + 1] || color[i * 3 + 2] !== c0[i * 3 + 2]) grid.part[i] = p;
+    g0 = glyph.slice(); c0 = color.slice();
+  };
+}
+// The parts this picture has, bottom first. grid: computed with s._parts (and glitchOn off when glitched).
+function layerParts(grid, cs, s) {
+  const out = [];
+  if (s.bgMode !== "transparent" && (s.bgOpacity === undefined || s.bgOpacity > 0)) out.push("bg");
+  if (s.cfOn) out.push("cells");
+  if (hasShadow(s)) out.push("shadows");
+  if (s.echoOn && echoMask(grid, cs, s)) out.push("echo");
+  const has = new Set();
+  grid.glyph.forEach((g, i) => { if (g >= 0 && cs.cov[g] > 0) has.add(grid.part ? grid.part[i] : PART.text); });
+  for (const k of ["text", "outline", "hidden", "rain", "edits"]) if (has.has(PART[k])) out.push(k);
+  if (s.glitchOn) out.push("glitch");
+  return out;
+}
+// One part as straight-alpha RGBA, like render. glitched: the grid computed with the glitch (for "glitch").
+function renderPart(id, grid, cs, atlas, s, view, glitched) {
+  const chars = Object.assign({}, s, NO_FX, { bgMode: "transparent", keepAlpha: false });
+  if (id === "bg") return render(grid, cs, atlas, Object.assign({}, s, NO_FX, { _noGlyphs: true }), view);
+  if (id === "cells") { const out = new Uint8ClampedArray(view.w * view.h * 4); drawCellFx(out, grid, cs, Object.assign({}, s, { cfBlend: "normal" }), view); return new Uint8Array(out.buffer); }
+  if (id === "shadows") return render(grid, cs, atlas, Object.assign({}, s, { glitchOn: false, cfOn: false, echoOn: false, bgMode: "transparent", keepAlpha: false, _shadowsOnly: true }), view);
+  if (id === "echo") { const out = new Uint8ClampedArray(view.w * view.h * 4); drawEcho(out, grid, cs, atlas, s, view); return new Uint8Array(out.buffer); }
+  if (id === "glitch") {
+    const fin = render(glitched || grid, cs, atlas, s, view), clean = render(grid, cs, atlas, Object.assign({}, s, { glitchOn: false }), view);
+    for (let o = 0; o < fin.length; o += 4) {
+      if (Math.abs(fin[o] - clean[o]) <= 1 && Math.abs(fin[o + 1] - clean[o + 1]) <= 1 && Math.abs(fin[o + 2] - clean[o + 2]) <= 1 && Math.abs(fin[o + 3] - clean[o + 3]) <= 1) fin[o + 3] = 0;
+    }
+    return fin;
+  }
+  const p = PART[id], glyph = grid.glyph.map((g, i) => ((grid.part ? grid.part[i] : PART.text) === p ? g : -1));
+  return render(Object.assign({}, grid, { glyph }), cs, atlas, chars, view);
 }
 
 // ---------- dithering ----------
@@ -507,29 +674,59 @@ function selectGlyphs(g, s, cs) {
 // ---------- outline ----------
 // For text, logos and other hard-edged shapes: cells with more ink than outlineLevel are the shape. A band
 // outlineWidth cells wide along its edge (outside, centred or inside) becomes the stroke, drawn with lines
-// that follow the edge or with your characters, in its own colour. The inside keeps the image, is emptied,
-// or is filled with your characters, in order or picked at random per cell (hashed from its position).
-function applyOutline(grid, s, cs) {
-  const { cols, rows, glyph, ink, color } = grid, cells = cols * rows, lvl = s.outlineLevel;
-  const inside = new Uint8Array(cells);
-  let nIn = 0;
-  for (let i = 0; i < cells; i++) if (ink[i] > lvl) { inside[i] = 1; nIn++; }
-  if (!nIn || nIn === cells) return;
-  // distance in cells (8 neighbours) to the nearest cell on the other side of the edge
-  const distTo = (want) => {
-    const D = new Float32Array(cells);
-    for (let i = 0; i < cells; i++) D[i] = inside[i] === want ? 0 : 1e9;
-    const relax = (r, c, dr, dc) => { const y = r + dr, x = c + dc; if (y >= 0 && y < rows && x >= 0 && x < cols) { const i = r * cols + c, v = D[y * cols + x] + 1; if (v < D[i]) D[i] = v; } };
-    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { relax(r, c, -1, -1); relax(r, c, -1, 0); relax(r, c, -1, 1); relax(r, c, 0, -1); }
-    for (let r = rows - 1; r >= 0; r--) for (let c = cols - 1; c >= 0; c--) { relax(r, c, 1, 1); relax(r, c, 1, 0); relax(r, c, 1, -1); relax(r, c, 0, 1); }
-    return D;
-  };
-  const dIn = distTo(1), dOut = distTo(0), w = Math.max(1, Math.round(s.outlineWidth));
-  const [wo, wi] = s.outlinePos === "inside" ? [0, w] : s.outlinePos === "center" ? [Math.ceil(w / 2), Math.floor(w / 2)] : [w, 0];
-  const stroke = new Uint8Array(cells);
-  for (let i = 0; i < cells; i++) stroke[i] = inside[i] ? dOut[i] <= wi : dIn[i] <= wo;
-  if (s.outlineStyle === "chars") writeSeq(glyph, cols, rows, glyphSeq(cs, s.outlineChars), (i) => stroke[i], true);
-  else {
+// that follow the edge or with your text, in its own colour. The inside keeps the image, is emptied, or is
+// drawn with your text. Your text works as Character set ▸ Custom text: [A|B] / [?A|B] fills and {messages}
+// (kept to the stroke or the inside) in both, and for the inside a ramp, words or a phrase (outlineFillMode) on
+// the shape's own tones. outlineOpacity and outlineFillOpacity fade the stroke's and the inside's characters
+// (through grid.shade).
+
+// The inside's text and mode, or null.
+const outlineFillText = (s) => (s.outlineFill === "text" ? { text: s.outlineFillChars, mode: s.outlineFillMode } : null);
+// Writes custom `text` (see parseCustom) into the cells `pick` accepts, as the Custom text character set would:
+// mode ramp | words | phrase, then [ ] fills and {hidden messages}, kept to these cells. an: the analysis (ink,
+// sub, rgb, alpha) of the whole grid; `lvl`: the shape's threshold. Tones are stretched from lvl..1 to 0..1 so
+// the shape gets the whole ramp. The ramp and words are picked on the whole grid with their own charset, then
+// mapped into cs.
+function writeCustom(grid, s, cs, an, text, mode, pick, lvl) {
+  const { cols, rows, glyph } = grid, cells = cols * rows, p = parseCustom(text), hasText = p.text.trim() !== "";
+  const k = 1 / Math.max(1e-6, 1 - lvl), ink = new Float32Array(cells);
+  for (let i = 0; i < cells; i++) ink[i] = clamp01((an.ink[i] - lvl) * k);
+  if (hasText && mode === "phrase") writeSeq(glyph, cols, rows, glyphSeq(cs, p.text), pick, true);
+  else if (hasText && cs.atlas) {
+    const sub = new Float32Array(an.sub.length);
+    for (let i = 0; i < sub.length; i++) sub[i] = clamp01((an.sub[i] - lvl) * k);
+    const sIn = Object.assign({}, s, { charset: "custom", customChars: p.text, textMode: mode === "words" ? "words" : "ramp", threshold: 0 });
+    const own = buildCharset(cs.atlas, p.text, s.sortByDensity, { spread: s.dither === "none" });
+    const g = selectGlyphs(Object.assign({}, an, { ink, sub }), sIn, own);
+    const map = Array.from(own.chars, (ch) => charAt(cs, ch));
+    for (let i = 0; i < cells; i++) if (pick(i)) glyph[i] = g.glyph[i] >= 0 ? map[g.glyph[i]] : -1;
+  }
+  if (p.fill) { // with text, only the darker tones (fillLevel); on its own, every cell
+    const next = itemStream(cs, p.fill, (s.fillSeed | 0) + 307);
+    if (next) for (let i = 0; i < cells; i++) if (pick(i) && (!hasText || ink[i] > s.fillLevel)) glyph[i] = next();
+  }
+  hideMessages(grid, s, cs, p.messages, pick, 37);
+}
+// Distance in cells (8 neighbours) from each cell to the nearest cell where mask === want.
+function maskDistance(mask, want, cols, rows) {
+  const cells = cols * rows, D = new Float32Array(cells);
+  for (let i = 0; i < cells; i++) D[i] = mask[i] === want ? 0 : 1e9;
+  const relax = (r, c, dr, dc) => { const y = r + dr, x = c + dc; if (y >= 0 && y < rows && x >= 0 && x < cols) { const i = r * cols + c, v = D[y * cols + x] + 1; if (v < D[i]) D[i] = v; } };
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { relax(r, c, -1, -1); relax(r, c, -1, 0); relax(r, c, -1, 1); relax(r, c, 0, -1); }
+  for (let r = rows - 1; r >= 0; r--) for (let c = cols - 1; c >= 0; c--) { relax(r, c, 1, 1); relax(r, c, 1, 0); relax(r, c, 1, -1); relax(r, c, 0, 1); }
+  return D;
+}
+// Draws a stroke (the cells of `stroke` along the edge of a shape with distances dIn/dOut) in the outline's style:
+// lines that follow the edge, or your text (in reading order, or a [ ] fill, with {messages}). off: keeps the
+// outer ring's random picks apart from the outline's.
+function drawStroke(grid, s, cs, stroke, dIn, dOut, off) {
+  const { cols, rows, glyph } = grid, cells = cols * rows;
+  if (s.outlineStyle === "chars") {
+    const p = parseCustom(s.outlineChars), next = p.fill && itemStream(cs, p.fill, (s.fillSeed | 0) + 401 + off);
+    if (next) { for (let i = 0; i < cells; i++) if (stroke[i]) glyph[i] = next(); }
+    else writeSeq(glyph, cols, rows, glyphSeq(cs, p.text), (i) => stroke[i], true);
+    hideMessages(grid, s, cs, p.messages, (i) => stroke[i], 53 + off);
+  } else {
     // the line runs across the gradient of the signed distance (positive outside the shape)
     const lines = Array.from(OUTLINE_LINES, (ch) => charAt(cs, ch));
     const sd = (r, c) => { const i = Math.min(rows - 1, Math.max(0, r)) * cols + Math.min(cols - 1, Math.max(0, c)); return dIn[i] - dOut[i]; };
@@ -541,17 +738,123 @@ function applyOutline(grid, s, cs) {
       glyph[r * cols + c] = lines[Math.round((((a % Math.PI) + Math.PI) % Math.PI) / (Math.PI / 4)) % 4];
     }
   }
-  const fill = (i) => inside[i] && !stroke[i], typed = s.outlineFill === "chars" || s.outlineFill === "random";
+}
+function applyOutline(grid, s, cs, an) {
+  const { cols, rows, glyph, ink, color } = grid, cells = cols * rows, lvl = s.outlineLevel;
+  const inside = new Uint8Array(cells);
+  let nIn = 0;
+  for (let i = 0; i < cells; i++) if (ink[i] > lvl) { inside[i] = 1; nIn++; }
+  if (!nIn || nIn === cells) return;
+  const dIn = maskDistance(inside, 1, cols, rows), dOut = maskDistance(inside, 0, cols, rows), w = Math.max(1, Math.round(s.outlineWidth));
+  const [wo, wi] = s.outlinePos === "inside" ? [0, w] : s.outlinePos === "center" ? [Math.ceil(w / 2), Math.floor(w / 2)] : [w, 0];
+  const stroke = new Uint8Array(cells);
+  for (let i = 0; i < cells; i++) stroke[i] = inside[i] ? dOut[i] <= wi : dIn[i] <= wo;
+  grid.outlineStroke = stroke; // the depth echo repeats the stroke alone
+  drawStroke(grid, s, cs, stroke, dIn, dOut, 0);
+  const fill = (i) => inside[i] && !stroke[i], inner = outlineFillText(s);
   if (s.outlineFill === "none") for (let i = 0; i < cells; i++) { if (fill(i)) glyph[i] = -1; }
-  else if (s.outlineFill === "chars") writeSeq(glyph, cols, rows, glyphSeq(cs, s.outlineFillChars), fill, true);
-  else if (s.outlineFill === "random") {
-    const seq = glyphSeq(cs, s.outlineFillChars);
-    if (seq.length) for (let i = 0; i < cells; i++) if (fill(i)) glyph[i] = seq[Math.floor(hash3(57, i % cols, Math.floor(i / cols)) * seq.length)];
-  }
-  const sc = hexToRgb(s.outlineColor);
+  else if (inner && an) writeCustom(grid, s, cs, an, inner.text, inner.mode, fill, lvl);
+  const strokeColor = outlineColorOf(grid, s);
+  const so = s.outlineOpacity === undefined ? 1 : clamp01(s.outlineOpacity), fo = s.outlineFillOpacity === undefined ? 1 : clamp01(s.outlineFillOpacity);
+  if (!grid.shade && (so < 1 || fo < 1)) grid.shade = new Float32Array(cells).fill(1);
   for (let i = 0; i < cells; i++) {
-    if (stroke[i]) color.set(sc, i * 3);
-    if (grid.shade && (stroke[i] || (fill(i) && typed))) grid.shade[i] = 1;
+    if (stroke[i]) strokeColor(i);
+    if (!grid.shade) continue;
+    if (stroke[i]) grid.shade[i] = so;
+    else if (fill(i)) grid.shade[i] = inner ? fo : grid.shade[i] * fo;
+  }
+  if (s.outlineRingOn) outlineRing(grid, s, cs, inside, dIn, stroke);
+}
+// A function colouring cell i from `from`: "under" (the layer below), "image" (the source's colours), else `hex`.
+function colorSetter(grid, from, hex) {
+  const c = hexToRgb(hex), src = from === "under" ? underOf(grid) : from === "image" ? grid.rgb : null;
+  return (i) => grid.color.set(src ? src.subarray(i * 3, i * 3 + 3) : c, i * 3);
+}
+// The outline's colour (outlineColorFrom), or a ring part's: "stroke" follows the outline, else its own source.
+const outlineColorOf = (grid, s) => colorSetter(grid, s.outlineColorFrom, s.outlineColor);
+const ringColorOf = (grid, s, from, hex) => (from === "stroke" ? outlineColorOf(grid, s) : colorSetter(grid, from, hex));
+// The middle of a mask's bounding box in document units, or null when it is empty.
+function maskCentre(mask, cols, geo) {
+  let c0 = Infinity, c1 = -1, r0 = Infinity, r1 = -1;
+  mask.forEach((m, i) => { if (m) { const c = i % cols, r = (i - c) / cols; c0 = Math.min(c0, c); c1 = Math.max(c1, c); r0 = Math.min(r0, r); r1 = Math.max(r1, r); } });
+  return c1 < 0 ? null : { x: ((c0 + c1 + 1) / 2) * geo.cellW, y: ((r0 + r1 + 1) / 2) * geo.cellH };
+}
+// The outer ring: the shape scaled by outlineRingScale around its centre. Its edge gets a stroke in the outline's
+// style (outlineRingStroke), and the band between the shape and the ring is filled (outlineRingFill): your text
+// in every cell (thinned by outlineRingDensity), your text along rays from the centre, or Matrix rain along those
+// rays (with its own rain settings, the rr… ones). Rays and rain run outward or inward (outlineRingDir) and curve
+// with outlineRingTwist; outlineRingDensity sets how many carry something. The ring and the band have their own
+// opacity and colour (outlineRingColorFrom, outlineRingTextColorFrom for text; the rain keeps its colours), and
+// the band can fade across its width (outlineRingFade). dIn: each cell's distance to the shape.
+function outlineRing(grid, s, cs, inside, dIn, stroke) {
+  const { cols, rows, glyph, geo } = grid, cells = cols * rows, F = Math.max(1.05, s.outlineRingScale), ctr = maskCentre(inside, cols, geo);
+  if (!ctr) return;
+  const outer = new Uint8Array(cells);
+  for (let i = 0; i < cells; i++) { // a cell is inside the ring when its centre, scaled back by F, is inside the shape
+    const c = i % cols, r = (i - c) / cols, qc = Math.floor((ctr.x + ((c + 0.5) * geo.cellW - ctr.x) / F) / geo.cellW), qr = Math.floor((ctr.y + ((r + 0.5) * geo.cellH - ctr.y) / F) / geo.cellH);
+    outer[i] = qc >= 0 && qr >= 0 && qc < cols && qr < rows ? inside[qr * cols + qc] : 0;
+  }
+  const oIn = maskDistance(outer, 1, cols, rows), oOut = maskDistance(outer, 0, cols, rows), w = Math.max(1, Math.round(s.outlineWidth));
+  const ring = new Uint8Array(cells), band = new Uint8Array(cells);
+  for (let i = 0; i < cells; i++) {
+    if (!outer[i] || inside[i] || stroke[i]) continue;
+    if (s.outlineRingStroke && oOut[i] <= w) ring[i] = 1; else band[i] = 1;
+  }
+  const mode = s.outlineRingFill, density = clamp01(s.outlineRingDensity), seed = (s.fillSeed | 0) + 613;
+  const ro = clamp01(s.outlineRingOpacity === undefined ? 1 : s.outlineRingOpacity), bo = clamp01(s.outlineRingFillOpacity === undefined ? 1 : s.outlineRingFillOpacity), fade = Math.max(-1, Math.min(1, s.outlineRingFade || 0));
+  if (!grid.shade && (ro < 1 || bo < 1 || fade)) grid.shade = new Float32Array(cells).fill(1);
+  if (s.outlineRingStroke) {
+    const colorOf = ringColorOf(grid, s, s.outlineRingColorFrom, s.outlineRingColor);
+    drawStroke(grid, s, cs, ring, oIn, oOut, 7);
+    for (let i = 0; i < cells; i++) if (ring[i]) { colorOf(i); if (grid.shade) grid.shade[i] = ro; }
+  }
+  if (mode === "none") return;
+  for (let i = 0; i < cells; i++) if (band[i]) { glyph[i] = -1; if (grid.shade) grid.shade[i] = 1; }
+  const colorOf = ringColorOf(grid, s, s.outlineRingTextColorFrom, s.outlineRingTextColor);
+  if (mode === "text") {
+    const p = parseCustom(s.outlineRingChars), next = p.fill && itemStream(cs, p.fill, seed), seq = glyphSeq(cs, p.text);
+    let k = 0;
+    for (let i = 0; i < cells; i++) {
+      if (!band[i] || hash3(seed, i % cols, Math.floor(i / cols)) >= density) continue;
+      glyph[i] = next ? next() : seq.length ? seq[k++ % seq.length] : -1;
+      colorOf(i);
+    }
+    hideMessages(grid, s, cs, p.messages, (i) => band[i] === 1, 89);
+  } else bandRays(grid, s, cs, band, ctr, mode, density, seed, colorOf);
+  if (bo < 1 || fade) for (let i = 0; i < cells; i++) {
+    if (!band[i]) continue;
+    const t = dIn[i] / (dIn[i] + oOut[i]); // 0 at the shape … 1 at the ring
+    grid.shade[i] *= bo * (fade > 0 ? 1 - fade * t : 1 + fade * (1 - t));
+  }
+}
+// Fills the band along rays from the centre: your text (mode "rays") or the ring's rain ("rain").
+function bandRays(grid, s, cs, band, ctr, mode, density, seed, colorOf) {
+  const { cols, rows, glyph, geo } = grid, cells = cols * rows;
+  // rays from the centre through the band: each ray's run of band cells, in the direction of motion
+  let R = 0; // the ring's own reach, so rays are counted for its size (about one per two cells out there)
+  for (let i = 0; i < cells; i++) if (band[i]) { const c = i % cols, r = (i - c) / cols; R = Math.max(R, Math.hypot((c + 0.5) * geo.cellW - ctr.x, (r + 0.5) * geo.cellH - ctr.y)); }
+  R += Math.max(geo.cellW, geo.cellH);
+  const runs = [];
+  for (const cellsOnRay of raysFrom(geo, cols, rows, ctr, R, s.outlineRingTwist, 0, seed)) {
+    let run = [];
+    for (const i of cellsOnRay.concat([-1])) {
+      if (i >= 0 && band[i]) run.push(i);
+      else if (run.length) { runs.push(s.outlineRingDir === "in" ? run.reverse() : run); run = []; }
+    }
+  }
+  if (mode === "rays") {
+    const p = parseCustom(s.outlineRingChars), seq = glyphSeq(cs, p.text);
+    runs.forEach((run, j) => {
+      if (hash3(seed + 1, j, 0) >= density) return;
+      const next = p.fill && itemStream(cs, p.fill, seed + 50 + j);
+      run.forEach((i, k) => { glyph[i] = next ? next() : seq.length ? seq[k % seq.length] : -1; colorOf(i); });
+    });
+    hideInRuns(grid, s, cs, runs, p.messages, 97);
+  } else if (mode === "rain" && cs.ringRain) {
+    const rs = ringRainSettings(s), rseed = (rs.rainSeed | 0) + 911, msgs = rainMessages(rs), drawn = [];
+    const write = rainWriter(grid, rs, cs, { seed: rseed, spec: cs.ringRain, runs: msgs.length ? drawn : null });
+    runs.forEach((run, j) => slotStreams(write, run, rs, rseed, j, density));
+    hideInRuns(grid, rs, cs, drawn, msgs, 101);
   }
 }
 
@@ -559,11 +862,13 @@ function applyOutline(grid, s, cs) {
 // Each message is written left to right into one row, replacing the characters there, at a spot picked from
 // the seed (hideSeed). A spot is taken when all its cells are clearly inked, so the message blends in, and
 // keeps a cell clear of other messages. grid.hidden marks the cells (the preview can highlight them).
-function hideMessages(grid, s, cs, messages) {
+// allow (optional): only cells it accepts may hold the message (the outline's stroke or inside); seedOff keeps
+// those spots apart from the main text's. Messages placed earlier stay (grid.hidden, grid.hiddenPlaced).
+function hideMessages(grid, s, cs, messages, allow, seedOff) {
   if (!messages.length) return;
-  const { cols, rows, glyph, ink } = grid, hidden = new Uint8Array(cols * rows), seed = (s.hideSeed | 0) + 101;
+  const { cols, rows, glyph, ink } = grid, hidden = grid.hidden || new Uint8Array(cols * rows), seed = (s.hideSeed | 0) + 101 + (seedOff | 0);
   const minInk = Math.max(0.2, s.threshold + 0.1);
-  let placed = 0, n = 0;
+  let placed = grid.hiddenPlaced || 0, n = 0;
   for (const m of messages) {
     const seq = Array.from(m.text, (ch) => (ch === " " ? -1 : charAt(cs, ch))), len = Math.min(seq.length, cols);
     for (let k = 0; k < m.count; k++, n++) {
@@ -572,6 +877,7 @@ function hideMessages(grid, s, cs, messages) {
         const r = Math.floor(hash3(seed, n, t * 2) * rows), c = Math.floor(hash3(seed, n, t * 2 + 1) * (cols - len + 1));
         let free = true, sum = 0, low = 0;
         for (let j = -1; j <= len && free; j++) { const x = c + j; if (x >= 0 && x < cols && hidden[r * cols + x]) free = false; }
+        for (let j = 0; j < len && free && allow; j++) if (!allow(r * cols + c + j)) free = false;
         if (!free) continue;
         for (let j = 0; j < len; j++) { const v = ink[r * cols + c + j]; sum += v; if (v < minInk) low++; }
         if (!low) { best = [r, c]; break; }
@@ -579,13 +885,43 @@ function hideMessages(grid, s, cs, messages) {
       }
       if (!best) continue;
       const [r, c] = best;
-      for (let j = 0; j < len; j++) {
-        const ci = r * cols + c + j;
-        glyph[ci] = seq[j];
-        hidden[ci] = 1;
-        if (grid.shade) grid.shade[ci] = Math.max(grid.shade[ci], 0.6);
-      }
+      writeHidden(grid, hidden, seq.slice(0, len), (j) => r * cols + c + j);
       placed++;
+    }
+  }
+  grid.hidden = hidden;
+  grid.hiddenPlaced = placed;
+}
+
+// Writes a message's glyphs `seq` into cells cellAt(0…), marks them hidden and keeps them readable (shade ≥ 0.6).
+function writeHidden(grid, hidden, seq, cellAt) {
+  for (let j = 0; j < seq.length; j++) {
+    const ci = cellAt(j);
+    grid.glyph[ci] = seq[j];
+    hidden[ci] = 1;
+    if (grid.shade) grid.shade[ci] = Math.max(grid.shade[ci], 0.6);
+  }
+}
+// Messages hidden along runs of cells (rain streams, or the cells of an edit in its drawing order) rather than
+// along rows: each copy goes into one run at a spot picked from the seed, on cells no other message holds.
+function hideInRuns(grid, s, cs, runs, messages, seedOff) {
+  if (!messages.length || !runs.length) return;
+  const cells = grid.cols * grid.rows, hidden = grid.hidden || new Uint8Array(cells), seed = (s.hideSeed | 0) + 101 + seedOff;
+  let placed = grid.hiddenPlaced || 0, n = 0;
+  for (const m of messages) {
+    const seq = Array.from(m.text, (ch) => (ch === " " ? -1 : charAt(cs, ch)));
+    for (let k = 0; k < m.count; k++, n++) {
+      for (let t = 0; t < 200; t++) {
+        const run = runs[Math.floor(hash3(seed, n, t * 2) * runs.length)];
+        if (run.length < seq.length) continue;
+        const at = Math.floor(hash3(seed, n, t * 2 + 1) * (run.length - seq.length + 1));
+        let free = true;
+        for (let j = 0; j < seq.length && free; j++) if (hidden[run[at + j]]) free = false;
+        if (!free) continue;
+        writeHidden(grid, hidden, seq, (j) => run[at + j]);
+        placed++;
+        break;
+      }
     }
   }
   grid.hidden = hidden;
@@ -632,22 +968,34 @@ function rainArtSource(grid, s) {
   return grid._rainArt;
 }
 // One rain stream starting at cell i and falling (see applyRain): the head, the bright end, is lowest.
+// What the rain colours with, and a cell's colour: the head's, a gradient along the stream (t: tail 0 … head 1),
+// the shape's colours (art), the layer below, or the rain colour. Shared by the rain and Edit symbols ▸ rain.
+function rainPalette(grid, s) {
+  return { own: hexToRgb(s.rainColor), head: hexToRgb(s.rainHeadColor), below: underOf(grid), stops: (s.rainGradientMid ? s.rainGradient : [s.rainGradient[0], s.rainGradient[2]]).map(hexToRgb) };
+}
+function rainColorAt(s, p, t, isHead, art, i) {
+  if (isHead) return p.head;
+  if (s.rainColorMode === "gradient") return gradientAt(p.stops, t);
+  if (s.rainColorMode === "art" && art) return art;
+  if (s.rainColorMode === "under") return p.below.subarray(i * 3, i * 3 + 3);
+  return p.own;
+}
+// A stream's length in cells: rainLength, varied by rainLengthVar from a hash of (a, b).
+const rainLen = (s, seed, a, b) => Math.max(1, Math.round(Math.max(1, Math.round(s.rainLength)) * (1 + clamp01(s.rainLengthVar) * (hash3(seed + 1, a, b) * 2 - 1))));
 function rainStream(grid, s, cs, i, len) {
   const { cols, rows, glyph, color } = grid, c0 = i % cols, r0 = Math.floor(i / cols), seed = (s.rainSeed | 0) + 307;
   const next = cs.rain && itemStream(cs, cs.rain, seed + 5000 + i);
   if (!next) return;
   if (!grid.shade) grid.shade = new Float32Array(cols * rows).fill(1);
-  const L = Math.max(1, Math.round(s.rainLength));
-  if (len <= 0) len = Math.max(1, Math.round(L * (1 + clamp01(s.rainLengthVar) * (hash3(seed + 1, c0, r0) * 2 - 1))));
+  if (len <= 0) len = rainLen(s, seed, c0, r0);
   const slope = Math.tan((Math.max(-60, Math.min(60, s.rainAngle)) * Math.PI) / 180), fade = clamp01(s.rainFade);
-  const own = hexToRgb(s.rainColor), head = hexToRgb(s.rainHeadColor), art = rainArtSource(grid, s).slice(i * 3, i * 3 + 3);
-  const stops = (s.rainGradientMid ? s.rainGradient : [s.rainGradient[0], s.rainGradient[2]]).map(hexToRgb);
+  const pal = rainPalette(grid, s), art = rainArtSource(grid, s).slice(i * 3, i * 3 + 3);
   for (let k = 0; k < len; k++) {
     const g = next(), r = r0 + k, c = c0 + Math.round(k * slope);
     if (r >= rows || c < 0 || c >= cols) break;
     if (g < 0) continue;
     const j = r * cols + c, t = (k + 1) / len, isHead = k === len - 1 && s.rainHead;
-    const cl = isHead ? head : s.rainColorMode === "gradient" ? gradientAt(stops, t) : s.rainColorMode === "art" ? art : own;
+    const cl = rainColorAt(s, pal, t, isHead, art, j);
     glyph[j] = g;
     color[j * 3] = clamp255(cl[0]); color[j * 3 + 1] = clamp255(cl[1]); color[j * 3 + 2] = clamp255(cl[2]);
     grid.shade[j] = isHead ? 1 : 1 - fade * (1 - t);
@@ -657,11 +1005,13 @@ function rainStream(grid, s, cs, i, len) {
 function applyEdits(grid, s, cs) {
   const { glyph, color, geo } = grid;
   const orig = { glyph: glyph.slice(), color: color.slice(), shade: grid.shade ? grid.shade.slice() : null, hidden: grid.hidden ? grid.hidden.slice() : null };
-  for (const e of s.cellEdits) {
-    if (!e) continue;
-    const cells = editCells(e, geo), col = e.color ? hexToRgb(e.color) : null;
-    if (e.op === "rain") { cells.forEach((i) => rainStream(grid, s, cs, i, e.len | 0)); continue; }
-    const seq = e.op === "write" ? Array.from(String(e.text || ""), (ch) => (ch === " " ? -1 : charAt(cs, ch))) : [];
+  s.cellEdits.forEach((e, ei) => {
+    if (!e) return;
+    const cells = editCells(e, geo), below = e.color === "under" ? underOf(grid) : null, col = e.color && !below ? hexToRgb(e.color) : null;
+    if (e.op === "rain") { cells.forEach((i) => rainStream(grid, s, cs, i, e.len | 0)); return; }
+    // written text is custom text: plain characters in order, a [ ] fill instead when there is one, {messages}
+    const p = e.op === "write" ? parseCustom(e.text) : null, fillNext = p && p.fill ? itemStream(cs, p.fill, (s.fillSeed | 0) + 503 + ei) : null;
+    const seq = p ? Array.from(p.text, (ch) => (ch === " " ? -1 : charAt(cs, ch))) : [];
     cells.forEach((i, k) => {
       if (e.op === "restore") {
         glyph[i] = orig.glyph[i];
@@ -671,13 +1021,16 @@ function applyEdits(grid, s, cs) {
         return;
       }
       if (e.op === "erase") glyph[i] = -1;
+      else if (e.op === "write" && fillNext) glyph[i] = fillNext();
       else if (e.op === "write" && seq.length) glyph[i] = seq[k % seq.length];
       else if (e.op !== "write" && e.op !== "color") return;
-      if (col && (e.op === "write" || glyph[i] >= 0)) { color[i * 3] = col[0]; color[i * 3 + 1] = col[1]; color[i * 3 + 2] = col[2]; }
+      const ec = below ? below.subarray(i * 3, i * 3 + 3) : col; // "under": each cell's colour in the layer below
+      if (ec && (e.op === "write" || glyph[i] >= 0)) { color[i * 3] = ec[0]; color[i * 3 + 1] = ec[1]; color[i * 3 + 2] = ec[2]; }
       if (e.op !== "color" && grid.shade) grid.shade[i] = 1;
       if (grid.hidden) grid.hidden[i] = 0; // no longer part of a hidden message
     });
-  }
+    if (p) hideInRuns(grid, s, cs, [cells], p.messages, 600 + ei);
+  });
 }
 
 // ---------- Matrix rain ----------
@@ -689,57 +1042,108 @@ function applyEdits(grid, s, cs) {
 // cs.rain (see rainSpec). The shape is every cell with a visible character before the rain, so light areas
 // that got a blank count as empty. Randomness is hashed from rainSeed and cell positions, so the preview,
 // apply and batch match. Hidden messages are left alone.
+// Writes rain streams: returns write(cells, art), where cells are a stream's cells in the direction of motion
+// (the last is the head; -1 for a step off the grid, which still takes a character so words stay in order) and
+// art the colour for "the shape's colours". o.shape: cells that stop a stream, or with o.everywhere recolour it
+// (art) and leave it at full strength (rainOutside elsewhere); o.runs collects the cells drawn, for {messages};
+// o.spec: the characters (default cs.rain).
+function rainWriter(grid, s, cs, o) {
+  const { cols, glyph, color } = grid;
+  if (!grid.shade) grid.shade = new Float32Array(cols * grid.rows).fill(1);
+  const shade = grid.shade, hidden = grid.hidden, pal = rainPalette(grid, s), artSrc = rainArtSource(grid, s), shape = o.shape;
+  const fade = clamp01(s.rainFade), outside = clamp01(s.rainOutside), gaps = clamp01(s.rainGaps) * 0.7;
+  let id = 0;
+  return (cells, artRgb) => {
+    const next = itemStream(cs, o.spec || cs.rain, o.seed + 1000 + id++), len = cells.length, run = [];
+    if (o.runs) o.runs.push(run);
+    let art = artRgb;
+    for (let k = 0; k < len; k++) {
+      const g = next(), i = cells[k]; // taken even for skipped cells, so words stay in order along the stream
+      if (i < 0) continue;
+      if (shape && shape[i]) { if (!o.everywhere) break; art = artSrc.slice(i * 3, i * 3 + 3); }
+      const c = i % cols, r = (i - c) / cols;
+      if (g < 0 || (hidden && hidden[i]) || (gaps && hash3(o.seed + 2, c, r) < gaps)) continue;
+      const t = (k + 1) / len, isHead = k === len - 1 && s.rainHead;
+      const col = rainColorAt(s, pal, t, isHead, art, i);
+      glyph[i] = g;
+      color[i * 3] = clamp255(col[0]); color[i * 3 + 1] = clamp255(col[1]); color[i * 3 + 2] = clamp255(col[2]);
+      shade[i] = isHead ? 1 : (1 - fade * (1 - t)) * (o.everywhere && !shape[i] ? outside : 1);
+      run.push(i);
+    }
+  };
+}
+// Streams spaced along a line of cells (in the direction of motion; -1 off the grid): one about every slot,
+// each kept with probability `amount`. key tells lines apart in the hashes.
+function slotStreams(write, cells, s, seed, key, amount) {
+  const L = Math.max(1, Math.round(s.rainLength)), slot = L * (1.3 + (1 - amount) * 3), n = cells.length;
+  for (let q = 0, y = -L - hash3(seed + 4, key, 0) * slot; y < n; q++, y += slot) {
+    if (hash3(seed + 5, key, q) >= amount) continue;
+    const len = rainLen(s, seed, key, q + 7919), hy = Math.round(y + hash3(seed + 6, key, q) * slot), part = [];
+    for (let k = hy - len + 1; k <= hy; k++) part.push(k >= 0 && k < n ? cells[k] : -1);
+    write(part, null);
+  }
+}
+// A stream leaving a shape's edge along the motion (probability `amount`): its head 1…rainDistance cells from the
+// edge, rainLength long. at(k): the cell k steps from the edge (or -1). a, b tell edges apart in the hashes.
+function edgeStream(write, s, seed, a, b, at, art, amount) {
+  if (hash3(seed, a, b) >= amount) return;
+  const len = rainLen(s, seed, a, b), far = 1 + Math.floor(hash3(seed + 3, a, b) * Math.max(1, Math.round(s.rainDistance))), cells = [];
+  for (let k = Math.max(1, far - len + 1); k <= far; k++) cells.push(at(k));
+  write(cells, art);
+}
+// Rays from ctr (document units) out to R, about one per two cells at the far end, curving by twist (1: a quarter
+// turn by R) and starting at hole·R: each ray's cells, outward, without repeats in a row.
+function raysFrom(geo, cols, rows, ctr, R, twist, hole, seed) {
+  const n = Math.max(16, Math.round((2 * Math.PI * R) / (Math.min(geo.cellW, geo.cellH) * 2))), step = Math.min(geo.cellW, geo.cellH) * 0.5, out = [];
+  for (let j = 0; j < n; j++) {
+    const a0 = (2 * Math.PI * (j + (hash3(seed + 7, j, 0) - 0.5) * 0.6)) / n, cells = [];
+    let last = -1;
+    for (let d = hole * R; d <= R; d += step) {
+      const a = a0 + twist * (d / R) * (Math.PI / 2), c = Math.floor((ctr.x + d * Math.cos(a)) / geo.cellW), r = Math.floor((ctr.y + d * Math.sin(a)) / geo.cellH);
+      if (c < 0 || r < 0 || c >= cols || r >= rows) continue;
+      const i = r * cols + c;
+      if (i !== last) { cells.push(i); last = i; }
+    }
+    out.push(cells);
+  }
+  return out;
+}
 function applyRain(grid, s, cs) {
-  const { cols, rows, glyph, color } = grid, cells = cols * rows, seed = (s.rainSeed | 0) + 307, artSrc = rainArtSource(grid, s);
+  const { cols, rows, glyph, geo } = grid, cells = cols * rows, seed = (s.rainSeed | 0) + 307, artSrc = rainArtSource(grid, s);
   if (!cs.rain || !itemStream(cs, cs.rain, seed)) return;
   const shape = new Uint8Array(cells);
   for (let i = 0; i < cells; i++) shape[i] = glyph[i] >= 0 && cs.cov[glyph[i]] > 0 ? 1 : 0;
-  if (!grid.shade) grid.shade = new Float32Array(cells).fill(1);
-  const shade = grid.shade, hidden = grid.hidden, everywhere = s.rainFrom === "everywhere";
-  const slope = Math.tan((Math.max(-60, Math.min(60, s.rainAngle)) * Math.PI) / 180), L = Math.max(1, Math.round(s.rainLength));
-  const fade = clamp01(s.rainFade), outside = clamp01(s.rainOutside), amount = clamp01(s.rainAmount), gaps = clamp01(s.rainGaps) * 0.7;
-  const own = hexToRgb(s.rainColor), head = hexToRgb(s.rainHeadColor);
-  const stops = (s.rainGradientMid ? s.rainGradient : [s.rainGradient[0], s.rainGradient[2]]).map(hexToRgb);
-  const lenOf = (a, b) => Math.max(1, Math.round(L * (1 + clamp01(s.rainLengthVar) * (hash3(seed + 1, a, b) * 2 - 1))));
-  let id = 0;
-  // one stream along the fall from cell (c0, r0): steps k0..k1 (k1 = the head), step k at row r0 + k
-  const stream = (c0, r0, k0, k1, artRgb) => {
-    const next = itemStream(cs, cs.rain, seed + 1000 + id++), len = k1 - k0 + 1;
-    let art = artRgb;
-    for (let k = k0; k <= k1; k++) {
-      const g = next(); // taken even for skipped cells, so words stay in order along the stream
-      const r = r0 + k, c = c0 + Math.round(k * slope);
-      if (r < 0 || r >= rows || c < 0 || c >= cols) continue;
-      const i = r * cols + c;
-      if (shape[i]) { if (!everywhere) break; art = artSrc.slice(i * 3, i * 3 + 3); }
-      if (g < 0 || (hidden && hidden[i]) || (gaps && hash3(seed + 2, c, r) < gaps)) continue;
-      const t = (k - k0 + 1) / len, isHead = k === k1 && s.rainHead;
-      const col = isHead ? head : s.rainColorMode === "gradient" ? gradientAt(stops, t) : s.rainColorMode === "art" && art ? art : own;
-      glyph[i] = g;
-      color[i * 3] = clamp255(col[0]); color[i * 3 + 1] = clamp255(col[1]); color[i * 3 + 2] = clamp255(col[2]);
-      shade[i] = isHead ? 1 : (1 - fade * (1 - t)) * (everywhere && !shape[i] ? outside : 1);
-    }
-  };
-  if (!everywhere) {
-    const D = Math.max(1, Math.round(s.rainDistance)), dc = Math.round(slope);
-    for (let r = 0; r < rows - 1; r++) for (let c = 0; c < cols; c++) {
-      const i = r * cols + c, below = c + dc;
-      if (!shape[i] || below < 0 || below >= cols || shape[(r + 1) * cols + below]) continue; // not a lower edge
-      if (hash3(seed, c, r) >= amount) continue;
-      const len = lenOf(c, r), far = 1 + Math.floor(hash3(seed + 3, c, r) * D);
-      stream(c, r, Math.max(1, far - len + 1), far, artSrc.slice(i * 3, i * 3 + 3));
-    }
-  } else {
-    // a line of streams per column, starting above the top row (slanted lines also from beyond the sides)
-    const span = Math.ceil(rows * Math.abs(slope)) + 1, slot = L * (1.3 + (1 - amount) * 3);
-    for (let c = -span; c < cols + span; c++) {
-      for (let j = 0, y = -L - hash3(seed + 4, c, 0) * slot; y < rows; j++, y += slot) {
-        if (hash3(seed + 5, c, j) >= amount) continue;
-        const len = lenOf(c, j + 7919), hy = Math.round(y + hash3(seed + 6, c, j) * slot);
-        stream(c, 0, hy - len + 1, hy, null);
+  const everywhere = s.rainFrom === "everywhere", amount = clamp01(s.rainAmount);
+  const runs = [], messages = rainMessages(s); // the cells each stream drew, in order, for {messages}
+  const write = rainWriter(grid, s, cs, { shape, everywhere, seed, runs: messages.length ? runs : null });
+  if (s.rainDir === "out" || s.rainDir === "in") {
+    // along rays from a centre: the middle of the shape or a point; inward streams run towards it
+    const ctr = (s.rainCentre !== "point" && maskCentre(shape, cols, geo)) || { x: s.rainCX * geo.docW, y: s.rainCY * geo.docH };
+    const R = Math.max(...[[0, 0], [geo.docW, 0], [0, geo.docH], [geo.docW, geo.docH]].map(([x, y]) => Math.hypot(x - ctr.x, y - ctr.y)));
+    raysFrom(geo, cols, rows, ctr, R, s.rainTwist, clamp01(s.rainHole), seed).forEach((ray, j) => {
+      const line = s.rainDir === "in" ? ray.reverse() : ray;
+      if (everywhere) return slotStreams(write, line, s, seed, j, amount);
+      for (let k = 0; k < line.length - 1; k++) { // streams leave the shape's edges along the motion
+        if (shape[line[k]] && !shape[line[k + 1]]) edgeStream(write, s, seed, 9000 + j, k, (q) => (k + q < line.length ? line[k + q] : -1), artSrc.slice(line[k] * 3, line[k] * 3 + 3), amount);
       }
+    });
+  } else {
+    const slope = Math.tan((Math.max(-60, Math.min(60, s.rainAngle)) * Math.PI) / 180);
+    const at = (c0, r0, k) => { const r = r0 + k, c = c0 + Math.round(k * slope); return r < 0 || r >= rows || c < 0 || c >= cols ? -1 : r * cols + c; };
+    if (!everywhere) {
+      const dc = Math.round(slope);
+      for (let r = 0; r < rows - 1; r++) for (let c = 0; c < cols; c++) {
+        const i = r * cols + c, below = c + dc;
+        if (!shape[i] || below < 0 || below >= cols || shape[(r + 1) * cols + below]) continue; // not a lower edge
+        edgeStream(write, s, seed, c, r, (k) => at(c, r, k), artSrc.slice(i * 3, i * 3 + 3), amount);
+      }
+    } else {
+      // a line of streams per column, starting above the top row (slanted lines also from beyond the sides)
+      const span = Math.ceil(rows * Math.abs(slope)) + 1;
+      for (let c = -span; c < cols + span; c++) slotStreams(write, Array.from({ length: rows }, (_, k) => at(c, 0, k)), s, seed, c, amount);
     }
   }
+  hideInRuns(grid, s, cs, runs, messages, 71);
 }
 
 // Glyph colour per cell: one colour, the image's own colours, or a gradient map of the ink.
@@ -759,6 +1163,8 @@ function cellColors(g, s) {
       }
     } else if (s.colorMode === "gradient") {
       [cr, cg, cb] = gradientAt(stops, ink[ci]);
+    } else if (s.colorMode === "under") {
+      const u = g.under || rgb; cr = u[ci * 3]; cg = u[ci * 3 + 1]; cb = u[ci * 3 + 2];
     } else { [cr, cg, cb] = fg; }
     color[ci * 3] = clamp255(cr); color[ci * 3 + 1] = clamp255(cg); color[ci * 3 + 2] = clamp255(cb);
   }
@@ -1024,8 +1430,8 @@ function renderWithShadows(grid, cs, atlas, s, view) {
   const reach = Math.max(s.longOn ? s.longLength : 0, s.dropOn ? s.dropDistance + 1.6 * s.dropSize : 0, s.offOn ? s.offDistance : 0, s.glowOn ? 1.6 * s.glowSize : 0);
   const M = Math.ceil(reach * F) + 2, EW = W + 2 * M, EH = H + 2 * M;
   const off = { dropOn: false, longOn: false, offOn: false, glowOn: false, glitchOn: false };
-  const G = render(grid, cs, atlas, Object.assign({}, s, off, { bgMode: "transparent", keepAlpha: false }), { x: view.x - M / sc, y: view.y - M / sc, w: EW, h: EH, scale: sc });
-  const out = new Uint8ClampedArray(render(grid, cs, atlas, Object.assign({}, s, off, { _noGlyphs: true }), view).buffer);
+  const G = render(grid, cs, atlas, Object.assign({}, s, off, { bgMode: "transparent", keepAlpha: false, cfOn: false }), { x: view.x - M / sc, y: view.y - M / sc, w: EW, h: EH, scale: sc });
+  const out = s._shadowsOnly ? new Uint8ClampedArray(W * H * 4) : new Uint8ClampedArray(render(grid, cs, atlas, Object.assign({}, s, off, { _noGlyphs: true }), view).buffer);
   const A = new Float32Array(EW * EH);
   for (let i = 0; i < A.length; i++) A[i] = G[i * 4 + 3] / 255;
   const ang = (s.shadowAngle * Math.PI) / 180, dx = -Math.cos(ang), dy = Math.sin(ang); // where shadows fall
@@ -1059,7 +1465,7 @@ function renderWithShadows(grid, cs, atlas, s, view) {
         const col = LC[j], c = typeof col === "function" ? col(e) : col;
         blendPx(out, o, c[0], c[1], c[2], Math.min(1, a));
       }
-      const ga = G[e * 4 + 3];
+      const ga = s._shadowsOnly ? 0 : G[e * 4 + 3];
       if (ga) blendPx(out, o, G[e * 4], G[e * 4 + 1], G[e * 4 + 2], ga / 255);
     }
   }
@@ -1067,11 +1473,241 @@ function renderWithShadows(grid, cs, atlas, s, view) {
   return new Uint8Array(out.buffer);
 }
 
+// ---------- depth echo ----------
+// Copies of chosen parts (the outline's stroke, the rain, the image's characters), scaled around a vanishing
+// point: echoCount copies, each echoStep bigger (echoDir "out": towards the viewer) or smaller ("in": into the
+// distance) than the last, so the gaps grow or shrink like perspective. Copy k of n fades by echoFade·k/n (as
+// the rain's tail does) and, with echoColorMode "tint", turns towards echoColor. Each copy is a render of those
+// cells at its own scale, so characters stay sharp; the copies sit under the characters, over the background.
+// The vanishing point: the centre of the parts' cells ("shape") or echoX, echoY of the area ("point").
+function echoMask(grid, cs, s) { // the cells to repeat, or null when there are none
+  const { glyph, part } = grid, stroke = grid.outlineStroke, m = new Uint8Array(glyph.length);
+  let any = false;
+  for (let i = 0; i < glyph.length; i++) {
+    if (glyph[i] < 0 || cs.cov[glyph[i]] <= 0) continue;
+    const p = part ? part[i] : PART.text;
+    if ((s.echoOutline && p === PART.outline && (!stroke || stroke[i])) || (s.echoRain && p === PART.rain) || (s.echoText && p === PART.text)) { m[i] = 1; any = true; }
+  }
+  return any ? m : null;
+}
+function drawEcho(out, grid, cs, atlas, s, view) {
+  const mask = echoMask(grid, cs, s);
+  if (!mask) return;
+  const { cols, geo } = grid, glyph = grid.glyph.map((g, i) => (mask[i] ? g : -1)), only = Object.assign({}, grid, { glyph });
+  let vx = s.echoX * geo.docW, vy = s.echoY * geo.docH;
+  if (s.echoCentre !== "point") { // the middle of the repeated cells' bounding box
+    let c0 = Infinity, c1 = -1, r0 = Infinity, r1 = -1;
+    mask.forEach((m, i) => { if (m) { const c = i % cols, r = (i - c) / cols; c0 = Math.min(c0, c); c1 = Math.max(c1, c); r0 = Math.min(r0, r); r1 = Math.max(r1, r); } });
+    vx = ((c0 + c1 + 1) / 2) * geo.cellW; vy = ((r0 + r1 + 1) / 2) * geo.cellH;
+  }
+  const n = Math.max(1, Math.round(s.echoCount)), step = Math.max(0.01, s.echoStep), outward = s.echoDir !== "in";
+  const fade = clamp01(s.echoFade), tint = s.echoColorMode === "tint" ? hexToRgb(s.echoColor) : null;
+  const chars = Object.assign({}, s, NO_FX, { _echoDone: true, bgMode: "transparent", keepAlpha: false });
+  for (let j = 0; j < n; j++) { // the farthest copy first: outward that's the smallest, inward the last one
+    const k = outward ? j + 1 : n - j, sk = Math.pow(1 + step, outward ? k : -k), t = k / n, a = 1 - fade * t;
+    if (a <= 0.002) continue;
+    // copy k is these cells scaled by sk around (vx, vy): the same render with the view moved and scaled
+    const px = render(only, cs, atlas, chars, { x: vx + (view.x - vx) / sk, y: vy + (view.y - vy) / sk, w: view.w, h: view.h, scale: view.scale * sk });
+    for (let o = 0; o < out.length; o += 4) {
+      if (!px[o + 3]) continue;
+      if (tint) blendPx(out, o, px[o] + (tint[0] - px[o]) * t, px[o + 1] + (tint[1] - px[o + 1]) * t, px[o + 2] + (tint[2] - px[o + 2]) * t, (px[o + 3] / 255) * a);
+      else blendPx(out, o, px[o], px[o + 1], px[o + 2], (px[o + 3] / 255) * a);
+    }
+  }
+}
+
+// ---------- cell backgrounds ----------
+// An effect behind every cell's character, made from its colour (cfFrom "glyph": the character's own colour,
+// after rain and edits; "image": the source's colour under the cell), lightened or darkened by cfShade:
+//   solid     a tile; cfGap insets it (a share of the smaller cell side), cfRound rounds its corners
+//   gradient  a tile running from that colour (optionally through cfGradMid) to cfTo: cfGradShape linear or
+//             reflected at cfAngle (90: top to bottom), radial, diamond or angle (around the centre), across
+//             each cell or the whole picture (cfGradSpan), with a midpoint, steps, ping-pong repeats and reverse
+//   depth     nested outlines: cfDepthCount rectangles shrinking in perspective towards the cell's centre (and,
+//             by cfDepthAim, towards the picture's centre), from that colour towards cfTo, fading by cfDepthFade
+//   bleed     no tiles: the colours spread softly over cfSpread cells around their characters
+// On top, per cell: cfGlitch (that share of the cells, picked from cfSeed) turns a cell inverted, into RGB bars,
+// colour bands, blocks or a neighbour's colour; cfLines darkens cfLineCount scanlines per cell; cfGrain adds
+// noise, cfGrainSize of the font size. cfOnlyGlyphs: only cells with a visible character. Everything follows
+// from the document position and the cell, so strips of a render match.
+// Per cell: the effect's colour A, the gradient's far colour B and its opacity Ba (see cfTarget), and the
+// cell's weight w (0 where it gets no effect).
+function cellFxBase(grid, cs, s) {
+  const { cols, rows, glyph, rgb, alpha, shade } = grid, cells = cols * rows, src = s.cfFrom === "image" ? rgb : s.cfFrom === "under" ? underOf(grid) : grid.color;
+  const A = new Float32Array(cells * 3), B = new Float32Array(cells * 3), Ba = new Float32Array(cells), w = new Float32Array(cells), k = clamp01(Math.abs(s.cfShade)), to = s.cfShade < 0 ? 0 : 255;
+  let masked = false;
+  if (s.keepAlpha && alpha) for (let i = 0; i < cells && !masked; i++) masked = alpha[i] < 255;
+  for (let i = 0; i < cells; i++) {
+    for (let j = 0; j < 3; j++) A[i * 3 + j] = src[i * 3 + j] + (to - src[i * 3 + j]) * k;
+    Ba[i] = cfTarget(s, A.subarray(i * 3, i * 3 + 3), B.subarray(i * 3, i * 3 + 3));
+    const g = glyph[i], vis = g >= 0 && cs.cov[g] > 0;
+    w[i] = (vis || !s.cfOnlyGlyphs ? 1 : 0) * (masked ? alpha[i] / 255 : 1) * (shade && vis ? shade[i] : 1);
+  }
+  return { A, B, Ba, w };
+}
+function cfTarget(s, a, out) { // the far colour of a gradient or glow, and its opacity
+  const t = s.cfTo;
+  if (t === "dark") { out[0] = a[0] * 0.25; out[1] = a[1] * 0.25; out[2] = a[2] * 0.25; return 1; }
+  if (t === "light") { out[0] = a[0] + (255 - a[0]) * 0.75; out[1] = a[1] + (255 - a[1]) * 0.75; out[2] = a[2] + (255 - a[2]) * 0.75; return 1; }
+  if (t === "complement") { out[0] = 255 - a[0]; out[1] = 255 - a[1]; out[2] = 255 - a[2]; return 1; }
+  if (t === "bg" || t === "custom") { const c = hexToRgb(t === "bg" ? s.bg : s.cfToColor); out[0] = c[0]; out[1] = c[1]; out[2] = c[2]; return 1; }
+  out[0] = a[0]; out[1] = a[1]; out[2] = a[2]; return 0; // transparent
+}
+// Position 0..1 along the gradient for a point (px, py) from the centre of an area with half sizes hx, hy.
+function cfGradT(shape, px, py, hx, hy, ca, sa, ang) {
+  if (shape === "radial") return clamp01(Math.hypot(px / hx, py / hy));
+  if (shape === "diamond") return clamp01(Math.abs(px / hx) + Math.abs(py / hy));
+  if (shape === "angle") { const t = (Math.atan2(py / hy, px / hx) - ang) / (2 * Math.PI); return t - Math.floor(t); }
+  const along = (px * ca + py * sa) / (Math.abs(hx * ca) + Math.abs(hy * sa) || 1);
+  return shape === "reflected" ? clamp01(Math.abs(along)) : clamp01(0.5 + along / 2);
+}
+function drawCellFx(out, grid, cs, s, view) {
+  const { cols, rows, geo } = grid, sc = view.scale, W = view.w, H = view.h, cW = geo.cellW, cH = geo.cellH;
+  const { A, B, Ba, w } = cellFxBase(grid, cs, s), fill = s.cfFill, op = clamp01(s.cfOpacity), seed = (s.cfSeed | 0) * 7 + 9001;
+  // output pixel centres in document units, from whole output pixels so strips agree exactly
+  const ox = Math.round(view.x * sc * 1024) / 1024, oy = Math.round(view.y * sc * 1024) / 1024;
+  const X = new Float64Array(W), Y = new Float64Array(H);
+  for (let x = 0; x < W; x++) X[x] = (ox + x + 0.5) / sc;
+  for (let y = 0; y < H; y++) Y[y] = (oy + y + 0.5) / sc;
+  // tile shape: a rounded rectangle inset by the gap; with no gap its sides reach past the cell (no seams)
+  const inset = clamp01(s.cfGap) * Math.min(cW, cH), hw = cW / 2 - inset + (inset > 0 ? 0 : 1 / sc), hh = cH / 2 - inset + (inset > 0 ? 0 : 1 / sc);
+  const rr = Math.max(0, Math.min(0.5, s.cfRound)) * 2 * Math.max(0, Math.min(hw, hh));
+  const ang = (s.cfAngle * Math.PI) / 180, ca = Math.cos(ang), sa = Math.sin(ang);
+  const shape = s.cfGradShape || "linear", whole = s.cfGradSpan === "image";
+  const reps = Math.max(1, Math.round(s.cfGradRepeat || 1)), steps = Math.round(s.cfGradSteps || 0), mp = Math.min(0.95, Math.max(0.05, s.cfGradMidpoint || 0.5));
+  const bias = Math.abs(mp - 0.5) > 1e-3 ? Math.log(0.5) / Math.log(mp) : 1, mid = s.cfGradMidOn ? hexToRgb(s.cfGradMid) : null;
+  const shapeT = (dx, dy, Xd, Yd) => { // the gradient's 0..1 at a pixel, after repeats, midpoint, steps and reverse
+    let t = whole ? cfGradT(shape, Xd - geo.docW / 2, Yd - geo.docH / 2, geo.docW / 2, geo.docH / 2, ca, sa, ang) : cfGradT(shape, dx, dy, cW / 2, cH / 2, ca, sa, ang);
+    if (reps > 1) { t = (t * reps) % 2; if (t > 1) t = 2 - t; }
+    if (bias !== 1) t = Math.pow(t, bias);
+    if (steps >= 2) t = Math.min(steps - 1, Math.floor(t * steps)) / (steps - 1);
+    return s.cfGradReverse ? 1 - t : t;
+  };
+  let bl = null;
+  if (fill === "bleed") { // colour × weight and weight, blurred over the grid, sampled between cell centres
+    const R = new Float32Array(cols * rows), G = new Float32Array(cols * rows), B = new Float32Array(cols * rows), Wt = Float32Array.from(w);
+    for (let i = 0; i < w.length; i++) { R[i] = A[i * 3] * w[i]; G[i] = A[i * 3 + 1] * w[i]; B[i] = A[i * 3 + 2] * w[i]; }
+    const sig = Math.max(0.4, s.cfSpread);
+    blurField(R, cols, rows, sig); blurField(G, cols, rows, sig); blurField(B, cols, rows, sig); blurField(Wt, cols, rows, sig);
+    bl = { R, G, B, Wt };
+  }
+  // depth: dN rectangles, each (1 - cfDepthPull) the size of the one around it, lines cfDepthWidth of the tile's
+  // half size (shrinking with them), drifting towards the picture's centre by cfDepthAim, fading by cfDepthFade
+  const dN = Math.max(1, Math.round(s.cfDepthCount)), dR = Array.from({ length: dN }, (_, k) => Math.pow(1 - Math.min(0.9, Math.max(0.02, s.cfDepthPull)), k));
+  const dW = Math.max(0.005, s.cfDepthWidth), dAim = clamp01(s.cfDepthAim), dFade = clamp01(s.cfDepthFade);
+  const glitch = clamp01(s.cfGlitch), lines = clamp01(s.cfLines), nLines = Math.max(1, Math.round(s.cfLineCount));
+  const grain = clamp01(s.cfGrain) * 160, gs = Math.max(1 / sc, s.cfGrainSize * geo.size);
+  const blend = s.cfBlend, col = [0, 0, 0];
+  for (let y = 0; y < H; y++) {
+    const Yd = Y[y], r = Math.floor(Yd / cH);
+    if (r < 0 || r >= rows) continue;
+    const v = Yd / cH - r, dy = (v - 0.5) * cH, stripe = lines > 0 && ((v * nLines) % 1) >= 0.5;
+    for (let x = 0, o = y * W * 4; x < W; x++, o += 4) {
+      const Xd = X[x], c = Math.floor(Xd / cW);
+      if (c < 0 || c >= cols) continue;
+      const ci = r * cols + c, u = Xd / cW - c, dx = (u - 0.5) * cW;
+      let a, sh; // opacity, and the tile's own coverage (a glitched cell shows solid within it)
+      if (bl) {
+        const fx = Xd / cW - 0.5, fy = Yd / cH - 0.5, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+        const xa = Math.max(0, Math.min(cols - 1, x0)), xb = Math.max(0, Math.min(cols - 1, x0 + 1)), ya = Math.max(0, Math.min(rows - 1, y0)) * cols, yb = Math.max(0, Math.min(rows - 1, y0 + 1)) * cols;
+        const lerp = (F) => (F[ya + xa] * (1 - tx) + F[ya + xb] * tx) * (1 - ty) + (F[yb + xa] * (1 - tx) + F[yb + xb] * tx) * ty;
+        const wt = lerp(bl.Wt);
+        if (wt < 1e-4) continue;
+        col[0] = lerp(bl.R) / wt; col[1] = lerp(bl.G) / wt; col[2] = lerp(bl.B) / wt;
+        a = sh = Math.min(1, wt * 1.6);
+      } else {
+        if (w[ci] <= 0) continue;
+        // coverage of the rounded tile at this pixel (anti-aliased over one output pixel)
+        const qx = Math.abs(dx) - hw + rr, qy = Math.abs(dy) - hh + rr;
+        const d = Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - rr;
+        const cov = clamp01(0.5 - d * sc);
+        if (cov <= 0) continue;
+        const a0 = A[ci * 3], a1 = A[ci * 3 + 1], a2 = A[ci * 3 + 2];
+        if (fill === "solid") { col[0] = a0; col[1] = a1; col[2] = a2; a = 1; }
+        else if (fill === "depth") { // nested outlines; the nearest (outer) one wins where lines meet
+          const ax = dAim * Math.max(-1, Math.min(1, (geo.docW / 2 - (c + 0.5) * cW) / (geo.docW / 2))), ay = dAim * Math.max(-1, Math.min(1, (geo.docH / 2 - (r + 0.5) * cH) / (geo.docH / 2)));
+          let best = 0, bk = 0;
+          for (let k = 0; k < dN; k++) {
+            const rk = dR[k], px = dx - ax * (1 - rk) * hw, py = dy - ay * (1 - rk) * hh, qx2 = Math.abs(px) - rk * hw, qy2 = Math.abs(py) - rk * hh;
+            const sd = Math.hypot(Math.max(qx2, 0), Math.max(qy2, 0)) + Math.min(Math.max(qx2, qy2), 0), lw = Math.max(1 / sc, dW * rk * Math.min(hw, hh));
+            const cv = clamp01(0.5 - (Math.abs(sd + lw / 2) - lw / 2) * sc);
+            if (cv > best) { best = cv; bk = k; }
+          }
+          if (best <= 0) continue;
+          const t = dN > 1 ? bk / (dN - 1) : 0;
+          col[0] = a0 + (B[ci * 3] - a0) * t; col[1] = a1 + (B[ci * 3 + 1] - a1) * t; col[2] = a2 + (B[ci * 3 + 2] - a2) * t;
+          a = best * (1 + (Ba[ci] - 1) * t) * (1 - dFade * t);
+        } else {
+          const t = shapeT(dx, dy, Xd, Yd), b0 = B[ci * 3], b1 = B[ci * 3 + 1], b2 = B[ci * 3 + 2];
+          if (mid && t < 0.5) { const k = t * 2; col[0] = a0 + (mid[0] - a0) * k; col[1] = a1 + (mid[1] - a1) * k; col[2] = a2 + (mid[2] - a2) * k; }
+          else if (mid) { const k = t * 2 - 1; col[0] = mid[0] + (b0 - mid[0]) * k; col[1] = mid[1] + (b1 - mid[1]) * k; col[2] = mid[2] + (b2 - mid[2]) * k; }
+          else { col[0] = a0 + (b0 - a0) * t; col[1] = a1 + (b1 - a1) * t; col[2] = a2 + (b2 - a2) * t; }
+          a = 1 + (Ba[ci] - 1) * t;
+        }
+        sh = cov * w[ci];
+        a *= sh;
+      }
+      if (glitch > 0 && hash3(seed, c, r) < glitch) { // this cell is glitched, one of five ways
+        const kind = Math.floor(hash3(seed + 1, c, r) * 5);
+        if (kind === 0) { col[0] = 255 - col[0]; col[1] = 255 - col[1]; col[2] = 255 - col[2]; }
+        else if (kind === 1) { const m = Math.max(90, col[0], col[1], col[2]), b = Math.min(2, Math.floor(u * 3)); col[0] = b === 0 ? m : 0; col[1] = b === 1 ? m : 0; col[2] = b === 2 ? m : 0; }
+        else if (kind === 2) {
+          const nb = 2 + Math.floor(hash3(seed + 2, c, r) * 5), pick = Math.floor(hash3(seed + 3, ci, Math.floor(v * nb)) * 4);
+          if (pick === 1) { col[0] = 255 - col[0]; col[1] = 255 - col[1]; col[2] = 255 - col[2]; }
+          else if (pick === 2) { col[0] = col[1] = col[2] = 255; }
+          else if (pick === 3) { col[0] = col[1] = col[2] = 0; }
+        } else if (kind === 3) {
+          const f = 0.3 + 1.4 * hash3(seed + 4, ci, Math.floor(u * 3) + 7 * Math.floor(v * 4));
+          col[0] = Math.min(255, col[0] * f); col[1] = Math.min(255, col[1] * f); col[2] = Math.min(255, col[2] * f);
+        } else if (u > 0.2 + 0.6 * hash3(seed + 5, c, r)) { // the right part shows a neighbour's colour, shifted in
+          const n = Math.max(0, Math.min(cols - 1, c + (hash3(seed + 6, c, r) < 0.5 ? -1 : 1) * (1 + Math.floor(hash3(seed + 7, c, r) * 3)))), ni = (r * cols + n) * 3;
+          col[0] = A[ni]; col[1] = A[ni + 1]; col[2] = A[ni + 2];
+        }
+        a = Math.max(a, 0.9 * sh);
+      }
+      if (stripe) { const k = 1 - lines; col[0] *= k; col[1] *= k; col[2] *= k; }
+      if (grain > 0) { const n = (hash3(seed + 8, Math.floor(Xd / gs), Math.floor(Yd / gs)) - 0.5) * grain; col[0] += n; col[1] += n; col[2] += n; }
+      a *= op;
+      if (a <= 0.002) continue;
+      if (blend !== "normal" && out[o + 3]) { // mixed with what's under, as far as that is opaque
+        const da = out[o + 3] / 255;
+        for (let j = 0; j < 3; j++) {
+          const sv = clamp255(col[j]), dv = out[o + j];
+          const m = blend === "screen" ? 255 - ((255 - sv) * (255 - dv)) / 255 : blend === "multiply" ? (sv * dv) / 255 : Math.min(255, sv + dv);
+          col[j] = sv + (m - sv) * da;
+        }
+      }
+      blendPx(out, o, clamp255(col[0]), clamp255(col[1]), clamp255(col[2]), Math.min(1, a));
+    }
+  }
+}
+
 const MARK_RGB = [0, 230, 255];
 // view: {x, y} top-left in document px, {w, h} output px, scale = output px per document px.
 // Returns straight-alpha RGBA Uint8Array.
 function render(grid, cs, atlas, s, view) {
+  if (s.echoOn && !s._echoDone && echoMask(grid, cs, s)) { // background and cell backgrounds, shadows, the echo, characters
+    const done = { _echoDone: true, glitchOn: false };
+    const out = new Uint8ClampedArray(render(grid, cs, atlas, Object.assign({}, s, done, { _noGlyphs: true, dropOn: false, longOn: false, offOn: false, glowOn: false }), view).buffer);
+    const over = (px) => { for (let o = 0; o < out.length; o += 4) if (px[o + 3]) blendPx(out, o, px[o], px[o + 1], px[o + 2], px[o + 3] / 255); };
+    if (hasShadow(s)) over(renderPart("shadows", grid, cs, atlas, s, view));
+    drawEcho(out, grid, cs, atlas, s, view);
+    over(render(grid, cs, atlas, Object.assign({}, s, NO_FX, done, { bgMode: "transparent", keepAlpha: false }), view));
+    if (s.glitchOn) glitchOutput(out, view, grid.geo, s);
+    return new Uint8Array(out.buffer);
+  }
   if (hasShadow(s)) return renderWithShadows(grid, cs, atlas, s, view);
+  if (s.cfOn && !s._cfDone) { // background, then the cell backgrounds, then the characters over them
+    const under = { _cfDone: true, glitchOn: false };
+    const out = new Uint8ClampedArray(render(grid, cs, atlas, Object.assign({}, s, under, { _noGlyphs: true }), view).buffer);
+    drawCellFx(out, grid, cs, s, view);
+    if (!s._noGlyphs) {
+      const G = render(grid, cs, atlas, Object.assign({}, s, under, { bgMode: "transparent", keepAlpha: false }), view);
+      for (let o = 0; o < out.length; o += 4) if (G[o + 3]) blendPx(out, o, G[o], G[o + 1], G[o + 2], G[o + 3] / 255);
+    }
+    if (s.glitchOn) glitchOutput(out, view, grid.geo, s);
+    return new Uint8Array(out.buffer);
+  }
   const noGlyphs = !!s._noGlyphs; // background only (shadows are stacked between it and the characters)
   const { cols, rows, geo, glyph, rgb, alpha, shade } = grid;
   let color = grid.color;
@@ -1165,13 +1801,16 @@ function render(grid, cs, atlas, s, view) {
   return new Uint8Array(out.buffer);
 }
 
-// Flatten RGBA onto a checkerboard for previews -> RGB.
-function flattenForPreview(rgba, W, H) {
+// Flatten RGBA onto a checkerboard for previews -> RGB. backdrop (optional, RGBA of the same size): drawn
+// between the two (the live view's layers under the characters).
+function flattenForPreview(rgba, W, H, backdrop) {
   const out = new Uint8Array(W * H * 3);
   for (let y = 0, i = 0, o = 0; y < H; y++) {
     for (let x = 0; x < W; x++, i += 4, o += 3) {
       const ck = ((x >> 3) + (y >> 3)) & 1 ? 204 : 255, a = rgba[i + 3] / 255;
-      out[o] = rgba[i] * a + ck * (1 - a); out[o + 1] = rgba[i + 1] * a + ck * (1 - a); out[o + 2] = rgba[i + 2] * a + ck * (1 - a);
+      let r = ck, g = ck, b = ck;
+      if (backdrop && backdrop[i + 3]) { const ua = backdrop[i + 3] / 255; r = backdrop[i] * ua + ck * (1 - ua); g = backdrop[i + 1] * ua + ck * (1 - ua); b = backdrop[i + 2] * ua + ck * (1 - ua); }
+      out[o] = rgba[i] * a + r * (1 - a); out[o + 1] = rgba[i + 1] * a + g * (1 - a); out[o + 2] = rgba[i + 2] * a + b * (1 - a);
     }
   }
   return out;
@@ -1257,5 +1896,5 @@ function toSVG(grid, cs, s) {
   return parts.join("\n");
 }
 
-const Engine = { DIFFUSION, ORDERED, resampleGlyph, DEFAULTS, prepareAtlas, buildCharset, parseCustom, charsetParts, charsetOf, computeGeometry, computeGrid, editCells, render, flattenForPreview, gridLines, toText, toHTML, toSVG, hexToRgb, rgbToHex, luma };
+const Engine = { RING_RAIN, migrateSettings, layerParts, renderPart, PART_NAMES, DIFFUSION, ORDERED, resampleGlyph, DEFAULTS, prepareAtlas, buildCharset, parseCustom, charsetParts, charsetOf, computeGeometry, computeGrid, editCells, render, flattenForPreview, gridLines, toText, toHTML, toSVG, hexToRgb, rgbToHex, luma };
 if (typeof module !== "undefined") module.exports = Engine;

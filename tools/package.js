@@ -4,7 +4,7 @@
 const fs = require("fs"), path = require("path"), zlib = require("zlib"), { spawnSync } = require("child_process");
 
 const ROOT = path.join(__dirname, ".."), PLUGIN = path.join(ROOT, "plugin"), OUT = path.join(ROOT, "ASCII by Star.ccx");
-const FILES = ["manifest.json", "index.html", "main.js", "engine.js", "ink.js", "inkui.js", "slider.js", "dropdown.js", "fields.js", "viewer.js", "pixels.js", "charsets.js", "presets.js", "atlas.bin", "atlas.json", "icons"];
+const FILES = ["manifest.json", "index.html", "main.js", "engine.js", "ink.js", "inkui.js", "slider.js", "dropdown.js", "fields.js", "viewer.js", "pixels.js", "charsets.js", "presets.js", "textart.js", "figlet.js", "picker.js", "presetbox.js", "history.js", "figlet-fonts", "atlas.bin", "atlas.json", "icons"];
 
 // ---------- zip (deflate, no external tools) ----------
 const CRC = new Int32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c; });

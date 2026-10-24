@@ -10,7 +10,7 @@
 // rects (cells; {cls} adds a class) over the image. head: the "▾ Preview" line above it, which shows and hides it. With onEditToggle, the zoom bar gets an Edit button that calls it.
 "use strict";
 const { imaging } = require("photoshop");
-const { makeSlider, trackDrag, SLIDER_HTML } = require("./slider.js");
+const { makeSlider, trackDrag, onDoubleClick, SLIDER_HTML } = require("./slider.js");
 
 const MAX_ZOOM = 4; // 400%
 const SIZE_MIN = 0.1, SIZE_MAX = 0.8, MIN_PX = 60; // preview height: share of the panel height
@@ -103,12 +103,10 @@ function createViewer({ wrap, img, msg, bar, grip, head, storeKey, render, docSi
   async function show(rect, z, myGen) {
     const res = await render(rect, z);
     if (!res || myGen !== gen) return false;
-    const id = await imaging.createImageDataFromBuffer(res.rgb, { width: res.w, height: res.h, components: 3, chunky: true, colorProfile: "sRGB IEC61966-2.1", colorSpace: "RGB" });
-    const b64 = await imaging.encodeImageData({ imageData: id, base64: true });
-    id.dispose();
+    const url = await rgbToDataURL(res.rgb, res.w, res.h);
     if (myGen !== gen) return false;
     pending = Object.assign({}, rect, { z, gen: myGen });
-    img.src = "data:image/jpeg;base64," + b64;
+    img.src = url;
     img.classList.remove("hidden");
     msg.classList.add("hidden");
     return true;
@@ -168,9 +166,9 @@ function createViewer({ wrap, img, msg, bar, grip, head, storeKey, render, docSi
   if (bar) {
     bar.innerHTML = `<span class="label zlabel" title="Double-click for Fit">Zoom</span>${SLIDER_HTML}<span class="val zval"></span>${onEditToggle ? '<button class="zbtn zedit"></button>' : ""}`;
     zval = bar.querySelector(".zval");
-    slider = makeSlider(bar.querySelector(".slider"), 0, 1, 0.001, (t) => setZoom(t, null, 220));
+    slider = makeSlider(bar.querySelector(".slider"), 0, 1, 0.001, (t) => setZoom(t, null, 220), () => setZoom(0));
     slider.value = zoomT;
-    bar.querySelector(".zlabel").addEventListener("dblclick", () => setZoom(0));
+    onDoubleClick(bar.querySelector(".zlabel"), () => setZoom(0));
     editBtn = bar.querySelector(".zedit");
     if (editBtn) { editBtn.addEventListener("click", () => onEditToggle()); showEditBtn(); }
     label();
@@ -302,4 +300,11 @@ function createViewer({ wrap, img, msg, bar, grip, head, storeKey, render, docSi
   };
 }
 
-if (typeof module !== "undefined") module.exports = { createViewer };
+// RGB pixels (w × h × 3) as a JPEG data URL for an <img> (previews, the Text art tab's font list).
+async function rgbToDataURL(rgb, w, h) {
+  const id = await imaging.createImageDataFromBuffer(rgb, { width: w, height: h, components: 3, chunky: true, colorProfile: "sRGB IEC61966-2.1", colorSpace: "RGB" });
+  try { return "data:image/jpeg;base64," + (await imaging.encodeImageData({ imageData: id, base64: true })); }
+  finally { id.dispose(); }
+}
+
+if (typeof module !== "undefined") module.exports = { createViewer, rgbToDataURL };

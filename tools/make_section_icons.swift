@@ -8,10 +8,11 @@ try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: t
 
 // section id: (Lucide icon, badge colour)
 let icons: [(String, String, UInt32)] = [
-  ("look", "sparkles", 0xd4a017), ("chars", "type", 0x3b82f6), ("outline", "circle-dashed", 0xff2a6d), ("rain", "cloud-rain", 0x16a34a),
+  ("look", "sparkles", 0xd4a017), ("chars", "type", 0x3b82f6), ("outline", "circle-dashed", 0xff2a6d), ("rain", "cloud-rain", 0x16a34a), ("depth", "squares-nested", 0x7c3aed),
   ("edit", "pencil", 0x06b6d4), ("grid", "grid-3x3", 0x64748b), ("tone", "contrast", 0x737373), ("color", "palette", 0xe11d48),
-  ("shadow", "blend", 0x4b5563), ("glitch", "zap", 0xa21caf), ("output", "download", 0x2563eb), ("batch", "folder-open", 0x0d9488),
+  ("shadow", "blend", 0x4b5563), ("cells", "layout-grid", 0xea580c), ("glitch", "zap", 0xa21caf), ("output", "download", 0x2563eb), ("batch", "folder-open", 0x0d9488),
   ("inkType", "scroll-text", 0xa16207), ("inkInk", "droplet", 0x1e3a8a), ("inkPaper", "sticky-note", 0xb45309), ("inkLayers", "layers", 0x475569),
+  ("taStyle", "sparkles", 0xca8a04), ("taShape", "blend", 0x9333ea), ("taText", "pencil", 0x0891b2), ("taFont", "type", 0xdb2777), ("taLayout", "grid-3x3", 0x65a30d),
 ]
 let S = 36, inset: CGFloat = 7
 for (id, name, rgb) in icons {

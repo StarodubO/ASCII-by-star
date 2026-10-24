@@ -142,6 +142,82 @@ async function readRect(doc, layerId, R, z) {
   }
   return out;
 }
+// Whether RGBA pixels have anything visible (any alpha above 0).
+function hasAlpha(rgba) { for (let i = 3; i < rgba.length; i += 4) if (rgba[i]) return true; return false; }
+
+// ---------- temporary changes ----------
+// Runs fn in a history step that is thrown away afterwards, so temporary changes (hiding layers for a read)
+// leave no undo step and are rolled back even if Photoshop missed one. Inside executeAsModal. own false: fn
+// runs as it is, inside the caller's own step.
+async function throwawayStep(ctx, doc, fn, own = true) {
+  let sid = null;
+  if (own) { try { sid = await ctx.hostControl.suspendHistory({ documentID: doc.id, name: "ASCII by Star sample" }); } catch (e) { sid = null; } }
+  try { return await fn(); }
+  finally { if (sid !== null) { try { await ctx.hostControl.resumeHistory(sid, false); } catch (e) { try { await ctx.hostControl.resumeHistory(sid, true); } catch (e2) { /* ignore */ } } } }
+}
+// Reads rect R at z (see readRect) of a layer, or of the visible image when layerId is null, with the `hide`
+// layers hidden for the read and shown again after. Inside executeAsModal.
+async function readWithHidden(doc, layerId, hide, R, z) {
+  const shown = hide.filter((l) => l && l.visible), reader = makeReader(doc, layerId);
+  for (const l of shown) l.visible = false;
+  try { return await reader.read(R, z); }
+  finally {
+    await reader.close();
+    for (const l of shown) { try { l.visible = true; } catch (e) { /* gone */ } }
+  }
+}
+// The layers drawn over `target`: those before it in the stack, except the groups holding it (those are entered).
+function layersAbove(doc, target) {
+  const out = [], holders = new Set();
+  for (let p = target.parent; p; p = p.parent) holders.add(p.id);
+  let found = false;
+  const walk = (layers) => {
+    for (const l of layers || []) {
+      if (found) return;
+      if (l.id === target.id) { found = true; return; }
+      if (holders.has(l.id)) walk(l.layers); else out.push(l);
+    }
+  };
+  walk(doc.layers);
+  return out;
+}
+
+// ---------- selection ----------
+// An active selection clips imaging.putPixels to it, so a marquee left in the document (say, from "Select the
+// Photoshop marquee area") masked the output to that area. Runs fn with doc's selection set aside and puts it
+// back afterwards: its shape (getSelection/putSelection), or else its bounding box. Inside executeAsModal.
+const SELECTION = (doc) => [{ _ref: "channel", _property: "selection" }, { _ref: "document", _id: doc.id }];
+// The bounds of doc's selection in pixels {left, top, right, bottom}, or null when nothing is selected.
+async function selectionBounds(doc) {
+  try {
+    const r = await action.batchPlay([{ _obj: "get", _target: [{ _property: "selection" }, { _ref: "document", _id: doc.id }] }], {});
+    const sel = r && r[0] && r[0].selection, v = (x) => Number(x && typeof x === "object" ? x._value : x);
+    if (!sel || sel.left === undefined) return null;
+    const b = { left: v(sel.left), top: v(sel.top), right: v(sel.right), bottom: v(sel.bottom) };
+    return b.right > b.left && b.bottom > b.top ? b : null;
+  } catch (e) { return null; }
+}
+async function withoutSelection(doc, fn) {
+  const b = await selectionBounds(doc);
+  if (!b) return fn();
+  let mask = null;
+  try { mask = await imaging.getSelection({ documentID: doc.id, sourceBounds: b }); } catch (e) { mask = null; }
+  await action.batchPlay([{ _obj: "set", _target: SELECTION(doc), to: { _enum: "ordinal", _value: "none" } }], {});
+  try { return await fn(); }
+  finally {
+    let back = false;
+    if (mask) {
+      const at = mask.sourceBounds || b;
+      try { await imaging.putSelection({ documentID: doc.id, imageData: mask.imageData, targetBounds: { left: at.left, top: at.top } }); back = true; } catch (e) { back = false; }
+      try { mask.imageData.dispose(); } catch (e) { /* gone */ }
+    }
+    if (!back) {
+      const px = (n) => ({ _unit: "pixelsUnit", _value: n });
+      try { await action.batchPlay([{ _obj: "set", _target: SELECTION(doc), to: { _obj: "rectangle", top: px(b.top), left: px(b.left), bottom: px(b.bottom), right: px(b.right) } }], {}); } catch (e) { /* stays deselected */ }
+    }
+  }
+}
+
 // Reader for a layer or the visible image. Composite reads fail on some documents (artboards, smart objects
 // that need updating); then a temporary merged copy is read instead. close() removes it.
 function makeReader(doc, layerId) {
@@ -169,4 +245,4 @@ function makeReader(doc, layerId) {
   };
 }
 
-if (typeof module !== "undefined") module.exports = { findLayers, findLayerById, fullFrame, sameFrame, listArtboards, forgetArtboards, frameOf, fillArtboardSelect, toRGBA8, convertOut, makeImageData, readRect, makeReader };
+if (typeof module !== "undefined") module.exports = { findLayers, findLayerById, fullFrame, sameFrame, listArtboards, forgetArtboards, frameOf, fillArtboardSelect, toRGBA8, convertOut, makeImageData, readRect, makeReader, hasAlpha, throwawayStep, readWithHidden, layersAbove, selectionBounds, withoutSelection };

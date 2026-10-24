@@ -8,10 +8,16 @@
   #tabs { flex: 0 0 auto; display: flex; flex-direction: row; border-bottom: 1px solid var(--uxp-host-border-color); }
   .tab { flex: 1 1 auto; text-align: center; padding: 6px 0 5px 0; cursor: pointer; opacity: 0.55; font-weight: bold; font-size: 11px; border-bottom: 2px solid transparent; }
   .tab.on { opacity: 1; border-bottom-color: rgba(80, 160, 255, 0.9); }
+  #taAll { margin-top: 6px; }
+  .taItem { padding: 5px; margin-bottom: 4px; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; cursor: pointer; overflow: hidden; }
+  .taItem.on { border-color: rgba(80, 160, 255, 0.9); }
+  .taName { font-size: 10px; opacity: 0.8; margin-bottom: 3px; }
+  .taItem img { max-width: 100%; display: block; }
+  #taStatus { min-height: 16px; font-size: 11px; opacity: 0.85; margin-top: 4px; }
   .tool { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   .tool.hidden { display: none; }
-  #top, #inkTop { flex: 0 0 auto; padding: 8px 8px 4px 8px; border-bottom: 1px solid var(--uxp-host-border-color); }
-  #scroller, #inkScroller { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px 16px 8px; }
+  #top, #inkTop, #textTop { flex: 0 0 auto; padding: 8px 8px 4px 8px; border-bottom: 1px solid var(--uxp-host-border-color); }
+  #scroller, #inkScroller, #textScroller { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px 16px 8px; }
   .row > * { min-width: 0; }
   .row { display: flex; flex-direction: row; align-items: center; margin-bottom: 5px; }
   .row > * { margin-right: 4px; }
@@ -48,32 +54,33 @@
   .section.dragging { outline: 1px solid rgba(80, 160, 255, 0.9); }
   .secBar { margin: 6px 0; }
   .secBar button { flex: 1 1 auto; }
+  button.danger { color: #ff7070; font-weight: bold; }
   .sicon { width: 18px; height: 18px; flex: 0 0 18px; margin-right: 7px; }
   .collapsed .body { display: none; }
-  #previewWrap, #inkPreviewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
-  #previewWrap.hidden, #inkPreviewWrap.hidden { display: none; }
+  #previewWrap, #inkPreviewWrap, #textPreviewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+  #previewWrap.hidden, #inkPreviewWrap.hidden, #textPreviewWrap.hidden { display: none; }
   .zoomBar .ztoggle.grow { flex: 1 1 auto; }
   .pvGrip { height: 9px; cursor: ns-resize; display: flex; align-items: center; justify-content: center; }
   .pvGrip > div { width: 40px; height: 3px; border-radius: 2px; background: rgba(128, 128, 128, 0.6); }
-  #preview, #inkPreview { position: absolute; left: 0; top: 0; max-width: none; cursor: grab; }
+  #preview, #inkPreview, #textPreview { position: absolute; left: 0; top: 0; max-width: none; cursor: grab; }
   .zoomBar { margin: 0; }
   .zoomBar .zlabel { width: 40px; flex: 0 0 40px; cursor: pointer; }
-  #previewMsg, #inkPreviewMsg { position: absolute; padding: 12px; text-align: center; color: #bbb; }
+  #previewMsg, #inkPreviewMsg, #textPreviewMsg { position: absolute; padding: 12px; text-align: center; color: #bbb; }
   #status, #inkStatus { font-size: 10px; opacity: 0.75; height: 26px; overflow: hidden; margin: 4px 0; }
   .swatch, .swatchInk { width: 28px; height: 20px; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; flex: 0 0 28px; cursor: pointer; }
   .hex { width: 62px; flex: 0 1 62px; font-family: Menlo, monospace; }
   button { font-size: 11px; }
   .primary { font-weight: bold; }
   .hidden { display: none; }
-  #fontList { max-height: 168px; overflow-y: auto; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; margin-bottom: 6px; }
+  #fontList, .fontListBox { max-height: 168px; overflow-y: auto; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; margin-bottom: 6px; }
   .fontItem { padding: 4px 6px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
   .fontItem.sel { background: rgba(80, 160, 255, 0.35); }
   .fontNote { padding: 4px 6px; font-size: 10px; opacity: 0.6; }
   .fontMore { padding: 6px; font-size: 11px; text-align: center; cursor: pointer; opacity: 0.8; }
   .picker { display: flex; flex-direction: row; align-items: center; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; padding: 3px 6px; cursor: pointer; }
   .picker > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  #fontChev { margin-left: 6px; opacity: 0.7; }
-  #fontList { max-height: 220px; }
+  #fontChev, #taFontChev { margin-left: 6px; opacity: 0.7; }
+  #fontList, .fontListBox { max-height: 220px; }
   #version { text-align: center; font-size: 10px; opacity: 0.5; margin-top: 12px; }
   .subhead { font-size: 10px; opacity: 0.7; margin: 8px 0 4px 0; text-transform: uppercase; letter-spacing: 0.4px; }
   .editing { background: rgba(80, 160, 255, 0.15); border: 1px solid rgba(80, 160, 255, 0.5); border-radius: 4px; padding: 6px; margin-bottom: 6px; }
@@ -103,7 +110,7 @@
 </style>
 </head>
 <body>
- <div id="tabs"><div class="tab" id="tabAscii">ASCII</div><div class="tab" id="tabInk">Ink bleed</div></div>
+ <div id="tabs"><div class="tab" id="tabAscii">ASCII</div><div class="tab" id="tabText">Text art</div><div class="tab" id="tabInk">Ink bleed</div></div>
  <div id="asciiTool" class="tool">
  <div id="top">
   <div class="ctlHead" id="previewHead"><span class="chev">▾</span><span class="ctlLabel">Preview</span></div>
@@ -114,14 +121,20 @@
   <div id="ctlBody">
   <div class="row btnrow" style="margin-top:5px">
     <button id="liveBtn" title="Places the result as a smart object in your document and opens its contents. Edits update it live; Save & close puts the final result into your document.">Open live smart object</button>
+    <button id="undoAll" title="Undo the last change: any setting, preset (even a deleted one), symbol edit or Reset all" style="flex:0 0 auto" disabled>↶ Undo</button>
     <button id="resetAll" title="Reset every setting to its default" style="flex:0 0 auto">Reset all</button>
   </div>
   <div class="row">
     <select id="source" class="grow">
-      <option value="merged" selected>Source: Visible (merged)</option>
-      <option value="layer">Source: Active layer</option>
+      <option value="layer" selected>Source: Active layer</option>
+      <option value="merged">Source: Visible (merged)</option>
     </select>
     <button id="refresh" title="Re-read the document">↻</button>
+  </div>
+  <div id="textArtBox" class="editing hidden">
+    <div class="row"><span class="grow" id="textArtLabel"></span><button id="textArtEdit" title="Change the lettering in the Text art tab">Edit</button><button id="textArtOff" title="Convert the document's image again">Use the image</button></div>
+    <div class="row"><label><input type="checkbox" id="textArtFit"> Fit the text art to the area</label></div>
+    <div id="sl-textArtMargin"></div>
   </div>
   <div class="row hidden" id="artboardRow"><select id="artboard" class="grow" title="Which artboard to convert. Auto follows the source layer (or the selected layer)."><option value="auto">Artboard: auto (follows the layer)</option></select></div>
   <div id="status"></div>
@@ -137,6 +150,13 @@
       <option value="1">1× pixel layer</option>
       <option value="2">2× smart object</option>
       <option value="4">4× smart object</option>
+    </select>
+  </div>
+  <div class="row">
+    <span class="label">Layers</span>
+    <select id="applyLayers" class="grow" title="Separate layers: a group with one layer per part (background, cell backgrounds, shadows, characters, outline, hidden messages, rain, edits, glitch), so you can hide or restyle each in Photoshop. Stacked, they look like the single layer.">
+      <option value="one">One layer (everything together)</option>
+      <option value="split">Separate layers in a group</option>
     </select>
   </div>
 
@@ -203,11 +223,81 @@
         <div id="sl-outlineLevel"></div>
         <div id="sl-outlineWidth"></div>
         <div class="row"><span class="label">Position</span><select id="outlinePos" class="grow"><option value="outside">Outside</option><option value="center">Centre</option><option value="inside">Inside</option></select></div>
-        <div class="row"><span class="label">Stroke</span><select id="outlineStyle" class="grow"><option value="lines">Lines along the edge  | / - \</option><option value="chars">Your characters</option></select></div>
-        <div class="row" id="outlineCharsRow"><span class="label">Characters</span><input type="text" id="outlineChars"></div>
-        <div class="row"><span class="label">Colour</span><div class="swatch" data-color="outlineColor"></div><input type="text" class="hex" data-hex="outlineColor"></div>
-        <div class="row"><span class="label">Inside</span><select id="outlineFill" class="grow"><option value="image">The image</option><option value="none">Empty</option><option value="chars">Your characters, in order</option><option value="random">Your characters, random</option></select></div>
-        <div class="row" id="outlineFillRow"><span class="label">Characters</span><input type="text" id="outlineFillChars"></div>
+        <div class="row"><span class="label">Stroke</span><select id="outlineStyle" class="grow"><option value="lines">Lines along the edge  | / - \</option><option value="chars">Your text</option></select></div>
+        <div id="outlineCharsRow">
+          <div class="row"><span class="label">Text</span><input type="text" id="outlineChars" title="Written along the stroke in reading order. [A|B] repeats the items, [?A|B] picks them at random, [?01] picks single characters at random. {HELLO} or {HELLO*5} hides a message in the stroke."></div>
+          <div class="row"><button id="outlineApply" class="grow" title="Use the text above (the preview waits until you apply; Enter applies too)">Apply text</button></div>
+        </div>
+        <div class="row"><span class="label">Stroke colour</span><select id="outlineColorFrom" class="grow"><option value="own">Your colour</option><option value="under">The layer below</option><option value="image">The image's colours</option></select></div>
+        <div class="row" id="outlineColorRow"><span class="label">Colour</span><div class="swatch" data-color="outlineColor"></div><input type="text" class="hex" data-hex="outlineColor"></div>
+        <div id="sl-outlineOpacity"></div>
+        <div class="row"><span class="label">Inside</span><select id="outlineFill" class="grow"><option value="image">The image</option><option value="none">Empty</option><option value="text">Your text</option></select></div>
+        <div id="outlineFillRows">
+          <div class="row"><span class="label">Text</span><input type="text" id="outlineFillChars" title="Works like Custom text: characters, words or a phrase, [A|B] and [?A|B] fills (with text around them, the fill takes the darker tones from “Fill from”), and {HELLO} or {HELLO*5} to hide a message inside the shape."></div>
+          <div class="row"><button id="outlineFillApply" class="grow" title="Use the text above (the preview waits until you apply; Enter applies too)">Apply text</button></div>
+          <div class="row"><span class="label">Use the text</span><select id="outlineFillMode" class="grow">
+            <option value="ramp">As a brightness ramp</option>
+            <option value="words">As words</option>
+            <option value="phrase">Written out, repeating</option>
+          </select></div>
+        </div>
+        <div id="sl-outlineFillOpacity"></div>
+        <div class="row"><label><input type="checkbox" id="outlineRingOn"> Outer ring, with a band between</label></div>
+        <div id="outlineRingRows" class="sub">
+          <div id="sl-outlineRingScale"></div>
+          <div class="row"><label><input type="checkbox" id="outlineRingStroke"> Draw the outer ring (in the stroke's style)</label></div>
+          <div id="outlineRingStrokeRows">
+            <div class="row"><span class="label">Ring colour</span><select id="outlineRingColorFrom" class="grow"><option value="stroke">Same as the stroke</option><option value="own">Your colour</option><option value="under">The layer below</option><option value="image">The image's colours</option></select></div>
+            <div class="row" id="outlineRingColorRow"><span class="label">Colour</span><div class="swatch" data-color="outlineRingColor"></div><input type="text" class="hex" data-hex="outlineRingColor"></div>
+            <div id="sl-outlineRingOpacity"></div>
+          </div>
+          <div class="row"><span class="label">Between</span><select id="outlineRingFill" class="grow">
+            <option value="none">Nothing (keep what's there)</option>
+            <option value="text">Your text, scattered over every cell</option>
+            <option value="rays">Your text along rays from the centre</option>
+            <option value="rain">Matrix rain along rays</option>
+          </select></div>
+          <div id="outlineRingTextRows">
+            <div class="row"><span class="label">Text</span><input type="text" id="outlineRingChars" title="Custom text syntax: characters or words, [A|B] repeats the items, [?A|B] or [?01] picks at random, {HELLO} or {HELLO*3} hides a message in the band."></div>
+            <div class="row"><button id="outlineRingApply" class="grow" title="Use the text above (the preview waits until you apply; Enter applies too)">Apply text</button></div>
+          </div>
+          <div id="outlineRingTextColorRows">
+            <div class="row"><span class="label">Text colour</span><select id="outlineRingTextColorFrom" class="grow"><option value="stroke">Same as the stroke</option><option value="own">Your colour</option><option value="under">The layer below</option><option value="image">The image's colours</option></select></div>
+            <div class="row" id="outlineRingTextColorRow"><span class="label">Colour</span><div class="swatch" data-color="outlineRingTextColor"></div><input type="text" class="hex" data-hex="outlineRingTextColor"></div>
+          </div>
+          <div id="sl-outlineRingDensity"></div>
+          <div id="outlineRingBandRows">
+            <div id="sl-outlineRingFillOpacity"></div>
+            <div id="sl-outlineRingFade"></div>
+          </div>
+          <div id="outlineRingRayRows">
+            <div class="row"><span class="label">Direction</span><select id="outlineRingDir" class="grow"><option value="out">Outward, from the shape to the ring</option><option value="in">Inward, from the ring to the shape</option></select></div>
+            <div id="sl-outlineRingTwist"></div>
+          </div>
+          <div id="outlineRingRainRows">
+            <div class="row"><span class="grow hint" style="margin:0">The band's own rain</span><button id="rrCopy" title="Take the characters, streams, head, colours and seed from the Matrix rain section">Copy from Matrix rain</button></div>
+            <div class="row"><span class="label">Characters</span><select id="rrCharset" class="grow"></select></div>
+            <div id="rrCharsRow" class="sub">
+              <p class="hint">Plain characters in random order (<b>01</b>, <b>アイウ</b>). <b>[STAR]</b> writes STAR along each stream, <b>[STAR|LOVE]</b> takes turns, <b>[?STAR|LOVE]</b> picks at random. <b>{HELLO}</b> or <b>{HELLO*3}</b> hides a message along the streams.</p>
+              <div class="row"><textarea id="rrChars" placeholder="e.g.  01  or  [STAR|LOVE]"></textarea></div>
+              <div class="row"><button id="rrApply" class="grow" title="Use the text above (the preview waits until you apply)">Apply text</button></div>
+            </div>
+            <div id="sl-rrLength"></div>
+            <div id="sl-rrLengthVar"></div>
+            <div id="sl-rrFade"></div>
+            <div id="sl-rrGaps"></div>
+            <div class="row"><label class="grow"><input type="checkbox" id="rrHead"> Bright head</label><div class="swatch" data-color="rrHeadColor"></div><input type="text" class="hex" data-hex="rrHeadColor"></div>
+            <div class="row"><span class="label">Colour</span><select id="rrColorMode" class="grow"><option value="own">Rain colour</option><option value="art">The shape's colours</option><option value="gradient">Gradient, tail → head</option><option value="under">The layer below</option></select></div>
+            <div class="row" id="rrColorRow"><span class="label">Rain colour</span><div class="swatch" data-color="rrColor"></div><input type="text" class="hex" data-hex="rrColor"></div>
+            <div id="rrGradRows">
+              <div class="row"><span class="label">Tail</span><div class="swatch" data-color="rrg0"></div><input type="text" class="hex" data-hex="rrg0"></div>
+              <div class="row"><span class="label">Middle</span><div class="swatch" data-color="rrg1" id="rrMidSwatch"></div><input type="text" class="hex" data-hex="rrg1" id="rrMidHex"><label title="Off: the gradient runs straight from Tail to Head"><input type="checkbox" id="rrGradientMid"> Use</label></div>
+              <div class="row"><span class="label">Head</span><div class="swatch" data-color="rrg2"></div><input type="text" class="hex" data-hex="rrg2"></div>
+            </div>
+            <div class="row"><span class="label">Seed</span><input type="text" id="rrSeed" style="width:60px;flex:0 0 60px"><button id="rrReseed" title="New random rain in the band">New seed</button></div>
+          </div>
+          <p class="hint">The ring is the shape grown around its middle. Density sets how many rays carry text or rain; the rain itself can stay off.</p>
+        </div>
         <p class="hint">The shape is where characters are drawn (Tone ▸ Invert swaps it). Shape at: how dark a cell must be to belong to it. The inside follows the Colour settings.</p>
       </div>
     </div>
@@ -219,9 +309,19 @@
       <div class="row"><label><input type="checkbox" id="rainOn"> Characters fall like in The Matrix</label></div>
       <div id="rainRows" class="sub">
         <div class="row"><span class="label">Rain from</span><select id="rainFrom" class="grow"><option value="object">The shape (drips into empty space)</option><option value="everywhere">Everywhere (the whole image)</option></select></div>
+        <div class="row"><span class="label">Direction</span><select id="rainDir" class="grow"><option value="down">Falling (at an angle)</option><option value="out">Out from a centre, along rays</option><option value="in">Into a centre, along rays</option></select></div>
+        <div id="rainRadialRows">
+          <div class="row"><span class="label">Centre</span><select id="rainCentre" class="grow"><option value="shape">The middle of the shape</option><option value="point">A point you set</option></select></div>
+          <div id="rainPointRows">
+            <div id="sl-rainCX"></div>
+            <div id="sl-rainCY"></div>
+          </div>
+          <div id="sl-rainTwist"></div>
+          <div id="sl-rainHole"></div>
+        </div>
         <div class="row"><span class="label">Characters</span><select id="rainCharset" class="grow"></select></div>
         <div id="rainCharsRow" class="sub">
-          <p class="hint">Plain characters fall in random order (<b>01</b>, <b>アイウ</b>). <b>[STAR]</b> writes STAR down each stream, <b>[STAR|LOVE|★]</b> takes turns, <b>[?STAR|LOVE|★]</b> picks at random, <b>[?01]</b> random characters.</p>
+          <p class="hint">Plain characters fall in random order (<b>01</b>, <b>アイウ</b>). <b>[STAR]</b> writes STAR down each stream, <b>[STAR|LOVE|★]</b> takes turns, <b>[?STAR|LOVE|★]</b> picks at random, <b>[?01]</b> random characters. <b>{HELLO}</b> or <b>{HELLO*3}</b> hides a message down the streams.</p>
           <div class="row"><textarea id="rainChars" placeholder="e.g.  01  or  [STAR|LOVE]"></textarea></div>
           <div class="row"><button id="rainApply" class="grow" title="Use the text above (the preview waits until you apply)">Apply text</button></div>
         </div>
@@ -234,7 +334,7 @@
         <div id="sl-rainGaps"></div>
         <div id="sl-rainAngle"></div>
         <div class="row"><label class="grow"><input type="checkbox" id="rainHead"> Bright head</label><div class="swatch" data-color="rainHeadColor"></div><input type="text" class="hex" data-hex="rainHeadColor"></div>
-        <div class="row"><span class="label">Colour</span><select id="rainColorMode" class="grow"><option value="own">Rain colour</option><option value="art">The shape's colours</option><option value="gradient">Gradient, tail → head</option></select></div>
+        <div class="row"><span class="label">Colour</span><select id="rainColorMode" class="grow"><option value="own">Rain colour</option><option value="art">The shape's colours</option><option value="gradient">Gradient, tail → head</option><option value="under">The layer below</option></select></div>
         <div class="row" id="rainArtRow"><span class="grow hint" id="rainArtInfo" style="margin:0"></span><button id="rainArtCapture" title="Take the characters' colours as they are now (Colour section). The rain keeps them when you change those settings later.">Refresh</button><button id="rainArtLive" title="Follow the Colour section as it changes">Follow live</button></div>
         <div class="row" id="rainColorRow"><span class="label">Rain colour</span><div class="swatch" data-color="rainColor"></div><input type="text" class="hex" data-hex="rainColor"></div>
         <div id="rainGradRows">
@@ -248,6 +348,30 @@
     </div>
   </div>
 
+  <div class="section" data-section="depth">
+    <div class="head"><span class="chev">▾</span>Depth echo</div>
+    <div class="body">
+      <div class="row"><label><input type="checkbox" id="echoOn"> Repeat in depth around a vanishing point</label></div>
+      <div id="echoRows" class="sub">
+        <div class="row"><label><input type="checkbox" id="echoOutline"> The outline</label></div>
+        <div class="row"><label><input type="checkbox" id="echoRain"> The rain</label></div>
+        <div class="row"><label><input type="checkbox" id="echoText"> The image's characters</label></div>
+        <div class="row"><span class="label">Direction</span><select id="echoDir" class="grow"><option value="out">Outward: copies grow towards you</option><option value="in">Inward: copies shrink into the distance</option></select></div>
+        <div id="sl-echoCount"></div>
+        <div id="sl-echoStep"></div>
+        <div id="sl-echoFade"></div>
+        <div class="row"><span class="label">Vanishing point</span><select id="echoCentre" class="grow"><option value="shape">The middle of what's repeated</option><option value="point">A point you set</option></select></div>
+        <div id="echoPointRows">
+          <div id="sl-echoX"></div>
+          <div id="sl-echoY"></div>
+        </div>
+        <div class="row"><span class="label">Colour</span><select id="echoColorMode" class="grow"><option value="same">Same as the original</option><option value="tint">Turns towards a colour</option></select></div>
+        <div class="row" id="echoColorRow"><span class="label">Far colour</span><div class="swatch" data-color="echoColor"></div><input type="text" class="hex" data-hex="echoColor"></div>
+        <p class="hint">Copies of the outline's stroke, the rain or the characters, each bigger (or smaller) than the last, so the gaps open up like perspective. They sit behind the characters and fade like the rain's tail. Inward copies of a filled shape hide behind its inside; set Outline ▸ Inside to Empty to see them.</p>
+      </div>
+    </div>
+  </div>
+
   <div class="section" data-section="edit">
     <div class="head"><span class="chev">▾</span>Edit symbols</div>
     <div class="body">
@@ -256,8 +380,9 @@
       <div class="row" id="editFillRow"><label><input type="checkbox" id="editFill"> Filled shape (off: outline only)</label></div>
       <div class="row"><span class="label">Action</span><select id="editOp" class="grow"><option value="write">Write characters</option><option value="color">Recolour</option><option value="erase">Erase</option><option value="restore">Restore the original</option><option value="rain">Start Matrix rain here</option></select></div>
       <div class="row" id="editRainRow"><span class="label">Rain length</span><input type="text" id="editRainLen" placeholder="random (Matrix rain settings)" title="Cells. Empty: random, from Matrix rain ▸ Length and Length spread"></div>
-      <div class="row" id="editTextRow"><span class="label">Characters</span><input type="text" id="editText" placeholder="e.g.  #  or  STAR"></div>
+      <div class="row" id="editTextRow"><span class="label">Characters</span><input type="text" id="editText" placeholder="e.g.  #  STAR  [?01]  {HI*2}" title="Written into the cells in order. [A|B] repeats the items, [?A|B] picks them at random, [?01] random characters; {HELLO} or {HELLO*3} hides a message among the edited cells."></div>
       <div class="row" id="editColorRow"><label class="label" id="editUseColorLabel" title="Off: written characters keep the colour the image gives them"><input type="checkbox" id="editUseColor"> Colour</label><div class="swatch" data-color="editColor"></div><input type="text" class="hex" data-hex="editColor"></div>
+      <div class="row" id="editColorUnderRow"><label title="Each edited cell takes its colour from the layer below the source (instead of the colour above)"><input type="checkbox" id="editColorUnder"> Colour from the layer below</label></div>
       <div class="row hidden" id="editSelRow"><span class="grow" id="editSelInfo"></span><button id="editApply" class="primary" title="Applies the action to the selected cells">Apply</button><button id="editDeselect">Deselect</button></div>
       <div class="row btnrow"><button id="editFromSel" title="Selects the cells inside a Rectangular Marquee (or the bounding box of any selection) in the open live smart object or in your document. Then Apply edits them.">Select the Photoshop marquee area</button></div>
       <div class="row btnrow"><button id="editUndo" title="Takes back the last stroke or selection edit">Undo edit</button><button id="editClear" title="Removes every symbol edit">Remove all edits</button></div>
@@ -320,7 +445,7 @@
     <div class="head"><span class="chev">▾</span>Colour</div>
     <div class="body">
       <div class="row"><span class="label">Text colour</span><select id="colorMode" class="grow">
-        <option value="mono">Single colour</option><option value="original">Original image colours</option><option value="gradient">Gradient map</option>
+        <option value="mono">Single colour</option><option value="original">Original image colours</option><option value="gradient">Gradient map</option><option value="under">Colours of the layer below</option>
       </select></div>
       <div class="row" id="fgRow"><span class="label">Colour</span><div class="swatch" data-color="fg"></div><input type="text" class="hex" data-hex="fg"><button id="useFg" title="Use Photoshop foreground colour">FG</button></div>
       <div id="gradRows">
@@ -373,6 +498,75 @@
       </div>
       <div id="sl-shadowAngle"></div>
       <p class="hint">Sizes follow the character size. Shadows are part of pixel layers, PNG exports and batch output; editable text layers and .txt/.html/.svg exports don't have them.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="cells">
+    <div class="head"><span class="chev">▾</span>Cell backgrounds</div>
+    <div class="body">
+      <div class="row"><label><input type="checkbox" id="cfOn"> Effects behind the characters</label></div>
+      <div id="cfRows" class="sub">
+        <div class="row"><span class="label">Fill</span><select id="cfFill" class="grow">
+          <option value="solid">A tile</option>
+          <option value="gradient">A gradient tile</option>
+          <option value="depth">Nested outlines: depth in each cell</option>
+          <option value="bleed">Bleed: colour spreads softly</option>
+        </select></div>
+        <div class="row"><span class="label">Colour from</span><select id="cfFrom" class="grow"><option value="glyph">The character's colour</option><option value="image">The image under it</option><option value="under">The layer below</option></select></div>
+        <div id="sl-cfShade"></div>
+        <div id="cfToRows">
+          <div class="row"><span class="label">Shape</span><select id="cfGradShape" class="grow">
+            <option value="linear">Linear</option>
+            <option value="reflected">Reflected (from the middle out)</option>
+            <option value="radial">Radial: a glow from the centre</option>
+            <option value="diamond">Diamond</option>
+            <option value="angle">Angle (sweeps around the centre)</option>
+          </select></div>
+          <div class="row"><span class="label">Across</span><select id="cfGradSpan" class="grow"><option value="cell">Each cell</option><option value="image">The whole picture</option></select></div>
+        </div>
+        <div id="cfDepthRows">
+          <div id="sl-cfDepthCount"></div>
+          <div id="sl-cfDepthPull"></div>
+          <div id="sl-cfDepthWidth"></div>
+          <div id="sl-cfDepthAim"></div>
+          <div id="sl-cfDepthFade"></div>
+        </div>
+        <div id="cfFadeRows">
+          <div class="row"><span class="label">Fades to</span><select id="cfTo" class="grow">
+            <option value="transparent">Transparent</option>
+            <option value="dark">A darker shade</option>
+            <option value="light">A lighter shade</option>
+            <option value="bg">The background colour</option>
+            <option value="complement">The opposite colour</option>
+            <option value="custom">A colour of your own</option>
+          </select></div>
+          <div class="row" id="cfToColorRow"><span class="label">Colour</span><div class="swatch" data-color="cfToColor"></div><input type="text" class="hex" data-hex="cfToColor"></div>
+        </div>
+        <div id="cfGradRows">
+          <div class="row"><label><input type="checkbox" id="cfGradMidOn"> Through a middle colour</label></div>
+          <div class="row" id="cfGradMidRow"><span class="label">Middle</span><div class="swatch" data-color="cfGradMid"></div><input type="text" class="hex" data-hex="cfGradMid"></div>
+          <div id="sl-cfAngle"></div>
+          <div id="sl-cfGradMidpoint"></div>
+          <div id="sl-cfGradSteps"></div>
+          <div id="sl-cfGradRepeat"></div>
+          <div class="row"><label><input type="checkbox" id="cfGradReverse"> Reverse</label></div>
+        </div>
+        <div id="sl-cfSpread"></div>
+        <div id="cfTileRows">
+          <div id="sl-cfGap"></div>
+          <div id="sl-cfRound"></div>
+        </div>
+        <div class="row"><label><input type="checkbox" id="cfOnlyGlyphs"> Only behind characters (off: every cell)</label></div>
+        <div id="sl-cfOpacity"></div>
+        <div class="row"><span class="label">Blend</span><select id="cfBlend" class="grow"><option value="normal">Normal</option><option value="screen">Screen (lighten)</option><option value="multiply">Multiply (darken)</option><option value="add">Add (glow)</option></select></div>
+        <div id="sl-cfGlitch"></div>
+        <div id="sl-cfLines"></div>
+        <div id="sl-cfLineCount"></div>
+        <div id="sl-cfGrain"></div>
+        <div id="sl-cfGrainSize"></div>
+        <div class="row" id="cfSeedRow"><span class="grow hint" style="margin:0">Which cells glitch, and the grain</span><button id="cfShuffle" title="Pick other cells and grain">Shuffle</button></div>
+        <p class="hint">Built from each character's colour, so the effects follow the picture. Part of pixel layers, PNG exports and batch output; editable text layers and .txt/.html/.svg exports don't have them.</p>
+      </div>
     </div>
   </div>
 
@@ -535,6 +729,78 @@
     <div class="body">
       <p class="hint">The overlay is a group of four layers above the source: Ink bleed and Ink pooling (Multiply), Ink gaps (Normal: shows the paper under your layer through the ink) and Paper (Multiply). Light ink on dark paper swaps Multiply and Screen. Hide Ink gaps, or lower Dry skip, Mottling and Pooling, for solid ink. Change any layer's opacity, or hide it, to fine-tune.</p>
       <div class="row btnrow"><button id="inkLoad">Edit selected Ink Bleed group</button></div>
+    </div>
+  </div>
+ </div>
+ </div>
+
+ <div id="textTool" class="tool hidden">
+ <div id="textTop">
+  <div class="ctlHead" id="textPreviewHead"><span class="chev">▾</span><span class="ctlLabel">Preview</span></div>
+  <div id="textPreviewWrap"><img id="textPreview" alt=""><div id="textPreviewMsg">Type some text</div></div>
+  <div class="pvGrip" id="textPreviewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
+  <div class="row zoomBar" id="textZoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
+  <div class="ctlHead" id="textCtlHead" title="Show or hide the controls under the preview (more room for the settings)"><span class="chev">▾</span><span class="ctlLabel">Controls</span></div>
+  <div id="textCtlBody">
+  <div class="row"><button id="taUse" class="primary grow" title="Open it in the ASCII tab, where colours, outline, rain, echo, cell backgrounds, glitch and the rest apply, and Apply puts it in your document">Use with effects (ASCII tab)</button><button id="taCopy" style="flex:0 0 auto" title="Copy the text art as plain text">Copy text</button></div>
+  <div class="row"><button id="taRandom" class="grow" title="A random style for your text: font, layout, case, spacing, frame and more. The text stays.">Randomize</button><button id="taUndo" style="flex:0 0 auto" title="Undo the last change in this tab: a setting, a font, a style, Randomize or your typing" disabled>↶ Undo</button></div>
+  <div id="taStatus"></div>
+  </div>
+ </div>
+ <div id="textScroller">
+  <div class="section" data-section="taStyle">
+    <div class="head"><span class="chev">▾</span>Style presets</div>
+    <div class="body">
+      <div class="row"><select id="taPreset" class="grow"></select><button id="taPresetReset" style="flex:0 0 auto" title="Back to the chosen style, without your changes">Reset</button></div>
+      <div class="row"><input type="text" id="taPresetName" placeholder="Preset name"><button id="taPresetSave">Save</button><button id="taPresetDelete" title="Delete the selected preset">Delete</button></div>
+      <div class="row btnrow"><button id="taPresetExport">Export presets…</button><button id="taPresetImport">Import…</button></div>
+      <p class="hint">A style keeps the font and every setting below, not your text.</p>
+    </div>
+  </div>
+  <div class="section" data-section="taText">
+    <div class="head"><span class="chev">▾</span>Text</div>
+    <div class="body">
+      <div class="row"><textarea id="taText" placeholder="Type your text (new lines start new rows)"></textarea></div>
+    </div>
+  </div>
+  <div class="section" data-section="taFont">
+    <div class="head"><span class="chev">▾</span>Font</div>
+    <div class="body">
+      <div class="row"><span class="label">Font</span><div id="taFontPicker" class="picker grow" title="Click to choose a font"><span id="taFontCurrent" class="grow">Standard</span><span id="taFontChev">▾</span></div><button id="taPrev" style="flex:0 0 auto" title="Previous font">◀</button><button id="taNext" style="flex:0 0 auto" title="Next font">▶</button></div>
+      <div id="taFontPanel" class="hidden">
+        <div class="row"><input type="text" id="taFontSearch" placeholder="Search, e.g.  3D, block, script"></div>
+        <div id="taFontList" class="fontListBox"></div>
+      </div>
+      <div class="row"><span class="grow hint" id="taFontCount" style="margin:0"></span><button id="taAllBtn" title="Your first line in every font (or every font the search finds); click one to use it">Try every font</button></div>
+      <div id="taAll" class="hidden"></div>
+    </div>
+  </div>
+  <div class="section" data-section="taLayout">
+    <div class="head"><span class="chev">▾</span>Layout</div>
+    <div class="body">
+      <div class="row"><span class="label">Character width</span><select id="taH" class="grow"><option value="default">The font's own</option><option value="full">Full (no overlap)</option><option value="fitted">Fitted (touching)</option><option value="controlled smushing">Smushed by the font's rules</option><option value="universal smushing">Smushed, any character</option></select></div>
+      <div class="row"><span class="label">Character height</span><select id="taV" class="grow"><option value="default">The font's own</option><option value="full">Full (no overlap)</option><option value="fitted">Fitted (touching)</option><option value="controlled smushing">Smushed by the font's rules</option><option value="universal smushing">Smushed, any character</option></select></div>
+      <div class="row"><span class="label">Direction</span><select id="taDir" class="grow"><option value="ltr">Left to right</option><option value="rtl">Right to left</option></select></div>
+      <div class="row"><span class="label">Align lines</span><select id="taAlign" class="grow"><option value="left">Left</option><option value="center">Centre</option><option value="right">Right</option></select></div>
+      <div id="tasl-lineGap"></div>
+      <div id="tasl-letterGap"></div>
+      <div id="tasl-width"></div>
+      <div class="row"><label><input type="checkbox" id="taWsBreak"> Break lines at spaces (with a line width)</label></div>
+      <p class="hint">Character height smushes lines together when they're aligned left, with no line gap or letter spacing.</p>
+    </div>
+  </div>
+  <div class="section" data-section="taShape">
+    <div class="head"><span class="chev">▾</span>Shape</div>
+    <div class="body">
+      <div class="row"><span class="label">Case</span><select id="taCase" class="grow"><option value="as">As typed</option><option value="upper">UPPERCASE</option><option value="lower">lowercase</option><option value="title">Title Case</option></select></div>
+      <div class="row"><span class="label">Draw with</span><select id="taDraw" class="grow"><option value="font">The font's characters</option><option value="char">One character</option><option value="text">Your text, letter by letter</option></select></div>
+      <div class="row" id="taDrawRow"><span class="label">Characters</span><input type="text" id="taDrawChars" placeholder="e.g.  █  or  STAR"></div>
+      <div class="row"><label><input type="checkbox" id="taInvert"> Invert (letters cut out of a block)</label></div>
+      <div class="row"><span class="label">Flip</span><select id="taFlip" class="grow"><option value="none">None</option><option value="h">Mirror (left ↔ right)</option><option value="v">Upside down</option><option value="hv">Both</option></select></div>
+      <div class="row"><label><input type="checkbox" id="taTrim"> Trim empty rows and columns</label></div>
+      <div class="row"><span class="label">Frame</span><select id="taFrame" class="grow"><option value="none">None</option><option value="single">Line ┌─┐</option><option value="double">Double ╔═╗</option><option value="rounded">Rounded ╭─╮</option><option value="heavy">Heavy ┏━┓</option><option value="ascii">ASCII +-+</option><option value="stars">Stars ***</option><option value="hash">Hashes ###</option><option value="dots">Dots ...</option><option value="blocks">Blocks ███</option></select></div>
+      <div id="taFrameRows"><div id="tasl-framePad"></div></div>
+      <p class="hint">Fonts and lettering engine: FIGlet fonts and figlet.js by Patrick Gillespie (patorjk.com), MIT licence; see figlet-fonts/LICENSE-figlet.txt.</p>
     </div>
   </div>
  </div>

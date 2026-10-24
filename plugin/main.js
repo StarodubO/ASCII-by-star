@@ -6,12 +6,16 @@ const formats = uxp.storage.formats;
 const Engine = require("./engine.js");
 const { CHARSETS } = require("./charsets.js");
 const { PRESETS } = require("./presets.js");
+const { makePresetBox } = require("./presetbox.js");
+const { makePicker } = require("./picker.js");
+const { makeHistory } = require("./history.js");
 const setupInk = require("./inkui.js");
-const { makeSlider, trackDrag, SLIDER_HTML } = require("./slider.js");
+const setupTextArt = require("./textart.js");
+const { makeSlider, trackDrag, onDoubleClick, SLIDER_HTML } = require("./slider.js");
 const { enhanceAllSelects } = require("./dropdown.js");
 const { enhanceAllFields, refreshFields } = require("./fields.js");
 const { createViewer } = require("./viewer.js");
-const { findLayers, findLayerById, fullFrame, sameFrame, frameOf, forgetArtboards, fillArtboardSelect, toRGBA8, convertOut, makeImageData, makeReader } = require("./pixels.js");
+const { findLayers, findLayerById, fullFrame, sameFrame, frameOf, forgetArtboards, fillArtboardSelect, toRGBA8, convertOut, makeImageData, makeReader, hasAlpha, throwawayStep, readWithHidden, layersAbove, selectionBounds, withoutSelection } = require("./pixels.js");
 
 const $ = (id) => document.getElementById(id);
 // Layers made by the plugin end in "ASCII by Star" (older versions used a "#xxxxxx" tag).
@@ -29,9 +33,10 @@ let busy = false;
 let editing = null; // {docId, layerId, tag, name, sourceLayerId}
 let live = null; // live preview window {docId, layerId, sourceDocId, scale}
 let gridCache = { key: null, src: null, grid: null, cs: null, geo: null };
-let userPresets = loadJSON("gf:userPresets", []);
-let tab = loadJSON("gf:tab", "ascii"); // "ascii" | "ink"
+let looks = null; // the Look presets (presetbox.js; saved ones in gf:userPresets)
+let tab = loadJSON("gf:tab", "ascii"); // "ascii" | "text" | "ink"
 let ink = null; // the Ink bleed tab (inkui.js)
+let textTab = null; // the Text art tab (textart.js)
 
 // ---------- utils ----------
 function loadJSON(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
@@ -39,8 +44,7 @@ function saveJSON(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } ca
 function freshSettings(over) {
   const s = JSON.parse(JSON.stringify(Engine.DEFAULTS));
   if (over) for (const k of Object.keys(s)) if (over[k] !== undefined) s[k] = JSON.parse(JSON.stringify(over[k]));
-  if (s.dither === "bayer") s.dither = "bayer4"; // renamed in 1.2
-  return s;
+  return Engine.migrateSettings(s); // values saved by older versions
 }
 function status(msg, isErr) { const el = $("status"); el.textContent = msg || ""; el.style.color = isErr ? "#ff7070" : ""; }
 function errMsg(e) {
@@ -57,12 +61,14 @@ function checkDoc(doc) {
   if (!/rgb|gray/i.test(String(doc.mode))) throw new Error("ASCII by Star needs an RGB or Grayscale document (Image ▸ Mode ▸ RGB Color).");
 }
 function charsetInfo() { return CHARSETS.find((c) => c.id === S.charset) || CHARSETS[0]; }
-function rainPresetChars() { return (CHARSETS.find((c) => c.id === S.rainCharset) || {}).chars || ""; }
+const presetCharsOf = (id) => (CHARSETS.find((c) => c.id === id) || {}).chars || "";
+const rainPresetChars = () => presetCharsOf(S.rainCharset);
+const charsetParts = () => Engine.charsetParts(S, charsetInfo().chars, rainPresetChars(), presetCharsOf(S.rrCharset));
 function docBaseName(doc) { return String((doc && doc.title) || "ascii").replace(/\.[^.]+$/, ""); }
 
 let csCache = { key: null, cs: null };
 function currentCharset() {
-  const parts = Engine.charsetParts(S, charsetInfo().chars, rainPresetChars());
+  const parts = charsetParts();
   const key = atlas.id + "|" + JSON.stringify(parts) + "|" + S.sortByDensity;
   if (csCache.key !== key) csCache = { key, cs: Engine.buildCharset(atlas, parts.ramp, S.sortByDensity, parts) };
   return csCache.cs;
@@ -83,29 +89,54 @@ const artboardPick = () => $("artboard").value || "auto";
 // layer, into an RGBA buffer at `scale`. Inside executeAsModal. ownHistory: undo-proof temporary changes.
 async function capture(ctx, doc, layerId, scale, ownHistory, frame) {
   frame = frame || fullFrame(doc);
-  const aw = Math.max(1, Math.round(frame.w * scale)), ah = Math.max(1, Math.round(frame.h * scale));
-  let hidden = [], sid = null;
-  if (layerId === null) {
-    hidden = findLayers(doc.layers, (l) => OUR_RE.test(l.name) && l.visible);
-    if (ownHistory) { try { sid = await ctx.hostControl.suspendHistory({ documentID: doc.id, name: "ASCII by Star sample" }); } catch (e) { sid = null; } }
-    for (const l of hidden) l.visible = false;
+  if (S.textArtOn) return textArtSource(ctx, doc, frame, ownHistory);
+  const aw = Math.max(1, Math.round(frame.w * scale)), ah = Math.max(1, Math.round(frame.h * scale)), R = { x: frame.x * scale, y: frame.y * scale, w: aw, h: ah };
+  const data = layerId === null
+    ? await throwawayStep(ctx, doc, () => readWithHidden(doc, null, ourOutputs(doc), R, scale), ownHistory)
+    : await readWithHidden(doc, layerId, [], R, scale);
+  const underRead = needsUnder(S), under = underRead ? await readBelow(ctx, doc, layerId, R, scale, ownHistory) : null;
+  return { docId: doc.id, layerId, frame, scale, docW: frame.w, docH: frame.h, w: aw, h: ah, data, under, underRead, stale: false };
+}
+
+// Text art needs no pixels: the grid comes from S.textArt (Engine.textArtAnalysis). Colours from "the layer
+// below" come from the visible image, without the plugin's output.
+async function textArtSource(ctx, doc, frame, ownHistory) {
+  const z = baseScale(frame), aw = Math.max(1, Math.round(frame.w * z)), ah = Math.max(1, Math.round(frame.h * z)), underRead = needsUnder(S);
+  let under = null;
+  if (underRead) {
+    try { const px = await throwawayStep(ctx, doc, () => readWithHidden(doc, null, ourOutputs(doc), { x: frame.x * z, y: frame.y * z, w: aw, h: ah }, z), ownHistory); under = hasAlpha(px) ? px : null; }
+    catch (e) { console.error("text art backdrop", e); }
   }
-  const reader = makeReader(doc, layerId);
+  return { docId: doc.id, layerId: null, frame, scale: 1, docW: frame.w, docH: frame.h, w: aw, h: ah, data: null, under, underRead, textArt: true, stale: false };
+}
+
+// ---------- the layer below ----------
+// Settings can colour cells from "the layer below": the visible image under the source layer (or, with the
+// visible image as the source, under the active layer), read with that layer, everything above it and the
+// plugin's own output hidden. Engine.computeGrid averages it per cell (src.under).
+function needsUnder(s) {
+  const ring = s.outlineOn && s.outlineRingOn && [s.outlineRingColorFrom, s.outlineRingTextColorFrom, s.outlineRingFill === "rain" && s.rrColorMode].includes("under");
+  return s.colorMode === "under" || (s.outlineOn && s.outlineColorFrom === "under") || (s.rainOn && s.rainColorMode === "under") || ring ||
+    (s.cfOn && s.cfFrom === "under") || (s.cellEdits || []).some((e) => e && e.color === "under");
+}
+// The visible image under the source as RGBA (rect R at scale z, like capture), or null when nothing is below.
+// Inside executeAsModal. ownHistory: the temporary hiding goes into a history step that is thrown away.
+async function readBelow(ctx, doc, layerId, R, z, ownHistory) {
+  let anchor = layerId != null ? findLayerById(doc, layerId) : null;
+  if (!anchor) { const al = doc.activeLayers && doc.activeLayers[0]; anchor = al && !ourOutput(al) ? al : null; }
+  if (!anchor) return null;
+  const hide = [anchor].concat(layersAbove(doc, anchor), ourOutputs(doc));
   try {
-    const data = await reader.read({ x: frame.x * scale, y: frame.y * scale, w: aw, h: ah }, scale);
-    return { docId: doc.id, layerId, frame, scale, docW: frame.w, docH: frame.h, w: aw, h: ah, data, stale: false };
-  } finally {
-    await reader.close();
-    for (const l of hidden) { try { l.visible = true; } catch (e) { /* gone */ } }
-    if (sid !== null) { try { await ctx.hostControl.resumeHistory(sid, false); } catch (e) { try { await ctx.hostControl.resumeHistory(sid, true); } catch (e2) { /* ignore */ } } }
-  }
+    const px = await throwawayStep(ctx, doc, () => readWithHidden(doc, null, hide, R, z), ownHistory);
+    return hasAlpha(px) ? px : null; // null: nothing below
+  } catch (e) { console.error("layer below", e); return null; }
 }
 
 function sourceLayerId(doc) {
   if ($("source").value !== "layer") return null;
   if (editing && editing.docId === doc.id && editing.sourceLayerId != null && findLayerById(doc, editing.sourceLayerId)) return editing.sourceLayerId;
   const al = doc.activeLayers && doc.activeLayers[0];
-  if (al && !OUR_RE.test(al.name) && al.kind !== constants.LayerKind.GROUP && String(al.kind) !== "group") return al.id;
+  if (al && !ourOutput(al) && al.kind !== constants.LayerKind.GROUP && String(al.kind) !== "group") return al.id;
   if (src && src.docId === doc.id && src.layerId != null && findLayerById(doc, src.layerId)) return src.layerId;
   return al ? al.id : null;
 }
@@ -122,9 +153,9 @@ async function ensureSource(full, forDoc) {
   const doc = forDoc || sourceDoc();
   if (!doc) { src = null; return false; }
   checkDoc(doc);
-  const layerId = sourceLayerId(doc), frame = await frameOf(doc, layerId, artboardPick());
-  const scale = full ? neededScale(frame) : baseScale(frame);
-  if (src && !src.stale && src.docId === doc.id && src.layerId === layerId && sameFrame(src.frame, frame) && src.scale >= scale - 1e-6) return true;
+  const layerId = S.textArtOn ? null : sourceLayerId(doc), frame = await frameOf(doc, layerId, artboardPick());
+  const scale = S.textArtOn ? 1 : full ? neededScale(frame) : baseScale(frame);
+  if (src && !src.stale && !!src.textArt === !!S.textArtOn && src.docId === doc.id && src.layerId === layerId && sameFrame(src.frame, frame) && src.scale >= scale - 1e-6 && (src.underRead || !needsUnder(S))) return true;
   busy = true;
   try { src = await core.executeAsModal((ctx) => capture(ctx, doc, layerId, scale, true, frame), { commandName: "ASCII by Star: read pixels" }); }
   finally { busy = false; }
@@ -135,24 +166,31 @@ async function ensureSource(full, forDoc) {
 // The output covers the grid's area (the frame) × scale, with its top left at `at` in the target document:
 // the frame's corner when writing into the source document, 0,0 in a scratch document of the frame's size.
 // scale > 1 renders into a larger document (PNG export at 2x/4x); the grid stays in source-document units.
-async function writeLayer(doc, layer, grid, cs, scale, markCorners, at) {
+// draw(view) (optional) renders something else than the whole picture (one part, for separate layers).
+// Returns whether anything visible was written.
+async function writeLayer(doc, layer, grid, cs, scale, markCorners, at, draw) {
   scale = scale || 1; at = at || { x: 0, y: 0 };
+  let ink = false;
   const W = Math.round(grid.geo.docW * scale), H = Math.round(grid.geo.docH * scale), depth = bitDepth(doc), gray = isGray(doc);
   let profile = null;
   try { profile = doc.colorProfileName || null; } catch (e) { profile = null; }
   const stripH = Math.max(1, Math.min(H, Math.floor(4e6 / W)));
-  for (let y0 = 0; y0 < H; y0 += stripH) {
-    const h = Math.min(stripH, H - y0);
-    const rgba = Engine.render(grid, cs, atlas, S, { x: 0, y: y0 / scale, w: W, h, scale });
-    if (markCorners) { // invisible 1/255 alpha pixels pin the layer bounds to the whole area
-      if (y0 === 0) rgba[3] = Math.max(rgba[3], 1);
-      if (y0 + h >= H) rgba[rgba.length - 1] = Math.max(rgba[rgba.length - 1], 1);
+  await withoutSelection(doc, async () => {
+    for (let y0 = 0; y0 < H; y0 += stripH) {
+      const h = Math.min(stripH, H - y0);
+      const view = { x: 0, y: y0 / scale, w: W, h, scale }, rgba = draw ? draw(view) : Engine.render(grid, cs, atlas, S, view);
+      if (!ink) ink = hasAlpha(rgba);
+      if (markCorners) { // invisible 1/255 alpha pixels pin the layer bounds to the whole area
+        if (y0 === 0) rgba[3] = Math.max(rgba[3], 1);
+        if (y0 + h >= H) rgba[rgba.length - 1] = Math.max(rgba[rgba.length - 1], 1);
+      }
+      const id = await makeImageData(convertOut(rgba, W * h, depth, gray), W, h, gray, profile);
+      try { await imaging.putPixels({ documentID: doc.id, layerID: layer.id, imageData: id, replace: y0 === 0, targetBounds: { left: at.x, top: at.y + y0 }, commandName: "ASCII by Star" }); }
+      catch (e) { id.dispose(); throw new Error("Writing the layer failed (" + errMsg(e) + ")."); }
+      id.dispose();
     }
-    const id = await makeImageData(convertOut(rgba, W * h, depth, gray), W, h, gray, profile);
-    try { await imaging.putPixels({ documentID: doc.id, layerID: layer.id, imageData: id, replace: y0 === 0, targetBounds: { left: at.x, top: at.y + y0 }, commandName: "ASCII by Star" }); }
-    catch (e) { id.dispose(); throw new Error("Writing the layer failed (" + errMsg(e) + ")."); }
-    id.dispose();
-  }
+  });
+  return ink;
 }
 
 async function createLayer(doc, name) {
@@ -172,7 +210,7 @@ const TEXT_MODE_HINTS = {
 // Atlases are cached in memory and in the plugin's data folder.
 const fontAtlases = new Map();
 let fontBuild = null; // {key, promise}
-function charsetString() { const p = Engine.charsetParts(S, charsetInfo().chars, rainPresetChars()); return p.ramp + p.extra; }
+function charsetString() { const p = charsetParts(); return p.ramp + p.extra; }
 // The font to draw with: the chosen one, or Menlo (Consolas on Windows, which has no Menlo) drawn by Photoshop
 // when the text has characters the built-in atlas lacks (lowercase Cyrillic, other scripts, emoji…), so nothing
 // typed is dropped.
@@ -247,6 +285,23 @@ async function buildFontAtlas(fontPS, chars, key) {
 }
 
 // Makes `atlas` match the chosen font and character set; renders the font first if needed.
+// An atlas that has `chars`: the built-in one, or Menlo (Consolas on Windows) rendered by Photoshop for
+// characters it lacks (the Text art tab's preview). Cached like the custom fonts.
+async function atlasFor(chars) {
+  if (!baseAtlas) throw new Error("The glyphs are still loading.");
+  const set = Array.from(new Set(Array.from(" " + chars))).filter((c) => c !== "\n" && c !== "\r" && c !== "\t");
+  if (set.every((c) => baseAtlas.index.has(c))) return baseAtlas;
+  const key = MONO_FONT + "|" + set.join("");
+  if (!fontAtlases.has(key)) fontAtlases.set(key, (await loadCachedFontAtlas(key)) || (await buildFontAtlas(MONO_FONT, set, key)));
+  return fontAtlases.get(key);
+}
+// The Text art tab's "Use with effects": the art becomes the ASCII tab's picture.
+function useArt(art, font) {
+  Object.assign(S, { textArtOn: true, textArt: art, textArtFont: font });
+  src = null;
+  showTab("ascii"); syncUI(); fitLayout(true);
+  status(`Text art in ${font}. Every effect applies; Apply puts it in your document.`);
+}
 async function readyAtlas() {
   if (!baseAtlas) return;
   const font = effectiveFont();
@@ -265,10 +320,31 @@ async function readyAtlas() {
   atlas = fontAtlases.get(key);
 }
 
+// ---------- undo ----------
+// ↶ Undo takes back the last change to the settings or the presets (a deleted preset comes back too). Every
+// change passes through schedulePreview or a preset action, which calls noteChange; changes less than 0.7 s
+// apart (a slider drag, typing) make one step.
+const hist = makeHistory({
+  state: () => JSON.stringify({ s: S, p: looks ? looks.list() : [] }),
+  restore: (st) => {
+    const prev = JSON.parse(st);
+    S = freshSettings(prev.s);
+    if (JSON.stringify(prev.p) !== JSON.stringify(looks.list())) looks.setList(prev.p);
+  },
+  onAvail: (can) => { $("undoAll").disabled = !can; },
+});
+const noteChange = () => hist.note();
+function undoLast() {
+  if (!hist.undo()) return;
+  syncUI(); schedulePreview(0);
+  status("Undone." + (hist.canUndo() ? "" : " Nothing more to undo."));
+}
+
 // ---------- preview ----------
 let pvTimer = null, pvRunning = false, pvAgain = false;
 function schedulePreview(delay) {
   saveJSON("gf:last", S);
+  noteChange();
   clearTimeout(pvTimer);
   pvTimer = setTimeout(runPreview, delay === undefined ? 40 : delay);
 }
@@ -346,7 +422,7 @@ async function toggleLive() {
   } catch (e) { console.error(e); live = null; status("Couldn't open the live smart object: " + errMsg(e), true); }
   finally { busy = false; }
   updateLiveBtn();
-  if (live) { status(`Editing “${live.soName}” live (${live.scale.toFixed(0)}×). Zoom/pan with Photoshop's tools; Save & close when done.`); scheduleLive(0); }
+  if (live) { status(`Editing “${live.soName}” live (${live.scale.toFixed(0)}×). Zoom/pan with Photoshop's tools; Save & close when done.`); scheduleLive(0); scheduleUnder(0); }
 }
 async function saveLive(andClose) {
   if (!live) return;
@@ -370,6 +446,7 @@ async function closeLive() {
   try { await saveLive(true); status(`Saved into “${lv.soName}”.`); }
   catch (e) { console.error(e); status("Couldn't save the smart object: " + errMsg(e) + ". Save it with ⌘S.", true); }
   live = null; updateLiveBtn();
+  if (lv.under) viewer.refresh(); // back to the checkerboard
 }
 function scheduleLive(delay) { if (!live || live.closing) return; clearTimeout(liveTimer); liveTimer = setTimeout(runLive, delay === undefined ? 300 : delay); }
 async function runLive() {
@@ -390,26 +467,101 @@ async function runLive() {
       try { await writeLayer(d, findLayerById(d, lv.layerId) || d.layers[0], grid, cs, lv.scale, true); }
       finally { if (sid !== null) await ctx.hostControl.resumeHistory(sid, true); }
     }, { commandName: "ASCII by Star live update" });
-    // saving pushes the change into the working document; do it once edits pause
-    clearTimeout(liveSaveTimer);
-    liveSaveTimer = setTimeout(() => { if (live && !live.closing && !liveRunning) liveSaving = saveLive(false).catch((e) => console.error(e)).then(() => { liveSaving = null; }); }, 900);
+    underQuietUntil = Date.now() + 600; // the "Live update" history step isn't a change by the user
+    scheduleLiveSave();
+    if (lv.underSig !== liveLayerSig(d)) scheduleUnder(0);
   } catch (e) {
     console.error(e);
     if (/busy|modal/i.test(errMsg(e))) liveAgain = true; else status("Live update: " + errMsg(e), true);
   } finally { busy = false; liveRunning = false; }
   if (liveAgain) { liveAgain = false; scheduleLive(400); }
 }
+// Saving pushes the .psb into the working document; do it once edits pause.
+function scheduleLiveSave() {
+  clearTimeout(liveSaveTimer);
+  liveSaveTimer = setTimeout(() => { if (live && !live.closing && !liveRunning) liveSaving = saveLive(false).catch((e) => console.error(e)).then(() => { liveSaving = null; }); }, 900);
+}
+
+// Layers the user adds under the characters in the live .psb (a background to see them better) show in the
+// panel preview too: live.under = {k (px per frame unit), w, h, data RGBA}, or null when there are none. It is
+// read with the characters and everything above them hidden, in a history step that is thrown away, again
+// when the .psb's history changes, when its layer list changes, or on ⟳.
+let underTimer = null, underQuietUntil = 0;
+function scheduleUnder(delay) { if (!live || live.closing) return; clearTimeout(underTimer); underTimer = setTimeout(readLiveUnder, delay === undefined ? 400 : delay); }
+function liveLayerSig(d) {
+  try { return findLayers(d.layers, () => true).map((l) => [l.id, l.visible, l.opacity, String(l.blendMode)].join(":")).join("|"); } catch (e) { return ""; }
+}
+async function readLiveUnder() {
+  const lv = live;
+  if (!lv || lv.closing) return;
+  if (busy || liveRunning) return scheduleUnder(400);
+  const d = docById(lv.docId);
+  if (!d) return;
+  lv.underSig = liveLayerSig(d);
+  const ours = findLayerById(d, lv.layerId);
+  const hide = ours ? [ours].concat(layersAbove(d, ours)) : []; // the characters and whatever is above them
+  let under = null;
+  if (findLayers(d.layers, (l) => l.visible && !hide.includes(l)).length) {
+    const s = Math.min(1, ANALYSIS_MAX / Math.max(d.width, d.height)), w = Math.max(1, Math.round(d.width * s)), h = Math.max(1, Math.round(d.height * s));
+    busy = true;
+    try {
+      const data = await core.executeAsModal((ctx) => throwawayStep(ctx, d, () => readWithHidden(d, null, hide, { x: 0, y: 0, w, h }, s)), { commandName: "ASCII by Star live background" });
+      if (hasAlpha(data)) under = { k: s * lv.scale, w, h, data };
+    } catch (e) { console.error(e); }
+    finally { busy = false; underQuietUntil = Date.now() + 600; }
+  }
+  if (live !== lv || (!under && !lv.under)) return;
+  lv.under = under;
+  viewer.refresh();
+}
+
+// ---------- ⌘Z ----------
+// While the panel has the keyboard, Photoshop doesn't get ⌘Z / ⇧⌘Z (Ctrl on Windows), so the panel passes
+// them on as Photoshop's Undo / Redo. If Photoshop did take the key itself, the history has already moved and
+// nothing more is done. In the live window a "Live update" step is a panel change, so the setting is undone
+// instead: the panel, the .psb and the document stay in step.
+let undoKeyBusy = false;
+function histMark(d) { try { const h = d.activeHistoryState; return h ? h.id + ":" + h.name : ""; } catch (e) { return ""; } }
+function histName(d) { try { const h = d.activeHistoryState; return h ? String(h.name) : ""; } catch (e) { return ""; } }
+function onUndoKey(e) {
+  const k = String(e.key || "").toLowerCase(), mod = e.metaKey || e.ctrlKey;
+  const redo = k === "z" ? !!e.shiftKey : k === "y" && e.ctrlKey && !e.metaKey;
+  if (!mod || e.altKey || (k !== "z" && !redo)) return;
+  const tag = e.target && String(e.target.tagName || "").toUpperCase();
+  if (tag === "INPUT" || tag === "TEXTAREA") return; // typing: the field's own undo
+  if (e.preventDefault) e.preventDefault();
+  if (e.stopPropagation) e.stopPropagation();
+  psUndo(redo);
+}
+async function psUndo(redo) {
+  if (undoKeyBusy) return;
+  const d = activeDoc();
+  if (!d) return;
+  undoKeyBusy = true;
+  try {
+    const mark = histMark(d), name = histName(d), inLive = !!(live && !live.closing && d.id === live.docId);
+    await new Promise((r) => setTimeout(r, 80));
+    if (!redo && inLive && name === "Live update" && hist.canUndo()) { undoLast(); return; }
+    if (histMark(d) !== mark) return; // Photoshop handled the key
+    if (busy) return status("Photoshop is busy. Try ⌘Z again in a moment.", true);
+    try {
+      await core.executeAsModal(() => action.batchPlay([{ _obj: "select", _target: [{ _ref: "historyState", _enum: "ordinal", _value: redo ? "next" : "previous" }] }], {}), { commandName: redo ? "Redo" : "Undo" });
+    } catch (e) { return; } // nothing left to undo or redo
+    if (inLive) { scheduleLiveSave(); scheduleUnder(0); }
+    else { if (src) src.stale = true; schedulePreview(0); }
+  } finally { undoKeyBusy = false; }
+}
 
 // Renders at `scale`x into a temporary document, converts it to a smart object, brings it into `doc`
 // and scales it back to document size, so the smart object keeps the extra resolution. Inside executeAsModal.
-async function placeSmartObject(doc, grid, cs, scale, name, frame) {
+async function placeSmartObject(doc, grid, cs, scale, name, frame, draw) {
   frame = frame || fullFrame(doc);
   const W = Math.round(frame.w * scale), H = Math.round(frame.h * scale);
   const { doc: tmp, layer } = await createScratchDoc(W, H, (doc.resolution || 72) * scale, "ASCII by Star render");
   let placed = null;
   const tag = "ASCII by Star render " + Date.now().toString(36); // finds the copy even when duplicate() returns nothing
   try {
-    await writeLayer(tmp, layer, grid, cs, scale, true);
+    await writeLayer(tmp, layer, grid, cs, scale, true, null, draw);
     try { layer.selected = true; } catch (e) { /* only layer */ }
     await action.batchPlay([{ _obj: "newPlacedLayer" }], {});
     const so = tmp.activeLayers[0];
@@ -452,7 +604,8 @@ async function renderPreview() {
   scheduleLive();
   const hid = grid.hidden ? ` · ${grid.hiddenPlaced} hidden message${grid.hiddenPlaced === 1 ? "" : "s"}` : "";
   const ne = (S.cellEdits || []).length, eds = ne ? ` · ${ne} edit${ne === 1 ? "" : "s"}` : "";
-  if (!live) status(`${geo.cols} × ${geo.rows} chars · ${geo.size.toFixed(1)}px · ${cs.n} glyphs${hid}${eds}${lowRes ? " · preview sampled at reduced res" : ""}`);
+  const below = needsUnder(S) && !src.under ? " · nothing below the source layer, so its own colours are used" : "";
+  if (!live) status(`${geo.cols} × ${geo.rows} chars · ${geo.size.toFixed(1)}px · ${cs.n} glyphs${hid}${eds}${below}${lowRes ? " · preview sampled at reduced res" : ""}`);
 }
 
 // The preview of document rect `rect` at scale z, as RGB (characters over a checkerboard where transparent).
@@ -461,7 +614,20 @@ function renderRegion(rect, z) {
   if (!grid) return null;
   const w = Math.max(1, Math.round(rect.w * z)), h = Math.max(1, Math.round(rect.h * z));
   const s = markHidden ? Object.assign({}, S, { _markHidden: true }) : S;
-  return { rgb: Engine.flattenForPreview(Engine.render(grid, cs, atlas, s, { x: rect.x, y: rect.y, w, h, scale: z }), w, h), w, h };
+  const rgba = Engine.render(grid, cs, atlas, s, { x: rect.x, y: rect.y, w, h, scale: z }), u = live && live.under;
+  return { rgb: Engine.flattenForPreview(rgba, w, h, u ? underBackdrop(u, rect, z, w, h) : null), w, h };
+}
+// The live view's layers under the characters (live.under, see readLiveUnder) for document rect `rect` at
+// scale z, as RGBA w × h (nearest pixel), to show behind the preview.
+function underBackdrop(u, rect, z, w, h) {
+  const out = new Uint8Array(w * h * 4), sx = new Int32Array(w);
+  for (let x = 0; x < w; x++) { const v = Math.floor((rect.x + (x + 0.5) / z) * u.k); sx[x] = v >= 0 && v < u.w ? v : -1; }
+  for (let y = 0; y < h; y++) {
+    const sy = Math.floor((rect.y + (y + 0.5) / z) * u.k);
+    if (sy < 0 || sy >= u.h) continue;
+    for (let x = 0; x < w; x++) if (sx[x] >= 0) out.set(u.data.subarray((sy * u.w + sx[x]) * 4, (sy * u.w + sx[x]) * 4 + 4), (y * w + x) * 4);
+  }
+  return out;
 }
 
 function makeViewer() {
@@ -514,12 +680,18 @@ async function applyRaster(update) {
         const old = update ? findLayerById(doc, editing.layerId) : null;
         if (update && !old) throw new Error("The layer being edited no longer exists.");
         const name = update ? old.name : outputName(doc, layerId);
-        const oldIsSmart = old && /smart/i.test(String(old.kind));
-        if (q > 1 || oldIsSmart) {
+        const oldIsSmart = old && /smart/i.test(String(old.kind)), oldIsGroup = old && isGroup(old);
+        if ($("applyLayers").value === "split") {
+          const r = await applyAsGroup(doc, frame, layerId, old, name, q);
+          layer = r.group;
+          if (old) editing.layerId = layer.id;
+          info = `${r.made.length} layers in a group (${r.made.join(", ")})` + (r.note ? " · " + r.note : "");
+        } else if (q > 1 || oldIsSmart || oldIsGroup) {
           try {
-            layer = await placeSmartObject(doc, grid, cs, Math.max(1, q), name, frame);
-            if (old) { await layer.move(old, constants.ElementPlacement.PLACEBEFORE); await old.delete(); editing.layerId = layer.id; }
-            info = `${geo.cols} × ${geo.rows} chars · ${q}× smart object`;
+            layer = q > 1 || oldIsSmart ? await placeSmartObject(doc, grid, cs, Math.max(1, q), name, frame) : await createLayer(doc, name);
+            if (!/smart/i.test(String(layer.kind))) await writeLayer(doc, layer, grid, cs, 1, false, frame); // a group replaced by one pixel layer
+            if (old) await replaceLayer(old, layer);
+            info = `${geo.cols} × ${geo.rows} chars` + (/smart/i.test(String(layer.kind)) ? ` · ${q}× smart object` : "");
           } catch (e) {
             console.error(e);
             layer = null;
@@ -527,8 +699,9 @@ async function applyRaster(update) {
           }
         }
         if (!layer) {
-          layer = old || (await createLayer(doc, name));
+          layer = old && !oldIsGroup ? old : await createLayer(doc, name);
           await writeLayer(doc, layer, grid, cs, 1, false, frame);
+          if (oldIsGroup) await replaceLayer(old, layer);
           if (!info) info = `${geo.cols} × ${geo.rows} chars`;
         }
         rememberLayer(doc, layer, layerId);
@@ -536,10 +709,57 @@ async function applyRaster(update) {
         await ctx.hostControl.resumeHistory(sid, true);
       }
     }, { commandName: "ASCII by Star" });
-    status(`${update ? "Updated" : "Created"} layer · ${info} · ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    status(`${update ? "Updated" : "Created"} ${$("applyLayers").value === "split" ? "group" : "layer"} · ${info} · ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   } catch (e) {
     console.error(e); status(errMsg(e), true);
   } finally { busy = false; }
+}
+
+// ---------- separate layers ----------
+const isGroup = (l) => String(l.kind) === "group" || l.kind === constants.LayerKind.GROUP;
+// The plugin's output a layer belongs to: itself, or the "… ASCII by Star" group holding it (separate layers).
+function ourOutput(l) { for (let p = l; p; p = p.parent) { try { if (OUR_RE.test(String(p.name))) return p; } catch (e) { return null; } } return null; }
+// Every layer or group the plugin made in doc (hidden for reads of the visible image).
+const ourOutputs = (doc) => findLayers(doc.layers, (l) => OUR_RE.test(String(l.name)));
+const PS_BLEND = { screen: "SCREEN", multiply: "MULTIPLY", add: "LINEARDODGE" };
+// An update that can't write into the old output in place: the new one takes its place in the stack.
+async function replaceLayer(old, layer) {
+  await layer.move(old, constants.ElementPlacement.PLACEBEFORE);
+  await old.delete();
+  editing.layerId = layer.id;
+}
+// "Separate layers": a group named like the single layer, with one layer per part (Engine.layerParts), bottom to
+// top. Parts come from a grid computed without the glitch; the Glitch layer holds what the glitch changes.
+// Replaces `old` (a layer or group being updated) in place. Inside executeAsModal, after capture() set src.
+async function applyAsGroup(doc, frame, layerId, old, name, q) {
+  const cs = currentCharset(), geo = Engine.computeGeometry(frame.w, frame.h, S, atlas);
+  const clean = Engine.computeGrid(src, geo, Object.assign({}, S, { _parts: true, glitchOn: false }), cs);
+  const glitched = S.glitchOn ? Engine.computeGrid(src, geo, S, cs) : null;
+  const group = await doc.createLayerGroup({ name });
+  if (old) await group.move(old, constants.ElementPlacement.PLACEBEFORE);
+  const made = [];
+  let below = null, note = "";
+  for (const id of Engine.layerParts(clean, cs, S)) {
+    const draw = (v) => Engine.renderPart(id, clean, cs, atlas, S, v, glitched), title = Engine.PART_NAMES[id];
+    if (id === "glitch") { // skip it when the glitch changes nothing (all its amounts at 0)
+      const z = Math.min(1, 400 / Math.max(frame.w, frame.h)), p = draw({ x: 0, y: 0, w: Math.max(1, Math.round(frame.w * z)), h: Math.max(1, Math.round(frame.h * z)), scale: z });
+      if (!hasAlpha(p)) continue;
+    }
+    let layer = null;
+    if (q > 1) { try { layer = await placeSmartObject(doc, clean, cs, q, title, frame, draw); } catch (e) { console.error(e); layer = null; note = "smart objects failed, made pixel layers"; } }
+    if (!layer) {
+      layer = await createLayer(doc, title);
+      if (!(await writeLayer(doc, layer, clean, cs, 1, false, frame, draw))) { await layer.delete(); continue; }
+    }
+    if (below) await layer.move(below, constants.ElementPlacement.PLACEBEFORE);
+    else await layer.move(group, constants.ElementPlacement.PLACEINSIDE);
+    if (id === "cells" && PS_BLEND[S.cfBlend]) { try { layer.blendMode = constants.BlendMode[PS_BLEND[S.cfBlend]]; } catch (e) { console.error(e); } }
+    below = layer;
+    made.push(title);
+  }
+  if (old) await old.delete();
+  if (S.glitchOn && S.bgMode === "transparent") note = (note ? note + "; " : "") + "on a transparent background the Glitch layer can't erase what the glitch moved";
+  return { group, made, note };
 }
 
 async function outputGrid() {
@@ -633,8 +853,8 @@ async function copyText() {
 
 function loadSelectedLayer() {
   const doc = sourceDoc();
-  const l = doc && doc.activeLayers && doc.activeLayers[0];
-  if (!l || !OUR_RE.test(String(l.name))) return status("Select a layer made by ASCII by Star (its name ends in “ASCII by Star”).", true);
+  const l = ourOutput(doc && doc.activeLayers && doc.activeLayers[0]); // a layer inside a separate-layers group: the group
+  if (!l) return status("Select a layer made by ASCII by Star (its name ends in “ASCII by Star”).", true);
   const rec = recallLayer(doc, l);
   if (!rec) return status("No saved settings for this layer on this computer.", true);
   S = freshSettings(rec.settings);
@@ -690,70 +910,19 @@ async function runBatch() {
 }
 
 // ---------- presets ----------
-function buildPresetSelect(selected) {
-  const el = $("preset");
-  let html = '<option value="" disabled>— Built-in looks —</option>';
-  for (const p of PRESETS) html += `<option value="b:${p.id}">${p.name}</option>`;
-  if (userPresets.length) {
-    html += '<option value="" disabled>— My presets —</option>';
-    userPresets.forEach((p, i) => { html += `<option value="u:${i}">${p.name.replace(/</g, "&lt;")}</option>`; });
-  }
-  el.innerHTML = html;
-  setSelect(el, selected || "b:" + PRESETS[0].id);
-}
-function applyPreset(v) {
-  let p = null;
-  if (v.startsWith("b:")) p = PRESETS.find((x) => x.id === v.slice(2));
-  else if (v.startsWith("u:")) p = userPresets[Number(v.slice(2))];
-  if (!p) return;
-  const edits = S.cellEdits; // symbol edits belong to the picture, not the look
-  S = freshSettings(p.settings);
-  S.cellEdits = edits;
+// A preset's settings applied as the look; the picture (symbol edits, text art) stays.
+function applyLook(settings) {
+  const picture = pictureOf(S);
+  S = freshSettings(settings);
+  Object.assign(S, picture);
   syncUI();
   schedulePreview(0);
 }
-// Settings without the symbol edits, which belong to one picture (for presets)
-function lookOnly(s) { return Object.assign(JSON.parse(JSON.stringify(s)), { cellEdits: [] }); }
-function savePreset() {
-  const name = $("presetName").value.trim();
-  if (!name) return status("Type a preset name first.", true);
-  const i = userPresets.findIndex((p) => p.name === name);
-  const rec = { name, settings: lookOnly(S) };
-  if (i >= 0) userPresets[i] = rec; else userPresets.push(rec);
-  saveJSON("gf:userPresets", userPresets);
-  buildPresetSelect("u:" + (i >= 0 ? i : userPresets.length - 1));
-  status(`Saved preset “${name}”`);
-}
-function deletePreset() {
-  const v = $("preset").value;
-  if (!v.startsWith("u:")) return status("Built-in looks can’t be deleted.", true);
-  const [p] = userPresets.splice(Number(v.slice(2)), 1);
-  saveJSON("gf:userPresets", userPresets);
-  buildPresetSelect();
-  status(`Deleted “${p.name}”`);
-}
-async function exportPresets() {
-  try {
-    const f = await lfs.getFileForSaving("ascii-by-star-presets.json", { types: ["json"] });
-    if (!f) return;
-    await f.write(JSON.stringify({ asciiByStar: 1, presets: userPresets.length ? userPresets : [{ name: "Current", settings: lookOnly(S) }] }, null, 2), { format: formats.utf8 });
-    status(`Saved ${f.name}`);
-  } catch (e) { status(errMsg(e), true); }
-}
-async function importPresets() {
-  try {
-    const f = await lfs.getFileForOpening({ types: ["json"] });
-    if (!f) return;
-    const data = JSON.parse(await f.read({ format: formats.utf8 }));
-    const list = (data && data.presets) || [];
-    let n = 0;
-    for (const p of list) if (p && p.name && p.settings) { userPresets.push({ name: String(p.name), settings: freshSettings(p.settings) }); n++; }
-    saveJSON("gf:userPresets", userPresets);
-    buildPresetSelect();
-    status(`Imported ${n} preset${n === 1 ? "" : "s"}`);
-  } catch (e) { status("Couldn’t import: " + errMsg(e), true); }
-}
-
+// The settings that belong to one picture rather than to a look: symbol edits and the text art.
+const PICTURE_KEYS = ["cellEdits", "textArtOn", "textArt", "textArtFont"];
+const pictureOf = (s) => Object.fromEntries(PICTURE_KEYS.map((k) => [k, JSON.parse(JSON.stringify(s[k] === undefined ? null : s[k]))]));
+// Settings without them (for presets)
+function lookOnly(s) { const out = JSON.parse(JSON.stringify(s)); for (const k of PICTURE_KEYS) out[k] = JSON.parse(JSON.stringify(Engine.DEFAULTS[k] === undefined ? null : Engine.DEFAULTS[k])); return out; }
 // ---------- symbol edits ----------
 // Edit symbols: the preview becomes a canvas. Dragging either paints (each cell under the pointer gets the action)
 // or selects a box of cells, which Apply then edits; a Photoshop marquee can be the box too. Every change is an
@@ -761,7 +930,7 @@ async function importPresets() {
 // fractions of the area, so they stay on the picture when the size changes. The tool's own settings belong to
 // the panel, not to the look, so they're stored apart.
 let tool = Object.assign({ op: "write", drag: "paint", fill: false, rainLen: "", text: "#", color: "#00e6ff", useColor: false }, loadJSON("gf:editTool", {}), { on: false });
-const saveTool = () => saveJSON("gf:editTool", { op: tool.op, drag: tool.drag, fill: tool.fill, rainLen: tool.rainLen, text: tool.text, color: tool.color, useColor: tool.useColor });
+const saveTool = () => saveJSON("gf:editTool", { op: tool.op, drag: tool.drag, fill: tool.fill, rainLen: tool.rainLen, text: tool.text, color: tool.color, useColor: tool.useColor, colorUnder: tool.colorUnder });
 let cellSel = null; // the selected cells: {rect: [x0, y0, x1, y1]} or {pts: [[x, y], …]} as fractions of the area, or null
 const EDIT_HINTS = {
   write: "Click a character or drag across several. More than one character is written in turn along the drag; a space empties a cell.",
@@ -783,7 +952,7 @@ function newEdit() {
     if (!tool.text) { status("Type the characters to write first (Edit symbols ▸ Characters).", true); return null; }
     e.text = tool.text;
   }
-  if (tool.op === "color" || (tool.op === "write" && tool.useColor)) e.color = tool.color;
+  if (tool.op === "color" || (tool.op === "write" && (tool.useColor || tool.colorUnder))) e.color = tool.colorUnder ? "under" : tool.color;
   if (tool.op === "rain") e.len = Math.max(0, Math.min(500, parseInt(tool.rainLen, 10) || 0));
   return e;
 }
@@ -915,10 +1084,9 @@ async function editFromSelection() {
   try {
     const a = activeDoc();
     if (!a) return status("Open a document first.", true);
-    const r = await action.batchPlay([{ _obj: "get", _target: [{ _property: "selection" }, { _ref: "document", _id: a.id }] }], {});
-    const sel = r && r[0] && r[0].selection, v = (x) => Number(x && typeof x === "object" ? x._value : x);
-    if (!sel || sel.left === undefined) return status("Make a selection first: Rectangular Marquee in the live smart object or in your document.", true);
-    let x0 = v(sel.left), y0 = v(sel.top), x1 = v(sel.right), y1 = v(sel.bottom), W, H;
+    const sel = await selectionBounds(a);
+    if (!sel) return status("Make a selection first: Rectangular Marquee in the live smart object or in your document.", true);
+    let x0 = sel.left, y0 = sel.top, x1 = sel.right, y1 = sel.bottom, W, H;
     if (live && a.id === live.docId) { W = a.width; H = a.height; } // the .psb is the area at live.scale
     else {
       await ensureSource(false);
@@ -969,7 +1137,8 @@ function refreshEditUI() {
   if ($("editRainLen").value !== tool.rainLen) $("editRainLen").value = tool.rainLen;
   show($("editFillRow"), tool.drag === "rect" || tool.drag === "ellipse");
   if ($("editFill").checked !== tool.fill) { $("editFill").checked = tool.fill; if ($("editFill").syncChecked) $("editFill").syncChecked(); }
-  show($("editColorRow"), tool.op === "write" || tool.op === "color");
+  show($("editColorRow"), tool.op === "write" || tool.op === "color"); show($("editColorUnderRow"), tool.op === "write" || tool.op === "color");
+  $("editColorUnder").checked = !!tool.colorUnder; if ($("editColorUnder").ckUpdate) $("editColorUnder").ckUpdate();
   const sc = selCells();
   show($("editSelRow"), !!sc);
   if (sc) $("editSelInfo").textContent = `${sc.n} cell${sc.n === 1 ? "" : "s"} selected`;
@@ -1018,6 +1187,30 @@ const SLIDERS = {
   gScanlines: ["Scanlines", 0, 1, 0.01, pct],
   gNoise: ["Noise", 0, 1, 0.01, pct],
   shadowAngle: ["Light angle", -180, 180, 1, (v) => Math.round(v) + "°"],
+  cfShade: ["Darker / lighter", -1, 1, 0.01, (v) => (v > 0 ? "+" : "") + Math.round(v * 100) + "%"],
+  cfAngle: ["Angle", 0, 360, 1, (v) => Math.round(v) + "°"],
+  cfGradMidpoint: ["Midpoint", 0.05, 0.95, 0.01, pct],
+  cfDepthCount: ["Outlines", 1, 12, 1, (v) => String(v)],
+  cfDepthPull: ["Perspective", 0.05, 0.6, 0.01, pct],
+  cfDepthWidth: ["Line width", 0.02, 0.4, 0.01, pct],
+  cfDepthAim: ["Aim at the centre", 0, 1, 0.01, pct],
+  cfDepthFade: ["Fade", 0, 1, 0.01, pct],
+  echoCount: ["Copies", 1, 16, 1, (v) => String(v)],
+  echoStep: ["Spacing", 0.03, 0.6, 0.01, pct],
+  echoFade: ["Fade", 0, 1, 0.01, pct],
+  echoX: ["Across", 0, 1, 0.01, pct],
+  echoY: ["Down", 0, 1, 0.01, pct],
+  cfGradSteps: ["Steps", 0, 12, 1, (v) => (v < 2 ? "Smooth" : String(v))],
+  cfGradRepeat: ["Repeat", 1, 8, 1, (v) => v + "×"],
+  cfSpread: ["Spread", 0.5, 6, 0.1, (v) => v.toFixed(1) + " cells"],
+  cfGap: ["Gap", 0, 0.4, 0.01, pct],
+  cfRound: ["Round corners", 0, 0.5, 0.01, (v) => Math.round(v * 200) + "%"],
+  cfOpacity: ["Opacity", 0, 1, 0.01, pct],
+  cfGlitch: ["Glitched cells", 0, 0.6, 0.01, pct],
+  cfLines: ["Scanlines", 0, 1, 0.01, pct],
+  cfLineCount: ["Lines per cell", 1, 12, 1, (v) => String(v)],
+  cfGrain: ["Grain", 0, 1, 0.01, pct],
+  cfGrainSize: ["Grain size", 0.02, 0.5, 0.01, pct],
   dropOpacity: ["Opacity", 0, 1, 0.01, pct],
   dropDistance: ["Distance", 0, 1, 0.01, pct],
   dropSize: ["Softness", 0, 1.5, 0.01, pct],
@@ -1030,6 +1223,8 @@ const SLIDERS = {
   glowSize: ["Size", 0.05, 2, 0.01, pct],
   outlineLevel: ["Shape at", 0.05, 0.95, 0.01, pct],
   outlineWidth: ["Width", 1, 6, 1, (v) => String(v)],
+  outlineOpacity: ["Stroke opacity", 0, 1, 0.01, pct], // the inner ring when there's an outer one
+  outlineFillOpacity: ["Inside opacity", 0, 1, 0.01, pct],
   fillLevel: ["Fill from", 0.05, 0.95, 0.01, pct],
   rainLength: ["Length", 1, 60, 1, (v) => v + " ch"],
   rainLengthVar: ["Length spread", 0, 1, 0.01, pct],
@@ -1039,6 +1234,21 @@ const SLIDERS = {
   rainFade: ["Tail fade", 0, 1, 0.01, pct],
   rainGaps: ["Gaps", 0, 1, 0.01, pct],
   rainAngle: ["Angle", -60, 60, 1, (v) => Math.round(v) + "°"],
+  rainCX: ["Across", 0, 1, 0.01, pct],
+  rainCY: ["Down", 0, 1, 0.01, pct],
+  rainTwist: ["Twist", -1, 1, 0.01, (v) => (v > 0 ? "+" : "") + Math.round(v * 90) + "°"],
+  rainHole: ["Clear centre", 0, 0.6, 0.01, pct],
+  textArtMargin: ["Margin", 0, 30, 1, (v) => v + " ch"],
+  rrLength: ["Length", 1, 60, 1, (v) => v + " ch"],
+  rrLengthVar: ["Length spread", 0, 1, 0.01, pct],
+  rrFade: ["Fade", 0, 1, 0.01, pct],
+  rrGaps: ["Gaps", 0, 1, 0.01, pct],
+  outlineRingScale: ["Ring at", 1.1, 5, 0.05, (v) => v.toFixed(2) + "×"],
+  outlineRingDensity: ["Density", 0, 1, 0.01, pct],
+  outlineRingTwist: ["Twist", -1, 1, 0.01, (v) => (v > 0 ? "+" : "") + Math.round(v * 90) + "°"],
+  outlineRingOpacity: ["Ring opacity", 0, 1, 0.01, pct],
+  outlineRingFillOpacity: ["Band opacity", 0, 1, 0.01, pct],
+  outlineRingFade: ["Band fade", -1, 1, 0.01, (v) => (Math.abs(v) < 0.005 ? "None" : (v > 0 ? "To ring " : "To shape ") + Math.round(Math.abs(v) * 100) + "%")],
 };
 const RAIN_HINTS = {
   object: "Streams drip from the shape's lower edges into empty space (cells without a character). Fall distance: how far the lowest ones get. Raise Tone ▸ Threshold to empty more of the background.",
@@ -1102,8 +1312,13 @@ function randomizeAll() {
     longOn: chance(0.1), longColor: mixHex(bg, fg, 0.3), longOpacity: round2(rnd(0.6, 0.9)), longLength: round2(rnd(0.8, 2.5)), longFade: round2(rnd(0.3, 1)),
     offOn: chance(0.12), offColor: accent, offOpacity: round2(rnd(0.7, 1)), offDistance: round2(rnd(0.08, 0.2)),
     glowOn: dark && chance(0.12), glowTextColor: chance(0.7), glowColor: accent, glowOpacity: round2(rnd(0.5, 0.9)), glowSize: round2(rnd(0.3, 0.7)),
+    cfOn: chance(0.15), cfFill: pickOne(["solid", "gradient", "gradient", "gradient", "depth", "bleed"]), cfDepthCount: pickOne([3, 5, 7]), cfDepthAim: chance(0.4) ? round2(rnd(0.3, 1)) : 0, cfGradShape: pickOne(["linear", "linear", "reflected", "radial", "radial", "diamond", "angle"]),
+    cfGradSpan: chance(0.25) ? "image" : "cell", cfGradSteps: chance(0.2) ? pickOne([3, 4, 6]) : 0, cfGradRepeat: chance(0.15) ? pickOne([2, 3]) : 1, cfGradMidOn: chance(0.15), cfGradMid: accent, cfGradReverse: chance(0.3), cfFrom: chance(0.8) ? "glyph" : "image", cfShade: round2(dark ? rnd(-0.7, -0.2) : rnd(0.2, 0.7)),
+    cfTo: pickOne(["transparent", "transparent", "dark", "light", "bg", "complement"]), cfAngle: pickOne([90, 90, 45, 135, 0]), cfOpacity: round2(rnd(0.5, 0.95)), cfGap: pickOne([0, 0.04, 0.08]), cfRound: pickOne([0, 0.2, 0.5]),
+    cfSpread: round2(rnd(1, 3)), cfBlend: pickOne(["normal", "normal", "screen", "multiply"]), cfGlitch: chance(0.3) ? round2(rnd(0.03, 0.15)) : 0, cfLines: chance(0.25) ? round2(rnd(0.2, 0.6)) : 0, cfGrain: chance(0.3) ? round2(rnd(0.1, 0.4)) : 0,
   });
-  if (S.outlineOn) Object.assign(S, { outlineWidth: pickOne([1, 1, 2, 3]), outlinePos: pickOne(["outside", "center", "inside"]), outlineStyle: chance(0.6) ? "lines" : "chars", outlineColor: accent, outlineFill: pickOne(["image", "none", "chars", "random"]) });
+  if (S.outlineOn) Object.assign(S, { outlineWidth: pickOne([1, 1, 2, 3]), outlinePos: pickOne(["outside", "center", "inside"]), outlineStyle: chance(0.6) ? "lines" : "chars", outlineColor: accent, outlineFill: pickOne(["image", "none", "text"]), outlineFillMode: pickOne(["ramp", "words", "phrase"]),
+    outlineRingOn: chance(0.2), outlineRingScale: round2(rnd(1.4, 3)), outlineRingFill: pickOne(["text", "rays", "rain"]), outlineRingDensity: round2(rnd(0.3, 0.8)), outlineRingTwist: chance(0.3) ? round2(rnd(-0.4, 0.4)) : 0 });
   if (chance(0.12)) glitchRecipe(); else S.glitchOn = false;
   lastRandom = JSON.stringify(S);
   syncUI(); schedulePreview(0);
@@ -1111,9 +1326,9 @@ function randomizeAll() {
 }
 function undoRandomize() {
   if (!undoStack.length) return;
-  const edits = S.cellEdits;
+  const picture = pictureOf(S);
   S = freshSettings(JSON.parse(undoStack.pop()));
-  S.cellEdits = edits; // Randomize doesn't touch them, so neither does going back
+  Object.assign(S, picture); // Randomize doesn't touch the picture, so neither does going back
   syncUI(); schedulePreview(0);
 }
 
@@ -1129,10 +1344,10 @@ function visibleShadow(key) {
 }
 const sliderEls = {};
 // controls whose id is the setting they edit
-const SELECTS = ["charset", "textMode", "sizeMode", "dither", "colorMode", "bgMode", "gSortDir", "gChannelSwap", "outlinePos", "outlineStyle", "outlineFill", "rainFrom", "rainCharset", "rainColorMode"];
-const CHECKS = ["sortByDensity", "invert", "serpentine", "glitchOn", "gradientMid", "keepAlpha", "phraseShade", "phraseWrap", "dropOn", "longOn", "offOn", "glowOn", "glowTextColor", "outlineOn", "rainOn", "rainHead", "rainGradientMid"];
-const TEXTS = ["customChars", "outlineChars", "outlineFillChars", "rainChars"];
-const APPLY_TEXTS = { customChars: "customApply", rainChars: "rainApply" }; // text box → its Apply button
+const SELECTS = ["charset", "textMode", "sizeMode", "dither", "colorMode", "bgMode", "gSortDir", "gChannelSwap", "outlinePos", "outlineStyle", "outlineFill", "outlineFillMode", "outlineColorFrom", "outlineRingFill", "outlineRingDir", "outlineRingColorFrom", "outlineRingTextColorFrom", "rainDir", "rainCentre", "cfFill", "cfFrom", "cfTo", "cfBlend", "cfGradShape", "cfGradSpan", "echoDir", "echoCentre", "echoColorMode", "rainFrom", "rainCharset", "rainColorMode", "rrCharset", "rrColorMode"];
+const CHECKS = ["textArtFit", "sortByDensity", "invert", "serpentine", "glitchOn", "gradientMid", "keepAlpha", "phraseShade", "phraseWrap", "dropOn", "longOn", "offOn", "glowOn", "glowTextColor", "outlineOn", "outlineRingOn", "outlineRingStroke", "cfOn", "cfOnlyGlyphs", "cfGradMidOn", "cfGradReverse", "echoOn", "echoOutline", "echoRain", "echoText", "rainOn", "rainHead", "rainGradientMid", "rrHead", "rrGradientMid"];
+const TEXTS = ["customChars", "outlineChars", "outlineFillChars", "outlineRingChars", "rainChars", "rrChars"];
+const APPLY_TEXTS = { customChars: "customApply", rainChars: "rainApply", outlineChars: "outlineApply", outlineFillChars: "outlineFillApply", outlineRingChars: "outlineRingApply", rrChars: "rrApply" }; // text box → its Apply button
 function refreshApply() {
   for (const [k, btn] of Object.entries(APPLY_TEXTS)) {
     const pending = $(k).value !== S[k];
@@ -1143,14 +1358,15 @@ function refreshApply() {
 let markHidden = loadJSON("gf:markHidden", false); // preview only: show where hidden messages went
 
 // Sections with a badge (plugin/icons/sections/<id>.png, made by tools/make_section_icons.swift)
-const SECTION_ICONS = new Set(["look", "chars", "outline", "rain", "edit", "grid", "tone", "color", "shadow", "glitch", "output", "batch", "inkType", "inkInk", "inkPaper", "inkLayers"]);
+const SECTION_ICONS = new Set(["taStyle", "taText", "taFont", "taLayout", "taShape", "look", "chars", "outline", "rain", "depth", "edit", "grid", "tone", "color", "shadow", "cells", "glitch", "output", "batch", "inkType", "inkInk", "inkPaper", "inkLayers"]);
 function buildUI() {
   for (const [key, [label, min, max, step, fmt]] of Object.entries(SLIDERS)) {
     const host = $("sl-" + key);
-    host.innerHTML = `<div class="row"><span class="label" title="Double-click to reset">${label}</span>${SLIDER_HTML}<span class="val"></span></div>`;
-    const val = host.querySelector(".val");
-    const input = makeSlider(host.querySelector(".slider"), min, max, step, (v) => { S[key] = v; val.textContent = fmt(v); schedulePreview(); });
-    host.querySelector(".label").addEventListener("dblclick", () => { S[key] = Engine.DEFAULTS[key]; syncUI(); schedulePreview(); });
+    host.innerHTML = `<div class="row"><span class="label" title="Double-click the name or the handle to reset">${label}</span>${SLIDER_HTML}<span class="val"></span></div>`;
+    const val = host.querySelector(".val"), reset = () => { S[key] = Engine.DEFAULTS[key]; syncUI(); schedulePreview(); };
+    const input = makeSlider(host.querySelector(".slider"), min, max, step, (v) => { S[key] = v; val.textContent = fmt(v); schedulePreview(); }, reset);
+    onDoubleClick(host.querySelector(".label"), reset);
+    onDoubleClick(val, reset);
     sliderEls[key] = { input, val, fmt, row: host };
   }
   let html = "", group = null;
@@ -1160,6 +1376,7 @@ function buildUI() {
   }
   $("charset").innerHTML = html;
   $("rainCharset").innerHTML = html; // the rain picks from the same character sets
+  $("rrCharset").innerHTML = html; // and so does the outline ring's rain
 
   for (const k of SELECTS) $(k).addEventListener("change", () => { S[k] = $(k).value; refreshVisibility(); schedulePreview(); });
   $("glitchSeed").addEventListener("change", () => { const v = parseInt($("glitchSeed").value, 10); if (v > 0) S.glitchSeed = v; syncUI(); schedulePreview(0); });
@@ -1172,23 +1389,35 @@ function buildUI() {
   $("rainColorMode").addEventListener("change", () => { if (S.rainColorMode === "art" && !S.rainArtLook) captureRainArt(); });
   $("rainSeed").addEventListener("change", () => { const v = parseInt($("rainSeed").value, 10); if (v > 0) S.rainSeed = v; syncUI(); schedulePreview(0); });
   $("rainReseed").addEventListener("click", () => { S.rainSeed = Math.floor(Math.random() * 99999) + 1; syncUI(); schedulePreview(0); });
+  $("rrSeed").addEventListener("change", () => { const v = parseInt($("rrSeed").value, 10); if (v > 0) S.rrSeed = v; syncUI(); schedulePreview(0); });
+  $("rrReseed").addEventListener("click", () => { S.rrSeed = Math.floor(Math.random() * 99999) + 1; syncUI(); schedulePreview(0); });
+  $("textArtEdit").addEventListener("click", () => showTab("text"));
+  $("textArtOff").addEventListener("click", () => { S.textArtOn = false; src = null; syncUI(); fitLayout(true); schedulePreview(0); status("Converting the document's image again. The text art stays in the Text art tab."); });
+  $("rrCopy").addEventListener("click", () => { // the Matrix rain's look, into the ring's own settings
+    for (const [k, rk] of Object.entries(Engine.RING_RAIN)) S[rk] = JSON.parse(JSON.stringify(S[k]));
+    syncUI(); schedulePreview(0); status("The ring's rain now looks like the Matrix rain.");
+  });
   $("fillShuffle").addEventListener("click", () => { S.fillSeed = Math.floor(Math.random() * 99999) + 1; schedulePreview(0); });
   for (const k of CHECKS) onCheck($(k), (v) => { S[k] = v; if (v) visibleShadow(k); refreshVisibility(); schedulePreview(); });
   // custom text waits for Apply (half-typed {…} or […] would redraw on every key); the rest is live
   for (const k of TEXTS) if (!APPLY_TEXTS[k]) $(k).addEventListener("input", () => { S[k] = $(k).value; refreshVisibility(); schedulePreview(120); });
   for (const [k, btn] of Object.entries(APPLY_TEXTS)) {
+    const apply = () => { S[k] = $(k).value; refreshVisibility(); refreshApply(); schedulePreview(0); };
     $(k).addEventListener("input", refreshApply);
-    $(btn).addEventListener("click", () => { S[k] = $(k).value; refreshVisibility(); refreshApply(); schedulePreview(0); });
+    $(btn).addEventListener("click", apply);
+    if (String($(k).tagName).toUpperCase() === "INPUT") $(k).addEventListener("keydown", (e) => { if (e.key === "Enter") setTimeout(apply, 0); }); // one-line boxes: Enter applies
   }
   $("hideMark").checked = markHidden;
   onCheck($("hideMark"), (v) => { markHidden = v; saveJSON("gf:markHidden", v); schedulePreview(0); });
   $("hideMove").addEventListener("click", () => { S.hideSeed = Math.floor(Math.random() * 99999) + 1; schedulePreview(0); });
+  $("cfShuffle").addEventListener("click", () => { S.cfSeed = Math.floor(Math.random() * 99999) + 1; schedulePreview(0); });
   $("randomize").addEventListener("click", randomizeAll);
   $("undoRandom").addEventListener("click", undoRandomize);
   onCheck($("editOn"), (v) => setEditMode(v));
   $("editOp").addEventListener("change", () => { tool.op = $("editOp").value; saveTool(); refreshEditUI(); });
   $("editText").addEventListener("input", () => { tool.text = $("editText").value; saveTool(); });
   onCheck($("editUseColor"), (v) => { if (tool.op !== "color") { tool.useColor = v; saveTool(); } });
+  onCheck($("editColorUnder"), (v) => { tool.colorUnder = v; saveTool(); refreshEditUI(); });
   $("editDrag").addEventListener("change", () => { tool.drag = $("editDrag").value; saveTool(); setEditMode(tool.on); });
   $("editFromSel").addEventListener("click", editFromSelection);
   $("editApply").addEventListener("click", applySelection);
@@ -1210,27 +1439,24 @@ function buildUI() {
 
   $("source").addEventListener("change", () => { src = null; schedulePreview(0); });
   $("artboard").addEventListener("change", () => { src = null; schedulePreview(0); });
-  $("refresh").addEventListener("click", () => { src = null; csCache.key = null; forgetArtboards(); schedulePreview(0); });
+  $("refresh").addEventListener("click", () => { src = null; csCache.key = null; forgetArtboards(); schedulePreview(0); scheduleUnder(0); });
+  if (typeof document.addEventListener === "function") document.addEventListener("keydown", onUndoKey, true);
+  // back in the panel after adding or hiding a layer in the live .psb: show it under the characters
+  const backInPanel = () => { if (live && !live.closing) { const d = docById(live.docId); if (d && liveLayerSig(d) !== live.underSig) scheduleUnder(0); } };
+  const root = document.body || document.documentElement;
+  if (root && root.addEventListener) for (const t of ["mouseenter", "pointerenter"]) root.addEventListener(t, backInPanel);
   $("liveBtn").addEventListener("click", toggleLive);
+  $("undoAll").addEventListener("click", undoLast);
   $("resetAll").addEventListener("click", () => {
     S = freshSettings(); editing = null; $("editBox").classList.add("hidden");
-    $("fontSearch").value = ""; fillFontSelect(); syncUI(); buildPresetSelect(); fitLayout(true);
+    $("fontSearch").value = ""; fillFontSelect(); syncUI(); looks.build(); fitLayout(true);
     status("All settings reset to defaults"); schedulePreview(0);
   });
-  $("fontPicker").addEventListener("click", () => openFontPanel(!fontOpen));
-  $("fontList").addEventListener("scroll", checkFontScroll);
-  setInterval(checkFontScroll, 200); // UXP may not fire scroll events
-  $("fontList").addEventListener("click", (e) => {
-    let n = e.target;
-    if (n && n.className === "fontMore") return appendFonts();
-    while (n && n !== $("fontList") && !(n.getAttribute && n.getAttribute("data-ps") !== null)) n = n.parentNode;
-    if (!n || n === $("fontList")) return;
-    const v = n.getAttribute("data-ps"), f = allFonts.find((x) => x.ps === v);
-    setFont(v, f ? f.name : v);
+  fontPicker = makePicker({
+    ids: { button: "fontPicker", current: "fontCurrent", chev: "fontChev", panel: "fontPanel", search: "fontSearch", list: "fontList" },
+    label: () => (S.font ? S.fontName || S.font : "Built-in (Menlo)"), items: fontItems, selected: () => S.font || "",
+    onPick: (ps, it) => setFont(ps, it ? it.label : ps), none: () => "No installed font matches", onToggle: () => fitLayout(true),
   });
-  const refilter = () => { clearTimeout(fontFilterTimer); fontFilterTimer = setTimeout(fillFontSelect, 60); };
-  $("fontSearch").addEventListener("input", refilter);
-  $("fontSearch").addEventListener("keyup", refilter);
   $("fontFromLayer").addEventListener("click", () => {
     try {
       const doc = sourceDoc(), l = doc && doc.activeLayers && doc.activeLayers[0];
@@ -1258,24 +1484,25 @@ function buildUI() {
   $("exportPng").addEventListener("click", exportPNG);
   $("pngScale").addEventListener("change", () => saveJSON("gf:pngScale", $("pngScale").value));
   setSelect($("pngScale"), loadJSON("gf:pngScale", "1"));
+  setSelect($("applyLayers"), loadJSON("gf:applyLayers", "one"));
+  $("applyLayers").addEventListener("change", () => saveJSON("gf:applyLayers", $("applyLayers").value));
   $("batch").addEventListener("click", runBatch);
 
-  $("preset").addEventListener("change", () => applyPreset($("preset").value));
-  $("resetBtn").addEventListener("click", () => applyPreset($("preset").value));
-  $("savePreset").addEventListener("click", savePreset);
-  $("deletePreset").addEventListener("click", deletePreset);
-  $("exportPresets").addEventListener("click", exportPresets);
-  $("importPresets").addEventListener("click", importPresets);
+  looks = makePresetBox({
+    $, loadJSON, saveJSON, setSelect, status, errMsg, lfs, formats,
+    ids: { select: "preset", reset: "resetBtn", name: "presetName", save: "savePreset", del: "deletePreset", exp: "exportPresets", imp: "importPresets" },
+    storeKey: "gf:userPresets", builtIns: PRESETS, builtInLabel: "Built-in looks", fileName: "ascii-by-star-presets.json", fileTag: "asciiByStar",
+    current: () => lookOnly(S), apply: applyLook, fresh: freshSettings, onChange: noteChange, undoHint: "↶ Undo brings it back.",
+  });
 
   // the controls under each preview can fold away, leaving more room for the settings
-  for (const id of ["ctl", "inkCtl"]) {
+  for (const id of ["ctl", "textCtl", "inkCtl"]) {
     const head = $(id + "Head"), body = $(id + "Body"), key = "gf:" + id + "Folded";
     const apply = (f) => { body.classList.toggle("hidden", f); head.querySelector(".chev").textContent = f ? "▸" : "▾"; head.querySelector(".ctlLabel").textContent = f ? "Controls (source, apply, live smart object)" : "Controls"; fitLayout(true); };
     head.addEventListener("click", () => { const f = !body.classList.contains("hidden"); saveJSON(key, f); apply(f); });
     apply(!!loadJSON(key, false));
   }
   setupSections();
-  buildPresetSelect();
 }
 
 // ---------- sections ----------
@@ -1287,7 +1514,7 @@ function setupSections() {
   const restripe = (box) => sectionsOf(box).forEach((sec, i) => sec.classList.toggle("alt", i % 2 === 1)); // light and dark bands alternate
   const orderKey = (box) => "gf:sectionOrder:" + box.id;
   const fold = (sec, f) => { collapsed[sec.dataset.section] = f; sec.classList.toggle("collapsed", f); sec.querySelector(".chev").textContent = f ? "▸" : "▾"; };
-  for (const [box, controls] of [[$("scroller"), $("ctlBody")], [$("inkScroller"), $("inkCtlBody")]]) {
+  for (const [box, controls] of [[$("scroller"), $("ctlBody")], [$("textScroller"), $("textCtlBody")], [$("inkScroller"), $("inkCtlBody")]]) {
     const secs = sectionsOf(box), original = secs.map((x) => x.dataset.section), last = secs[secs.length - 1], after = last ? last.nextSibling : null;
     const place = (order) => { // order: section ids; ones not listed keep their usual place after them
       const byId = new Map(secs.map((x) => [x.dataset.section, x]));
@@ -1332,9 +1559,9 @@ function setupSections() {
   }
 }
 
-// colour keys: g0..g2 are the gradient stops, rg0..rg2 the rain's, anything else is a setting name (fg, bg, dropColor, …)
-const GRADIENTS = { g: "gradient", rg: "rainGradient" };
-const gradKey = (k) => { const m = /^(r?g)(\d)$/.exec(k); return m ? [GRADIENTS[m[1]], Number(m[2])] : null; };
+// colour keys: g0..g2 are the gradient stops, rg0..rg2 the rain's, rrg0..rrg2 the ring rain's, anything else is a setting name (fg, bg, dropColor, …)
+const GRADIENTS = { g: "gradient", rg: "rainGradient", rrg: "rrGradient" };
+const gradKey = (k) => { const m = /^(g|rg|rrg)(\d)$/.exec(k); return m ? [GRADIENTS[m[1]], Number(m[2])] : null; };
 function getColor(k) { if (k === "editColor") return tool.color; const g = gradKey(k); return g ? S[g[0]][g[1]] : S[k]; }
 function setColor(k, hex) {
   if (k === "editColor") { tool.color = hex; saveTool(); syncUI(); return; } // the edit tool's colour, not the look's
@@ -1365,6 +1592,7 @@ function syncUI() {
   refreshApply();
   $("glitchSeed").value = String(S.glitchSeed);
   $("rainSeed").value = String(S.rainSeed);
+  $("rrSeed").value = String(S.rrSeed);
   $("undoRandom").disabled = !undoStack.length;
   if (allFonts.length) fillFontSelect();
   document.querySelectorAll(".swatch").forEach((el) => { el.style.backgroundColor = getColor(el.dataset.color); });
@@ -1394,11 +1622,18 @@ function refreshVisibility() {
   for (const id of ["gradMidSwatch", "gradMidHex"]) $(id).style.opacity = S.gradientMid ? "" : "0.35";
   show($("outlineRows"), !!S.outlineOn);
   show($("outlineCharsRow"), S.outlineStyle === "chars");
-  show($("outlineFillRow"), S.outlineFill === "chars" || S.outlineFill === "random");
+  show($("outlineFillRows"), S.outlineFill === "text");
+  show(sliderEls.outlineFillOpacity.row, S.outlineFill !== "none");
   show($("origRows"), S.colorMode === "original");
   show($("bgRow"), S.bgMode !== "transparent");
   show($("keepAlphaRow"), S.bgMode !== "transparent");
   show($("dropRows"), !!S.dropOn); show($("longRows"), !!S.longOn); show($("offRows"), !!S.offOn); show($("glowRows"), !!S.glowOn);
+  show($("cfRows"), !!S.cfOn);
+  show($("cfToRows"), S.cfFill === "gradient"); show($("cfGradRows"), S.cfFill === "gradient"); show($("cfDepthRows"), S.cfFill === "depth");
+  show($("cfFadeRows"), S.cfFill === "gradient" || S.cfFill === "depth"); show($("cfToColorRow"), S.cfTo === "custom"); show($("cfGradMidRow"), !!S.cfGradMidOn);
+  show($("echoRows"), !!S.echoOn); show($("echoPointRows"), S.echoCentre === "point"); show($("echoColorRow"), S.echoColorMode === "tint");
+  show(sliderEls.cfAngle.row, S.cfGradShape === "linear" || S.cfGradShape === "reflected" || S.cfGradShape === "angle"); show(sliderEls.cfSpread.row, S.cfFill === "bleed"); show($("cfTileRows"), S.cfFill !== "bleed");
+  show(sliderEls.cfLineCount.row, S.cfLines > 0); show(sliderEls.cfGrainSize.row, S.cfGrain > 0); show($("cfSeedRow"), S.cfGlitch > 0 || S.cfGrain > 0);
   show($("glowColorRow"), !S.glowTextColor);
   show(sliderEls.shadowAngle.row, !!(S.dropOn || S.longOn || S.offOn));
   show(sliderEls.mosaicAmount.row, S.bgMode === "mosaic");
@@ -1409,15 +1644,28 @@ function refreshVisibility() {
   show($("ditherHint"), S.dither !== "none");
   show($("glitchBody"), !!S.glitchOn);
   show($("rainRows"), !!S.rainOn);
+  show($("textArtBox"), !!S.textArtOn); show(sliderEls.textArtMargin.row, !!S.textArtFit);
+  if (S.textArtOn) $("textArtLabel").textContent = `Text art${S.textArtFont ? " · " + S.textArtFont : ""} (instead of the image)`;
   show($("rainCharsRow"), S.rainCharset === "custom");
   show(sliderEls.rainDistance.row, S.rainFrom !== "everywhere");
+  const radial = S.rainDir === "out" || S.rainDir === "in";
+  show($("rainRadialRows"), radial); show($("rainPointRows"), S.rainCentre === "point"); show(sliderEls.rainAngle.row, !radial);
+  show($("outlineRingRows"), !!S.outlineRingOn); show($("outlineRingTextRows"), S.outlineRingFill === "text" || S.outlineRingFill === "rays");
+  show($("outlineRingRayRows"), S.outlineRingFill === "rays" || S.outlineRingFill === "rain"); show(sliderEls.outlineRingDensity.row, S.outlineRingFill !== "none");
   show(sliderEls.rainOutside.row, S.rainFrom === "everywhere");
   show($("rainColorRow"), S.rainColorMode === "own");
+  show($("outlineColorRow"), S.outlineColorFrom === "own");
   show($("rainArtRow"), S.rainColorMode === "art");
   $("rainArtInfo").textContent = S.rainArtLook ? `Kept: ${{ mono: "single colour", original: "the image's colours", gradient: "gradient" }[S.rainArtLook.colorMode] || ""}` : "Following the Colour section";
   $("rainArtLive").disabled = !S.rainArtLook;
   show($("rainGradRows"), S.rainColorMode === "gradient");
   for (const id of ["rainMidSwatch", "rainMidHex"]) $(id).style.opacity = S.rainGradientMid ? "" : "0.35";
+  show($("outlineRingRainRows"), S.outlineRingFill === "rain");
+  show($("outlineRingStrokeRows"), !!S.outlineRingStroke); show($("outlineRingColorRow"), S.outlineRingColorFrom === "own");
+  show($("outlineRingTextColorRows"), S.outlineRingFill === "text" || S.outlineRingFill === "rays"); show($("outlineRingTextColorRow"), S.outlineRingTextColorFrom === "own");
+  show($("outlineRingBandRows"), S.outlineRingFill !== "none"); show($("rrCharsRow"), S.rrCharset === "custom");
+  show($("rrColorRow"), S.rrColorMode === "own"); show($("rrGradRows"), S.rrColorMode === "gradient");
+  for (const id of ["rrMidSwatch", "rrMidHex"]) $(id).style.opacity = S.rrGradientMid ? "" : "0.35";
   $("rainHint").textContent = RAIN_HINTS[S.rainFrom] || "";
 }
 
@@ -1434,61 +1682,18 @@ async function loadFonts() {
   fillFontSelect();
   return allFonts.length;
 }
-// Font picker: hidden until clicked; lists every installed font (recent first) and adds more as you scroll.
-let fontFilterTimer = null, fontMatches = [], fontShown = 0, fontOpen = false;
-const FONT_PAGE = 60;
-function fontMatchList() {
-  const q = $("fontSearch").value.trim().toLowerCase(), recent = loadJSON("gf:recentFonts", []);
-  if (q) return allFonts.filter((f) => f.name.toLowerCase().includes(q) || f.ps.toLowerCase().includes(q));
+// Font picker (picker.js): every installed font, recent ones first, or those the search finds.
+let fontPicker = null;
+function fontItems(q) {
+  const recent = loadJSON("gf:recentFonts", []), it = (f) => ({ id: f.ps, label: f.name, font: `'${f.ps}', '${f.family || f.name}'` });
+  if (q) return allFonts.filter((f) => f.name.toLowerCase().includes(q) || f.ps.toLowerCase().includes(q)).map(it);
   const rec = recent.map((ps) => allFonts.find((f) => f.ps === ps)).filter(Boolean);
-  return rec.concat(allFonts.filter((f) => !recent.includes(f.ps)));
+  return [{ id: "", label: "Built-in (Menlo, fastest)" }].concat(rec.concat(allFonts.filter((f) => !recent.includes(f.ps))).map(it));
 }
-function fontItem(ps, name, family) {
-  const d = document.createElement("div");
-  d.className = "fontItem" + ((ps || "") === (S.font || "") ? " sel" : "");
-  d.setAttribute("data-ps", ps);
-  if (ps) d.style.fontFamily = `'${ps}', '${family || name}'`;
-  d.textContent = name;
-  return d;
-}
-function appendFonts() {
-  const box = $("fontList"), more = box.querySelector(".fontMore, .fontNote");
-  if (more) box.removeChild(more);
-  const next = fontMatches.slice(fontShown, fontShown + FONT_PAGE);
-  for (const f of next) box.appendChild(fontItem(f.ps, f.name, f.family));
-  fontShown += next.length;
-  const note = document.createElement("div");
-  if (fontShown < fontMatches.length) { note.className = "fontMore"; note.textContent = `Scroll for more · ${fontMatches.length - fontShown} left`; }
-  else { note.className = "fontNote"; note.textContent = fontMatches.length ? `${fontMatches.length} fonts` : "No installed font matches"; }
-  box.appendChild(note);
-}
-function fillFontSelect() {
-  $("fontCurrent").textContent = S.font ? S.fontName || S.font : "Built-in (Menlo)";
-  if (!fontOpen) return;
-  const box = $("fontList");
-  while (box.firstChild) box.removeChild(box.firstChild);
-  box.appendChild(fontItem("", "Built-in (Menlo, fastest)"));
-  fontMatches = fontMatchList(); fontShown = 0;
-  appendFonts();
-  box.scrollTop = 0;
-}
-function openFontPanel(open) {
-  fontOpen = open;
-  $("fontPanel").classList.toggle("hidden", !open);
-  $("fontChev").textContent = open ? "▴" : "▾";
-  if (open) fillFontSelect();
-  fitLayout(true);
-}
-function checkFontScroll() {
-  if (!fontOpen || fontShown >= fontMatches.length) return;
-  const box = $("fontList");
-  if (box.scrollTop + box.clientHeight >= box.scrollHeight - 60) appendFonts();
-}
+const fillFontSelect = () => { if (fontPicker) fontPicker.fill(); };
 function setFont(ps, name) {
   S.font = ps || ""; S.fontName = ps ? name || ps : "";
   if (ps) saveJSON("gf:recentFonts", [ps].concat(loadJSON("gf:recentFonts", []).filter((x) => x !== ps)).slice(0, 8));
-  $("fontSearch").value = "";
-  openFontPanel(false);
   fillFontSelect(); schedulePreview(0);
 }
 
@@ -1513,35 +1718,44 @@ let lastH = -1, lastTop = -1;
 function fitLayout(force) {
   const H = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0;
   if (!H) return;
-  const isInk = tab === "ink", top = $(isInk ? "inkTop" : "top");
+  const ids = TAB_IDS[tab], top = $(ids.top), other = tab === "ink" ? ink : tab === "text" ? textTab : null;
   const setH = (el, prop, px) => { const v = px + "px"; if (el.style[prop] !== v) el.style[prop] = v; };
-  const v = isInk ? ink && ink.viewer : viewer;
+  const v = tab === "ascii" ? viewer : other && other.viewer;
   if (v) v.layout(H);
   if (!force && H === lastH && top.offsetHeight === lastTop) return;
   lastH = H; lastTop = top.offsetHeight;
-  setH($(isInk ? "inkScroller" : "scroller"), "height", Math.max(60, H - ($("tabs").offsetHeight || 0) - top.offsetHeight));
-  if (isInk) { if (ink) ink.relayout(); } else if (viewer) viewer.relayout(); // keep the preview centred in the new size
+  setH($(ids.scroller), "height", Math.max(60, H - ($("tabs").offsetHeight || 0) - top.offsetHeight));
+  if (other) other.relayout(); else if (viewer) viewer.relayout(); // keep the preview centred in the new size
 }
 
+// Each tab's top area, settings scroller, tab button and tool.
+const TAB_IDS = {
+  ascii: { top: "top", scroller: "scroller", btn: "tabAscii", tool: "asciiTool" },
+  text: { top: "textTop", scroller: "textScroller", btn: "tabText", tool: "textTool" },
+  ink: { top: "inkTop", scroller: "inkScroller", btn: "tabInk", tool: "inkTool" },
+};
 function showTab(t) {
-  tab = t === "ink" ? "ink" : "ascii";
+  tab = TAB_IDS[t] ? t : "ascii";
   saveJSON("gf:tab", tab);
-  $("tabAscii").classList.toggle("on", tab === "ascii");
-  $("tabInk").classList.toggle("on", tab === "ink");
-  $("asciiTool").classList.toggle("hidden", tab !== "ascii");
-  $("inkTool").classList.toggle("hidden", tab !== "ink");
+  for (const [k, ids] of Object.entries(TAB_IDS)) { $(ids.btn).classList.toggle("on", k === tab); $(ids.tool).classList.toggle("hidden", k !== tab); }
   fitLayout(true);
-  if (!ink) return;
-  if (tab === "ink") ink.activate();
-  else { ink.deactivate(); if (src) src.stale = true; schedulePreview(0); }
+  if (ink) { if (tab === "ink") ink.activate(); else ink.deactivate(); }
+  if (textTab) { if (tab === "text") textTab.activate(); else textTab.deactivate(); }
+  if (tab === "ascii") { if (src) src.stale = true; schedulePreview(0); }
 }
 
 // ---------- Photoshop events ----------
 let staleTimer = null;
 function onPsEvent(evt, desc) {
+  if (evt === "historyStateChanged") { // only watched for the live .psb (see readLiveUnder)
+    const id = desc && (desc.documentID != null ? desc.documentID : desc.documentId);
+    if (live && !live.closing && !busy && Date.now() > underQuietUntil && (id != null ? id === live.docId : (activeDoc() || {}).id === live.docId) && !/^Live update$/.test(String((desc && desc.name) || ""))) scheduleUnder();
+    return;
+  }
   forgetArtboards(); // a document or layer changed: look at the artboards again
   if (live && evt === "close" && !docById(live.docId)) { live = null; updateLiveBtn(); }
   if (tab === "ink") { if (src) src.stale = true; if (ink) ink.onPsEvent(evt, desc); return; }
+  if (tab === "text") { if (src) src.stale = true; return; } // the lettering doesn't depend on the document
   if (busy) return;
   const a = activeDoc();
   if (live && a && a.id === live.docId) return; // looking at the live window doesn't change the source
@@ -1559,8 +1773,8 @@ async function init() {
   buildUI();
   syncUI();
   ink = setupInk({ $, loadJSON, saveJSON, errMsg, toRGBA8, makeImageData, convertOut, createLayer, findLayers, findLayerById, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck, refreshFields });
-  $("tabAscii").addEventListener("click", () => showTab("ascii"));
-  $("tabInk").addEventListener("click", () => showTab("ink"));
+  textTab = setupTextArt({ $, loadJSON, saveJSON, errMsg, setSelect, fitLayout, onCheck, refreshFields, atlasFor, baseAtlas: () => baseAtlas, useArt });
+  for (const k of Object.keys(TAB_IDS)) $(TAB_IDS[k].btn).addEventListener("click", () => showTab(k));
   showTab(tab);
   window.addEventListener("resize", () => fitLayout(true));
   setInterval(() => fitLayout(false), 400);
@@ -1572,7 +1786,9 @@ async function init() {
   try { baseAtlas = atlas = await loadAtlas(); baseAtlas.id = "builtin"; }
   catch (e) { console.error(e); showPreviewMsg("Failed to load glyph atlas: " + errMsg(e)); return; }
   try { await action.addNotificationListener(["select", "open", "close"], onPsEvent); } catch (e) { console.error(e); }
-  if (tab !== "ink") schedulePreview(0); // the ink tab started its own preview in showTab
+  try { await action.addNotificationListener(["historyStateChanged"], onPsEvent); } catch (e) { console.error(e); } // apart: older builds may refuse it
+  if (tab === "ascii") schedulePreview(0); // the other tabs started their own previews in showTab
+  else if (tab === "text") textTab.activate(); // now that the glyphs are here
   setTimeout(() => loadFonts(), 300);
 }
 init();

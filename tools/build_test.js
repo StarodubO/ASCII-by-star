@@ -2,7 +2,7 @@
 const fs = require("fs"), path = require("path");
 const P = (f) => path.join(__dirname, "../plugin", f);
 const localRequires = (code) => code.replace(/require\("\.\/([a-z]+)\.js"\)/g, (m, n) => `__mods[${JSON.stringify(n)}]`);
-const wrap = (name, file) => `(function(){ const module = { exports: {} }; ${localRequires(fs.readFileSync(P(file), "utf8"))}\n__mods[${JSON.stringify(name)}] = module.exports; })();\n`;
+const wrap = (name, file) => `(function(){ const module = { exports: {} }, exports = module.exports; ${localRequires(fs.readFileSync(P(file), "utf8"))}\n__mods[${JSON.stringify(name)}] = module.exports; })();\n`;
 let main = localRequires(fs.readFileSync(P("main.js"), "utf8"))
   .replace(/\ninit\(\);\s*$/, "\n");
 const atlasB64 = fs.readFileSync(P("atlas.bin")).toString("base64");
@@ -24,7 +24,7 @@ function __el(id) {
 const document = { getElementById: __el, querySelectorAll: () => [], createElement: (t) => __el("new-" + t + Math.random()) };
 const __ls = new Map();
 const localStorage = { getItem: (k) => (__ls.has(k) ? __ls.get(k) : null), setItem: (k, v) => __ls.set(k, String(v)) };
-${["engine", "charsets", "presets", "slider", "dropdown", "fields", "viewer", "pixels", "ink", "inkui"].map((n) => wrap(n, n + ".js")).join("")}
+${["engine", "charsets", "presets", "slider", "dropdown", "fields", "viewer", "pixels", "ink", "inkui", "figlet", "picker", "presetbox", "history", "textart"].map((n) => wrap(n, n + ".js")).join("")}
 ${main}
 function __b64(s) {
   const T = new Uint8Array(128); const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

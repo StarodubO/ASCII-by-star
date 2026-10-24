@@ -23,7 +23,16 @@ function trackDrag(el, on) {
   root.addEventListener("mouseup", (e) => up(e, false));
 }
 
-function makeSlider(el, min, max, step, onInput) {
+// Double-click (or two clicks within 0.4 s: UXP doesn't always send "dblclick") calls fn once.
+function onDoubleClick(el, fn) {
+  let last = 0, fired = 0;
+  const run = () => { const t = Date.now(); if (t - fired > 500) { fired = t; fn(); } };
+  el.addEventListener("dblclick", run);
+  el.addEventListener("click", () => { const t = Date.now(); if (t - last < 400) { last = 0; run(); } else last = t; });
+}
+
+// onReset (optional): called on a double-click on the handle.
+function makeSlider(el, min, max, step, onInput, onReset) {
   const track = el.querySelector(".strack"), fill = el.querySelector(".sfill"), thumb = el.querySelector(".sthumb");
   const dec = String(step).includes(".") ? String(step).split(".")[1].length : 0;
   let value = min;
@@ -39,7 +48,17 @@ function makeSlider(el, min, max, step, onInput) {
     const v = Math.max(min, Math.min(max, Number((Math.round((min + t * (max - min)) / step) * step).toFixed(dec))));
     if (v !== value) { value = v; show(); onInput(v); }
   };
-  trackDrag(el, { down: (e) => fromX(e.clientX), move: (e) => fromX(e.clientX) });
+  let lastDown = 0, lastX = 0;
+  const onThumb = (clientX) => { const r = thumb.getBoundingClientRect(); return !!r && Math.abs(clientX - (r.left + r.width / 2)) <= Math.max(8, r.width); };
+  trackDrag(el, {
+    down: (e) => {
+      const t = Date.now(), hit = onReset && onThumb(e.clientX);
+      if (hit && t - lastDown < 400 && Math.abs(e.clientX - lastX) < 6) { lastDown = 0; onReset(); return false; } // second press on the handle
+      lastDown = hit ? t : 0; lastX = e.clientX;
+      fromX(e.clientX);
+    },
+    move: (e) => fromX(e.clientX),
+  });
   show();
   return {
     get value() { return value; },
@@ -50,4 +69,4 @@ function makeSlider(el, min, max, step, onInput) {
 // Inner markup for a slider row's control.
 const SLIDER_HTML = '<div class="slider"><div class="strack"><div class="sfill"></div><div class="sthumb"></div></div></div>';
 
-if (typeof module !== "undefined") module.exports = { makeSlider, trackDrag, SLIDER_HTML };
+if (typeof module !== "undefined") module.exports = { makeSlider, trackDrag, onDoubleClick, SLIDER_HTML };

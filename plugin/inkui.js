@@ -6,9 +6,9 @@ const { app, core, action, imaging, constants } = require("photoshop");
 const uxp = require("uxp");
 const lfs = uxp.storage.localFileSystem, formats = uxp.storage.formats;
 const Ink = require("./ink.js");
-const { makeSlider, SLIDER_HTML } = require("./slider.js");
+const { makeSlider, onDoubleClick, SLIDER_HTML } = require("./slider.js");
 const { createViewer } = require("./viewer.js");
-const { findLayers, findLayerById, frameOf, fillArtboardSelect, toRGBA8, convertOut, makeImageData, makeReader } = require("./pixels.js");
+const { findLayers, findLayerById, frameOf, fillArtboardSelect, toRGBA8, convertOut, makeImageData, makeReader, hasAlpha, throwawayStep, readWithHidden, withoutSelection } = require("./pixels.js");
 
 const INK_RE = /\s*Ink Bleed$/;
 const ORDER = ["bleed", "pool", "gaps", "paper"]; // bottom to top inside the group
@@ -255,9 +255,7 @@ module.exports = function setupInk(h) {
       const ex = { x: need.x - 128, y: need.y - 128, w: need.w + 256, h: need.h + 256 };
       busy = true;
       try {
-        cache = await core.executeAsModal(async (ctx) => {
-          let sid = null;
-          try { sid = await ctx.hostControl.suspendHistory({ documentID: doc.id, name: "Ink bleed preview" }); } catch (e) { sid = null; }
+        cache = await core.executeAsModal((ctx) => throwawayStep(ctx, doc, async () => {
           const reader = makeReader(doc, src.layerId);
           try {
             return await withOverlaysHidden(doc, async () => {
@@ -277,11 +275,8 @@ module.exports = function setupInk(h) {
               if (src.layerId != null) under = await readUnder(doc, src.layerId, null, vrect, z);
               return { key, overview, buf, bg: Object.assign({ data: bgData }, vrect), under: under && Object.assign({ data: under }, vrect), approx };
             });
-          } finally {
-            await reader.close();
-            if (sid !== null) { try { await ctx.hostControl.resumeHistory(sid, false); } catch (e) { try { await ctx.hostControl.resumeHistory(sid, true); } catch (e2) { /* ignore */ } } }
-          }
-        }, { commandName: "Ink bleed: read pixels" });
+          } finally { await reader.close(); }
+        }), { commandName: "Ink bleed: read pixels" });
       } finally { busy = false; }
     }
     const det = Ink.detect(cache.overview, I.inkFrom);
@@ -294,10 +289,8 @@ module.exports = function setupInk(h) {
 
   // The visible image under the source layer (source and `alsoHide` hidden for the read), or null.
   async function readUnder(doc, layerId, alsoHide, R, z) {
-    const l = findLayerById(doc, layerId), hide = [l, alsoHide].filter((x) => x && x.visible), ur = makeReader(doc, null);
-    try { for (const x of hide) x.visible = false; return await ur.read(R, z); }
+    try { return await readWithHidden(doc, null, [findLayerById(doc, layerId), alsoHide], R, z); }
     catch (e) { console.error("under", e); return null; }
-    finally { for (const x of hide) { try { x.visible = true; } catch (e) { /* gone */ } } await ur.close(); }
   }
 
   // ---------- apply ----------
@@ -330,22 +323,24 @@ module.exports = function setupInk(h) {
           try { profile = doc.colorProfileName || null; } catch (e) { profile = null; }
           const first = {}, nT = Math.ceil(frame.w / TILE) * Math.ceil(frame.h / TILE);
           let k = 0;
-          for (let ty = Y0; ty < Y1; ty += TILE) for (let tx = X0; tx < X1; tx += TILE) {
-            status(`Rendering ink… tile ${++k}/${nT}`);
-            const tw = Math.min(TILE, X1 - tx), th = Math.min(TILE, Y1 - ty), R = { x: tx - M, y: ty - M, w: tw + 2 * M, h: th + 2 * M };
-            const data = await reader.read(R, 1);
-            const under = src.layerId != null ? await readUnder(doc, src.layerId, group, { x: tx, y: ty, w: tw, h: th }, 1) : null;
-            const L = Ink.process({ w: R.w, h: R.h, data }, R.x, R.y, { x: M, y: M, w: tw, h: th }, sk, I, det, paper, under);
-            for (const key of ORDER) {
-              const layer = layers[key], px = L[key];
-              if (!layer || !px) continue;
-              if (first[key] && !hasAlpha(px)) continue; // nothing to add; the first write already cleared the layer
-              const id = await makeImageData(convertOut(new Uint8Array(px.buffer), tw * th, depth, gray), tw, th, gray, profile);
-              try { await imaging.putPixels({ documentID: doc.id, layerID: layer.id, imageData: id, replace: !first[key], targetBounds: { left: tx, top: ty }, commandName: "Ink bleed" }); }
-              finally { id.dispose(); }
-              first[key] = true;
+          await withoutSelection(doc, async () => {
+            for (let ty = Y0; ty < Y1; ty += TILE) for (let tx = X0; tx < X1; tx += TILE) {
+              status(`Rendering ink… tile ${++k}/${nT}`);
+              const tw = Math.min(TILE, X1 - tx), th = Math.min(TILE, Y1 - ty), R = { x: tx - M, y: ty - M, w: tw + 2 * M, h: th + 2 * M };
+              const data = await reader.read(R, 1);
+              const under = src.layerId != null ? await readUnder(doc, src.layerId, group, { x: tx, y: ty, w: tw, h: th }, 1) : null;
+              const L = Ink.process({ w: R.w, h: R.h, data }, R.x, R.y, { x: M, y: M, w: tw, h: th }, sk, I, det, paper, under);
+              for (const key of ORDER) {
+                const layer = layers[key], px = L[key];
+                if (!layer || !px) continue;
+                if (first[key] && !hasAlpha(px)) continue; // nothing to add; the first write already cleared the layer
+                const id = await makeImageData(convertOut(new Uint8Array(px.buffer), tw * th, depth, gray), tw, th, gray, profile);
+                try { await imaging.putPixels({ documentID: doc.id, layerID: layer.id, imageData: id, replace: !first[key], targetBounds: { left: tx, top: ty }, commandName: "Ink bleed" }); }
+                finally { id.dispose(); }
+                first[key] = true;
+              }
             }
-          }
+          });
           remember(doc, group, src.layerId);
           editing = { docId: doc.id, groupId: group.id, name: String(group.name), sourceLayerId: src.layerId };
           info = `${det.label} · ${nT} tile${nT === 1 ? "" : "s"}`;
@@ -361,7 +356,6 @@ module.exports = function setupInk(h) {
       console.error(e); status(errMsg(e), true);
     } finally { busy = false; }
   }
-  function hasAlpha(px) { for (let i = 3; i < px.length; i += 4) if (px[i]) return true; return false; }
 
   // Creates (or reuses, when updating) the group and its layers, stacked bottom to top as ORDER.
   async function prepareLayers(doc, group, src, light, stamped, frame) {
@@ -472,13 +466,15 @@ module.exports = function setupInk(h) {
   function build() {
     for (const [key, [label, min, max, step, fmt, tip]] of Object.entries(SLIDERS)) {
       const host = $("isl-" + key);
-      host.innerHTML = `<div class="row" title="${tip}"><span class="label" title="${tip} Double-click to reset.">${label}</span>${SLIDER_HTML}<span class="val"></span></div>`;
+      host.innerHTML = `<div class="row" title="${tip}"><span class="label" title="${tip} Double-click the name or the handle to reset.">${label}</span>${SLIDER_HTML}<span class="val"></span></div>`;
       const val = host.querySelector(".val"), px = fmt === "px";
-      const input = makeSlider(host.querySelector(".slider"), min, max, step, (v) => { I[key] = v; val.textContent = px ? fmtPx(v) : fmt(v); schedule(); });
-      host.querySelector(".label").addEventListener("dblclick", () => {
+      const reset = () => {
         const p = Ink.PAPERS.find((x) => x.id === I.paper) || Ink.PAPERS[0];
         I[key] = p.s[key] !== undefined ? p.s[key] : Ink.DEFAULTS[key]; sync(); schedule();
-      });
+      };
+      const input = makeSlider(host.querySelector(".slider"), min, max, step, (v) => { I[key] = v; val.textContent = px ? fmtPx(v) : fmt(v); schedule(); }, reset);
+      onDoubleClick(host.querySelector(".label"), reset);
+      onDoubleClick(val, reset);
       sliderEls[key] = { input, val, fmt, px };
     }
     $("inkPaperType").addEventListener("change", onPaperSelect);
