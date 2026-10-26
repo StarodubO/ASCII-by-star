@@ -1,6 +1,6 @@
 # ASCII by Star
 
-A Photoshop plugin that turns any image into ASCII and glyph art with a live preview, and adds realistic ink bleed on paper to any layer.
+A Photoshop plugin that turns any image into ASCII and glyph art with a live preview, adds realistic ink bleed on paper to any layer, draws FIGlet text art, topographic line art and maps of any place on Earth.
 
 **The most advanced ASCII art editor ever made, right inside Photoshop.** 60+ character sets and any font, 25 looks, shadows, glitch, Matrix rain, outlines and hidden messages, a live smart object, and now **hand editing of every single symbol**: paint, draw lines, rectangles and circles, or select any shape with Photoshop's own tools and rewrite it.
 
@@ -37,6 +37,11 @@ Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, includi
 - **Live smart object:** places the result as a smart object and updates it as you change settings, with Photoshop's own zoom and pan.
 - **Preview:** zoom with the mouse wheel or the zoom bar, drag to move around, drag the grip under it to make it taller or shorter, or fold it away with **▾ Preview** (nothing is rendered while hidden, handy in live mode).
 - **A panel that fits small screens:** fold the preview and the **Controls** under it, fold or unfold every section at once, and drag sections into your own order by their ⠿ grip. Every section has a coloured icon, and the layout is remembered per tab on your computer.
+- **Cell backgrounds:** an effect behind every character from its colour: tiles, gradients (linear, radial, diamond, angle, across each cell or the whole picture), bleed, nested "depth" squares, plus per-cell glitch, scanlines and grain.
+- **Depth echo:** repeats the outline, the rain or the characters as scaled copies towards a vanishing point, for a 3D tunnel look.
+- **Outer ring:** a second outline around the shape, with text, text along rays or rain between the two.
+- **Radial rain:** Matrix rain that streams out of a centre or into it, optionally twisted.
+- **Separate layers:** output as a group with one layer per part (text, outline, hidden messages, rain, edits, shadows, glitch, depth echo).
 - **Re-edit:** select a generated layer, adjust and **Update layer**.
 - **Presets:** 25 built-in looks, plus your own presets, which you can import and export. **Reset** takes you back to the chosen look; **Randomize** tries a random one (↶ goes back).
 - **Batch:** process a folder of images to PNG (and optionally .txt).
@@ -49,6 +54,33 @@ Adds an ink-on-paper overlay to any layer (or the whole visible image) without t
 - **Inside the ink:** pooling, rim width, granulation, dry skip and mottling.
 - **Paper settings:** grain size, grain, relief, fibres (amount, length, visibility, alignment, direction), laid lines and flecks, or texture scale, strength and colour.
 - A preview you can zoom (Fit to 400%), drag around, resize or hide. **Update overlay** re-renders in place and keeps your layer tweaks.
+
+## Text art tab
+FIGlet lettering like patorjk.com's TAAG, with 332 fonts. Layouts (full, fitted, smushing), alignment, line gap, letter spacing, case, flip, invert, frames, drawing with any character or your own text, and style presets. **Try every font** previews your text in all of them. **Use with effects** sends the art to the ASCII tab, so colours, outlines, rain, shadows and glitch all work on it.
+
+## Lines tab
+Contour (topographic) and ridge lines from any layer's brightness, a depth map, or real terrain.
+
+![Contour lines from real terrain heights](docs/lines-topo.png)
+
+- **Height:** the image, another layer (e.g. a depth map) or **the map**: real elevation for the area chosen in the Map tab, with lines on round metre heights.
+- **Lines:** count or interval, smoothing, index lines, widths, colours from the line, the image, or a height gradient, fills between levels and hill shading.
+
+![Hypsometric colours](docs/lines-hypso.png)
+
+- **Height labels and spot heights** on the lines, facing uphill or readable.
+- **Text on the lines:** your text (hidden messages and fills included) written along every contour, horizontal or vertical, or direction marks `- \ | /`.
+- **Output:** a layer, a live smart object or vector **SVG**. **Use with effects** sends the lines to the ASCII tab.
+
+## Map tab
+A map of any place: type a name, coordinates, or paste a Google Maps link.
+
+![Lviv, night style](docs/map-lviv-night.png)
+
+- Buildings, roads (with casings and major roads), rail, rivers, water, parks and bare ground from OpenStreetMap, each with its own colour, width and opacity, and style presets.
+- **Drag the preview** to move around; the map is drawn past the edges so moving feels smooth.
+- **Output:** one layer per kind of feature in a group, a live smart object, or **SVG**. **Select** turns a category (e.g. all buildings) into a Photoshop selection.
+- Map data © OpenStreetMap contributors (the credit line is on by default); heights from AWS Terrain Tiles.
 
 ## Making changes
 | What | Where |
