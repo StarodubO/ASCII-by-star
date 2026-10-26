@@ -18,7 +18,7 @@ const SIZE_MIN = 0.1, SIZE_MAX = 0.8, MIN_PX = 60; // preview height: share of t
 function load(key, d) { try { const v = JSON.parse(localStorage.getItem(key)); return v === null ? d : v; } catch (e) { return d; } }
 function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) { /* not saved */ } }
 
-function createViewer({ wrap, img, msg, bar, grip, head, storeKey, render, docSize, onError, onLayout, onEditToggle }) {
+function createViewer({ wrap, img, msg, bar, grip, head, storeKey, render, docSize, onError, onLayout, onEditToggle, onFitDrag, bleed }) {
   let zoomT = Math.max(0, Math.min(1, Number(load(storeKey, 0)) || 0)); // slider position: 0 = Fit, 1 = 400%, logarithmic in between
   let sizeK = Math.max(SIZE_MIN, Math.min(SIZE_MAX, Number(load(storeKey + ":size", 0.38)) || 0.38));
   let hidden = !!load(storeKey + ":hidden", false), panelH = 0, dirty = true;
@@ -120,7 +120,13 @@ function createViewer({ wrap, img, msg, bar, grip, head, storeKey, render, docSi
     clampCentre(d, b, k);
     const vr = viewRect(d, b, k);
     if (shown && shown.z === z && covers(shown, vr) && myGen === shown.gen) { place(); return; }
-    if (!(await show(vr, z, myGen)) || (vr.w >= d.w && vr.h >= d.h)) return; // all of it is in view
+    if (!(await show(vr, z, myGen))) return;
+    if (bleed && isFit()) { // then past the edges (the tab draws there), so a drag in Fit shows what's beyond
+      const bx = Math.round(d.w * bleed), by = Math.round(d.h * bleed);
+      await show({ x: -bx, y: -by, w: d.w + 2 * bx, h: d.h + 2 * by }, z, myGen);
+      return;
+    }
+    if (vr.w >= d.w && vr.h >= d.h) return; // all of it is in view
     // then the surroundings, so dragging has something to show
     const around = clip({ x: vr.x - vr.w, y: vr.y - vr.h, w: vr.w * 3, h: vr.h * 3 }, d);
     if (around.w > vr.w || around.h > vr.h) await show(around, z, myGen);
@@ -245,6 +251,8 @@ function createViewer({ wrap, img, msg, bar, grip, head, storeKey, render, docSi
       if (fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1) setZoom(zoomFor(d, b, 1), { x: shown.x + fx * shown.w, y: shown.y + fy * shown.h });
       return;
     }
+    // in Fit a tab may take the drag (Map: moves the area); the image stays where it was dropped until the new render
+    if (isFit() && onFitDrag && onFitDrag(-dr.dx / k, -dr.dy / k)) return;
     // the image followed the pointer, so the centre moves the other way
     centre.x -= dr.dx / k; centre.y -= dr.dy / k;
     clampCentre(d, b, k);

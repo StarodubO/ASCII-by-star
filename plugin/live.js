@@ -27,6 +27,15 @@ async function writeAll(doc, layer, W, H, draw) {
   });
 }
 
+// Every live window (any tab's) → the document it came from, so a tab working while a .psb is in front
+// goes back to the file you started from instead of nesting a smart object inside the smart object.
+const parents = new Map();
+function rootDoc(active) {
+  let d = active;
+  for (let i = 0; d && parents.has(d.id) && i < 8; i++) { const p = docById(parents.get(d.id)); if (!p) break; d = p; }
+  return d;
+}
+
 function createLive(o) {
   let live = null; // {docId (the .psb), layerId, sourceDocId, soLayerId, soName, w, h, closing}
   let timer = null, running = false, again = false, saveTimer = null, saving = null, pending = null;
@@ -53,6 +62,7 @@ function createLive(o) {
         if (!psb || psb.id === doc.id) throw new Error("Photoshop didn't open the smart object contents");
         const inner = findLayers(psb.layers, (l) => String(l.kind) !== "group")[0] || psb.layers[0];
         live = { docId: psb.id, layerId: inner.id, sourceDocId: doc.id, soLayerId: so.id, soName: String(so.name), w: psb.width, h: psb.height };
+        parents.set(psb.id, doc.id);
       }, { commandName: `${o.label} live smart object` });
     } catch (e) { console.error(e); live = null; o.status("Couldn't open the live smart object: " + o.errMsg(e), true); so = null; }
     setBtn();
@@ -142,11 +152,11 @@ function createLive(o) {
     get on() { return !!live && !live.closing; },
     info: () => live,
     // The document the tab works on: the live window's source while the .psb is in front.
-    sourceDoc(active) { if (live && active && active.id === live.docId) return docById(live.sourceDocId); return active; },
+    sourceDoc(active) { return rootDoc(active); },
     isLiveDoc: (d) => !!(live && d && d.id === live.docId),
     // Photoshop closed the .psb (the user closed it): forget it.
     check() { if (live && !docById(live.docId)) { live = null; setBtn(); } },
   };
 }
 
-if (typeof module !== "undefined") module.exports = { createLive, isSmart };
+if (typeof module !== "undefined") module.exports = { createLive, isSmart, rootDoc, parents };

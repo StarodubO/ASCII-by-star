@@ -185,6 +185,28 @@ async function tileHeights(z, x, y, fetchFn) {
   tileCache.set(key, out);
   return out;
 }
+// Fills the NaN cells (no data in the tiles) from their known neighbours, ring by ring inwards.
+function fillHoles(elev, w, h) {
+  let todo = [];
+  for (let i = 0; i < w * h; i++) if (Number.isNaN(elev[i])) todo.push(i);
+  if (todo.length === w * h) { elev.fill(0); return; }
+  while (todo.length) {
+    const vals = [], left = [];
+    for (const i of todo) {
+      const x = i % w, y = (i / w) | 0;
+      let sum = 0, cnt = 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const v = elev[yy * w + xx];
+        if (!Number.isNaN(v)) { sum += v; cnt++; }
+      }
+      if (cnt) vals.push([i, sum / cnt]); else left.push(i);
+    }
+    for (const [i, v] of vals) elev[i] = v;
+    todo = left;
+  }
+}
 // Elevation over a region sampled to w × h: {w, h, elev Float32Array (metres), min, max, metresPerPx (of the
 // output grid), z}. onProgress(done, total) while tiles load.
 async function loadRegion({ lat, lon, widthKm, w, h, fetchFn, onProgress }) {
@@ -196,7 +218,7 @@ async function loadRegion({ lat, lon, widthKm, w, h, fetchFn, onProgress }) {
     while (queue.length) {
       const t = queue.shift();
       tiles.set(`${t.x}/${t.y}`, await tileHeights(plan.z, t.x, t.y, fetchFn));
-      if (onProgress) onProgress(++done, plan.tiles.length);
+      if (onProgress) onProgress(++done, tiles.length);
     }
   }));
   const at = (px, py) => { // world px at zoom plan.z
@@ -204,7 +226,8 @@ async function loadRegion({ lat, lon, widthKm, w, h, fetchFn, onProgress }) {
     const t = tiles.get(`${tx}/${ty}`);
     if (!t) return 0;
     const ix = Math.min(255, Math.max(0, Math.floor(px - tx * 256))), iy = Math.min(255, Math.max(0, Math.floor(py - ty * 256)));
-    return t[iy * 256 + ix];
+    const v = t[iy * 256 + ix];
+    return v < -12000 ? NaN : v; // no data (−32768 m): filled in from around it below
   };
   const elev = new Float32Array(w * h);
   let min = Infinity, max = -Infinity;
@@ -213,9 +236,9 @@ async function loadRegion({ lat, lon, widthKm, w, h, fetchFn, onProgress }) {
     const ix = Math.floor(px), iy = Math.floor(py), fx = px - ix, fy = py - iy;
     const v = (at(ix, iy) * (1 - fx) + at(ix + 1, iy) * fx) * (1 - fy) + (at(ix, iy + 1) * (1 - fx) + at(ix + 1, iy + 1) * fx) * fy;
     elev[y * w + x] = v;
-    if (v < min) min = v;
-    if (v > max) max = v;
   }
+  fillHoles(elev, w, h);
+  for (let i = 0; i < w * h; i++) { const v = elev[i]; if (v < min) min = v; if (v > max) max = v; }
   return { w, h, elev, min, max, metresPerPx: (widthKm * 1000) / w, z: plan.z, tiles: plan.tiles.length };
 }
 
@@ -323,7 +346,7 @@ function planFeatures(lat, lon, widthKm, aspect) {
 const vecCache = new Map(); // "z/x/y" → decoded tile
 async function vectorTile(z, x, y, fetchFn) {
   const n = Math.pow(2, z), wx = ((x % n) + n) % n, key = `${z}/${wx}/${y}`;
-  if (vecCache.has(key)) return vecCache.get(key);
+  if (vecCache.has(key)) { const t = vecCache.get(key); vecCache.delete(key); vecCache.set(key, t); return t; } // most recently used last
   if (!tileTemplate) {
     tileTemplate = (async () => {
       const r = await fetchFn(FEATURE_INFO);
@@ -336,14 +359,28 @@ async function vectorTile(z, x, y, fetchFn) {
   if (r.status === 404 || r.status === 204) { vecCache.set(key, {}); return {}; } // nothing here (open sea)
   if (!r.ok) throw new Error(`The map server answered ${r.status} for tile ${key}.`);
   const t = decodeTile(new Uint8Array(await r.arrayBuffer()), FEATURE_LAYERS);
-  if (vecCache.size > 600) vecCache.delete(vecCache.keys().next().value);
+  if (vecCache.size > 1200) vecCache.delete(vecCache.keys().next().value);
   vecCache.set(key, t);
   return t;
 }
 // The features of a region: [{layer, cls, sub, brunnel, type, parts: [Float64Array of x, y in 0..1 of the
 // region], clip: [u0, v0, u1, v1] (the tile's own square, so overlapping tile edges draw once)}].
-async function loadFeatures({ lat, lon, widthKm, aspect, fetchFn, onProgress }) {
-  const plan = planFeatures(lat, lon, widthKm, aspect), out = [], queue = plan.tiles.slice();
+// extend: also the ground around the region, `extend` × its size on each side, at the same zoom (coordinates
+// stay those of the region, so the extra features lie outside 0..1).
+function tilesAround(plan, extend) {
+  if (!extend) return plan.tiles;
+  const n = Math.pow(2, plan.z), mx = plan.wpx * extend, my = plan.hpx * extend, tiles = [];
+  for (let ty = Math.max(0, Math.floor((plan.y0 - my) / 256)); ty <= Math.min(n - 1, Math.floor((plan.y0 + plan.hpx + my) / 256)); ty++)
+    for (let tx = Math.floor((plan.x0 - mx) / 256); tx <= Math.floor((plan.x0 + plan.wpx + mx) / 256); tx++) tiles.push({ x: tx, y: ty });
+  return tiles;
+}
+// Whether every tile loadFeatures needs is already loaded.
+function featuresCached({ lat, lon, widthKm, aspect, extend }) {
+  const plan = planFeatures(lat, lon, widthKm, aspect), n = Math.pow(2, plan.z);
+  return tilesAround(plan, extend).every((t) => vecCache.has(`${plan.z}/${((t.x % n) + n) % n}/${t.y}`));
+}
+async function loadFeatures({ lat, lon, widthKm, aspect, fetchFn, onProgress, extend = 0 }) {
+  const plan = planFeatures(lat, lon, widthKm, aspect), out = [], tiles = tilesAround(plan, extend), queue = tiles.slice();
   let done = 0;
   await Promise.all(Array.from({ length: 6 }, async () => {
     while (queue.length) {
@@ -363,8 +400,8 @@ async function loadFeatures({ lat, lon, widthKm, aspect, fetchFn, onProgress }) 
     }
   }));
   out.sort((a, b) => a.order - b.order); // (the order tiles arrive in varies; keep it stable per tile set)
-  return { features: out, z: plan.z, tiles: plan.tiles.length };
+  return { features: out, z: plan.z, tiles: tiles.length };
 }
 
-const MapHeights = { parseLocation, geocode, planRegion, loadRegion, decodePNG, inflate, metresPerPx, TILE_URL, decodeTile, planFeatures, loadFeatures, FEATURE_LAYERS };
+const MapHeights = { parseLocation, geocode, planRegion, loadRegion, decodePNG, inflate, metresPerPx, TILE_URL, decodeTile, planFeatures, loadFeatures, featuresCached, FEATURE_LAYERS };
 if (typeof module !== "undefined") module.exports = MapHeights;

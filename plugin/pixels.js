@@ -93,13 +93,14 @@ function convertOut(rgba, n, depth, gray) {
     }
     return out;
   }
-  if (depth === 8) return rgba;
+  if (depth === 8) return rgba instanceof Uint8Array ? rgba : new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
   if (depth === 16) { const out = new Uint16Array(n * 4); for (let i = 0; i < n * 4; i++) out[i] = Math.round((rgba[i] * 32768) / 255); return out; }
   const out = new Float32Array(n * 4);
   for (let i = 0; i < n * 4; i++) out[i] = (i & 3) === 3 ? rgba[i] / 255 : Math.pow(rgba[i] / 255, 2.2);
   return out;
 }
 async function makeImageData(buf, w, h, gray, profile) {
+  if (buf instanceof Uint8ClampedArray) buf = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
   const base = { width: w, height: h, components: gray ? 2 : 4, chunky: true, colorSpace: gray ? "Grayscale" : "RGB" };
   if (profile) { try { return await imaging.createImageDataFromBuffer(buf, Object.assign({ colorProfile: profile }, base)); } catch (e) { /* fall through */ } }
   return await imaging.createImageDataFromBuffer(buf, base);

@@ -54,7 +54,7 @@ module.exports = function setupMap(h) {
   let M = fresh(loadJSON("gf:map:last", null));
   let area = loadJSON("gf:mapArea", null); // {place, lat, lon, name, widthKm}
   let active = false, busy = false, editing = null; // editing: {docId, groupId, name}
-  let data = null; // {key, data, P, frameKey}
+  let loaded = {}; // core (the area) / wide (with the ground around): {key, data, P, frameKey}
   const sliderEls = {};
 
   function status(msg, isErr) { const el = $("mpStatus"); el.textContent = msg || ""; el.style.color = isErr ? "#ff7070" : ""; }
@@ -85,22 +85,52 @@ module.exports = function setupMap(h) {
     } catch (e) { console.error(e); return status(errMsg(e), true); }
     const widthKm = at.widthKm ? Math.round(Math.min(150, Math.max(0.2, at.widthKm)) * 10) / 10 : (area && area.widthKm) || 3;
     area = { place: text, lat: at.lat, lon: at.lon, name: at.name || "", widthKm };
-    saveArea(); data = null; sync(); schedule(0);
+    saveArea(); loaded = {}; sync(); schedule(0);
+  }
+  // Dragging the preview in Fit moves the area: the centre shifts by (dx, dy) document px (east, south)
+  function moveArea(dx, dy) {
+    if (!area || !pv || editing) return false;
+    const mPerPx = (area.widthKm * 1000) / pv.frame.w, cos = Math.cos((area.lat * Math.PI) / 180);
+    area.lon += ((dx * mPerPx) / (40075016.686 * cos)) * 360;
+    area.lat = Math.max(-84, Math.min(84, area.lat - ((dy * mPerPx) / 40075016.686) * 360)); // Mercator: a px is as many metres north-south as east-west
+    area.lon = ((area.lon + 540) % 360) - 180;
+    area.place = `${area.lat.toFixed(5)}, ${area.lon.toFixed(5)}`;
+    if (area.name && !/^Near /.test(area.name)) area.name = "Near " + area.name;
+    $("mpPlace").value = area.place;
+    saveArea(); loaded = {}; schedule(0);
+    return true;
   }
   function showAreaInfo(extra) {
     $("mpAreaInfo").textContent = !area ? "Paste a Google Maps link (its centre and zoom are used), coordinates, or a place name. The area takes the shape of your canvas (or artboard)."
       : `${area.name || `${area.lat.toFixed(4)}, ${area.lon.toFixed(4)}`}${extra ? " · " + extra : ""}`;
   }
   // The features of the area for a frame (loaded once per area and frame shape; tiles are cached in map.js).
-  async function featuresFor(frame) {
+  // The preview uses the area plus BLEED × its size around it (drawn outside the frame, so a drag shows real map);
+  // the first look at a new place loads the area alone and the ground around follows in the background.
+  const BLEED = 0.5;
+  let wideLoading = null;
+  async function featuresFor(frame, wide) {
     if (!area) throw new Error("Choose an area: type a place, coordinates or a Google Maps link, then press Find.");
-    const key = [area.lat, area.lon, area.widthKm, (frame.h / frame.w).toFixed(5)].join("|"), frameKey = frame.w + "x" + frame.h;
-    if (!data || data.key !== key) {
-      const d = await MapHeights.loadFeatures({ lat: area.lat, lon: area.lon, widthKm: area.widthKm, aspect: frame.h / frame.w, fetchFn: fetch, onProgress: (k, n) => status(`Loading the map… ${k}/${n} tiles`) });
-      data = { key, data: d, P: null, frameKey: null };
+    const key = [area.lat, area.lon, area.widthKm, (frame.h / frame.w).toFixed(5)].join("|"), frameKey = frame.w + "x" + frame.h, slot = wide ? "wide" : "core";
+    const opts = { lat: area.lat, lon: area.lon, widthKm: area.widthKm, aspect: frame.h / frame.w, fetchFn: fetch, extend: wide ? BLEED : 0 };
+    if (!loaded[slot] || loaded[slot].key !== key) {
+      if (wide && !MapHeights.featuresCached(opts)) {
+        const P = await featuresFor(frame, false);
+        if (wideLoading !== key) {
+          wideLoading = key;
+          MapHeights.loadFeatures(opts).then((d) => {
+            if (wideLoading !== key) return;
+            wideLoading = null; loaded.wide = { key, data: d, P: null, frameKey: null }; schedule(0);
+          }).catch(() => { if (wideLoading === key) wideLoading = null; });
+        }
+        return P;
+      }
+      const d = await MapHeights.loadFeatures(Object.assign(opts, { onProgress: (k, n) => status(`Loading the map… ${k}/${n} tiles`) }));
+      loaded[slot] = { key, data: d, P: null, frameKey: null };
     }
-    if (data.frameKey !== frameKey) { data.P = Features.prepare(data.data, frame.w, frame.h); data.frameKey = frameKey; }
-    return data.P;
+    const e = loaded[slot];
+    if (e.frameKey !== frameKey) { e.P = Features.prepare(e.data, frame.w, frame.h); e.frameKey = frameKey; }
+    return e.P;
   }
 
   // ---------- preview ----------
@@ -128,12 +158,12 @@ module.exports = function setupMap(h) {
   async function renderPreview() {
     if (!area) { viewer.showMessage("Choose an area: type a place or paste a Google Maps link, then press Find"); status(""); return; }
     const { frame } = await frameNow();
-    const t0 = Date.now(), P = await featuresFor(frame);
+    const t0 = Date.now(), P = await featuresFor(frame, true);
     const first = !pv || pv.frame.w !== frame.w || pv.frame.h !== frame.h;
     pv = { frame, P, loadMs: Date.now() - t0 };
     if (first) viewer.setCentre(frame.w / 2, frame.h / 2);
     const n = Features.counts(P, M);
-    showAreaInfo(`${area.widthKm < 10 ? area.widthKm.toFixed(1) : Math.round(area.widthKm)} km wide · ${P.items.length} features`);
+    showAreaInfo(`${area.widthKm < 10 ? area.widthKm.toFixed(1) : Math.round(area.widthKm)} km wide · ${n.all} features`);
     status(`${n.roads} roads · ${n.buildings} buildings · ${n.rivers + n.water} water · ${n.rail} rail`);
     await viewer.refresh();
     const doc = activeDoc();
@@ -251,6 +281,23 @@ module.exports = function setupMap(h) {
     finally { busy = false; }
   }
 
+  // ---------- export SVG ----------
+  async function exportSVG() {
+    if (!area) return status("Choose an area first: type a place or paste a Google Maps link, then press Find.", true);
+    let frame, P;
+    try { frame = (await frameNow()).frame; P = await featuresFor(frame); } catch (e) { return status(errMsg(e), true); }
+    try {
+      const svg = Features.toSVG(P, M);
+      const doc = activeDoc();
+      const base = doc ? docBaseName(doc) + "-" : "";
+      const name = `${base}${placeName().toLowerCase().replace(/[^a-z0-9]+/g, "-")}-map.svg`;
+      const file = await lfs.getFileForSaving(name, { types: ["svg"] });
+      if (!file) return;
+      await file.write(svg, { format: formats.utf8 });
+      status(`Saved ${file.name}`);
+    } catch (e) { console.error(e); status(errMsg(e), true); }
+  }
+
   // ---------- editing ----------
   function showEditing() {
     $("mpEditLabel").textContent = editing ? "Editing: " + editing.name : "";
@@ -265,7 +312,7 @@ module.exports = function setupMap(h) {
     const rec = recall(doc, g);
     if (!rec) return status("No saved settings for this map on this computer.", true);
     M = fresh(rec.settings);
-    if (rec.area) { area = rec.area; saveArea(); data = null; }
+    if (rec.area) { area = rec.area; saveArea(); loaded = {}; }
     editing = { docId: doc.id, groupId: g.id, name: String(g.name) };
     sync(); showEditing(); schedule(0);
     status("Loaded the settings of “" + g.name + "”.");
@@ -353,9 +400,12 @@ module.exports = function setupMap(h) {
       wrap: $("mpPreviewWrap"), img: $("mpPreview"), msg: $("mpPreviewMsg"), bar: $("mpZoomBar"), grip: $("mpPreviewGrip"), head: $("mpPreviewHead"), storeKey: "gf:zoom:map", onLayout: () => h.fitLayout(true),
       docSize: () => (pv ? { w: pv.frame.w, h: pv.frame.h } : null), render: renderRegion,
       onError: (e) => { console.error(e); status(errMsg(e), true); },
+      onFitDrag: moveArea, bleed: BLEED,
     });
+    $("mpPreviewWrap").title = "Drag to move around the map (in Fit). Click to zoom in.";
     $("mpApply").addEventListener("click", () => apply(false));
     $("mpLive").addEventListener("click", toggleLive);
+    $("mpExportSvg").addEventListener("click", exportSVG);
     $("mpUpdate").addEventListener("click", () => apply(true));
     $("mpStopEdit").addEventListener("click", stopEditing);
     $("mpLoad").addEventListener("click", loadSelected);
@@ -365,7 +415,7 @@ module.exports = function setupMap(h) {
   build();
 
   return {
-    apply, preview: renderPreview, selectFeatures, findPlace, randomize, applyLook, toggleLive, undo: () => hist.undo(), stopEditing, // used by the Photoshop tests
+    apply, preview: renderPreview, selectFeatures, exportSVG, findPlace, randomize, applyLook, toggleLive, undo: () => hist.undo(), stopEditing, // used by the Photoshop tests
     settings: () => M, editing: () => editing, area: () => area,
     relayout: () => viewer && viewer.relayout(),
     get viewer() { return viewer; },

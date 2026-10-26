@@ -90,6 +90,8 @@ const DEFAULTS = {
   cellEdits: [], // symbols changed by hand (Edit symbols; see applyEdits)
   // text art (the Text art tab): with textArtOn the grid is this text instead of the image (see textArtAnalysis)
   textArtOn: false, textArt: "", textArtFont: "", textArtFit: true, textArtMargin: 2, // fit: the font size makes the art fill the area, margin cells around it
+  // line art (the Lines tab): with linesArtOn the grid comes from the contour or ridge lines (see linesArtSource)
+  linesArtOn: false, linesArtLabel: "",
   // [ ] fill in custom text (see parseCustom)
   fillLevel: 0.5, // with ramp characters outside the brackets: cells darker than this get the fill
   fillSeed: 1, // order of [?random] items
@@ -340,6 +342,8 @@ function computeGrid(src, geo, s, cs) {
     L = Math.pow(clamp01(L), invG);
     toneLut[v] = fromBright ? L : 1 - L;
   }
+  // line art (the Lines tab, drawn on transparent): every line pixel is ink, whatever its colour
+  if (s.linesArtOn) toneLut.fill(1);
   const xb = new Int32Array(cols * 3 + 1), yb = new Int32Array(rows * 3 + 1);
   for (let i = 0; i <= cols * 3; i++) xb[i] = Math.min(src.w, Math.floor(Math.min(docW, (i * cellW) / 3) * sx));
   for (let i = 0; i <= rows * 3; i++) yb[i] = Math.min(src.h, Math.floor(Math.min(docH, (i * cellH) / 3) * sy));

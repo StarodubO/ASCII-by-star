@@ -49,14 +49,20 @@ const SLIDERS = {
   peaks: ["Spot heights", 0, 40, 1, (v) => (Math.round(v) ? Math.round(v) + "" : "off"), "Marks the highest points with ▲ and their height."],
   peakSpacing: ["Spot spacing", 100, 3000, 10, "px", "The least distance between two spot heights."],
   shadeRelief: ["Relief", 0.2, 20, 0.1, (v) => "×" + v.toFixed(1), "How steep the shading treats the slopes."],
+  ptSize: ["Size", 4, 200, 0.5, "px", "Height of the characters on the lines."],
+  ptSpacing: ["Spacing", 0.5, 4, 0.01, (v) => "×" + v.toFixed(2), "Space between the characters along a line (×1 = like monospaced text)."],
+  ptRoom: ["Room", 0, 3, 0.01, (v) => (v > 0 ? "×" + v.toFixed(2) : "off"), "No characters where the lines run closer together than this (× the size), so the text doesn't pile up on steep slopes."],
+  ptLineOpacity: ["Lines under", 0, 1, 0.01, pct, "The lines themselves under the text: 0 = only the text."],
 };
 const CONTOUR_ONLY = ["offset", "declutter", "indexEvery", "indexWidth"];
 const RIDGE_ONLY = ["rows", "amp"];
 // setting → swatch/hex id prefix
-const COLOURS = { lineColor: "lnLine", lineA: "lnLineA", lineMid: "lnLineMid", lineB: "lnLineB", indexColor: "lnIndex", bgColor: "lnBg", bgColor2: "lnBg2", bandA: "lnBandA", bandMid: "lnBandMid", bandB: "lnBandB", labelColor: "lnLabel" };
-const CHECKS = { lnInvert: "invert", lnEqualize: "equalize", lnFollow: "followShape", lnSeaFloor: "seaFloor", lnRidgeLocal: "ridgeLocal", lnLineMidOn: "lineMidOn", lnIndexColorOn: "indexColorOn", lnBandMidOn: "bandMidOn", lnLabelsOn: "labelsOn", lnLabelUphill: "labelUphill", lnLabelGap: "labelGap", lnLabelColorOn: "labelColorOn" };
+const COLOURS = { lineColor: "lnLine", lineA: "lnLineA", lineMid: "lnLineMid", lineB: "lnLineB", indexColor: "lnIndex", bgColor: "lnBg", bgColor2: "lnBg2", bandA: "lnBandA", bandMid: "lnBandMid", bandB: "lnBandB", labelColor: "lnLabel", ptMsgColor: "lnPtMsg" };
+const CHECKS = { lnInvert: "invert", lnEqualize: "equalize", lnFollow: "followShape", lnSeaFloor: "seaFloor", lnRidgeLocal: "ridgeLocal", lnLineMidOn: "lineMidOn", lnIndexColorOn: "indexColorOn", lnBandMidOn: "bandMidOn", lnLabelsOn: "labelsOn", lnLabelUphill: "labelUphill", lnLabelGap: "labelGap", lnLabelColorOn: "labelColorOn", lnTextOn: "textOn", lnPtRotate: "ptRotate", lnPtVertical: "ptVertical", lnPtReadable: "ptReadable", lnPtMsgColorOn: "ptMsgColorOn" };
 // The picture's own settings: where the height comes from. Presets and Randomize leave them alone.
 const PICTURE_KEYS = ["heightFrom", "heightLayer", "mapPlace", "mapLat", "mapLon", "mapName", "mapWidthKm", "seaFloor", "mapInterval", "invert", "equalize", "followShape"];
+// The text on the lines: kept by looks (and Randomize) that don't set it.
+const TEXT_KEYS = Object.keys(Lines.DEFAULTS).filter((k) => k === "textOn" || k === "textMode" || /^pt[A-Z]/.test(k));
 // Colour sets for Randomize: background, line, gradient start / middle / end
 const PALETTES = [
   ["#f6f1e3", "#5a3a1e", "#5e8c61", "#e9dfb4", "#f8f4ee"], ["#ffffff", "#111111", "#1b3a4b", "#c1666b", "#e8c170"],
@@ -65,7 +71,7 @@ const PALETTES = [
   ["#f1faee", "#1d3557", "#1d3557", "#457b9d", "#a8dadc"], ["#000000", "#ffffff", "#264653", "#e9c46a", "#e76f51"],
   ["#eae2b7", "#3d405b", "#3d405b", "#81b29a", "#f2cc8f"], ["#1a1a1a", "#ff6b35", "#004e89", "#ff6b35", "#f7c59f"],
 ];
-const SELECTS = { lnStyle: "style", lnHeightFrom: "heightFrom", lnLineFrom: "lineFrom", lnBgMode: "bgMode", lnBands: "bands", lnLabelUnits: "labelUnits" };
+const SELECTS = { lnStyle: "style", lnHeightFrom: "heightFrom", lnLineFrom: "lineFrom", lnBgMode: "bgMode", lnBands: "bands", lnLabelUnits: "labelUnits", lnTextMode: "textMode", lnPtWhich: "ptWhich" };
 
 module.exports = function setupLines(h) {
   const { $, loadJSON, saveJSON, errMsg, createLayer, bitDepth, isGray, checkDoc, askColor, selectLayer, docBaseName } = h;
@@ -93,7 +99,13 @@ module.exports = function setupLines(h) {
     onAvail: (can) => { $("lnUndo").disabled = !can; },
   });
   const save = () => { saveJSON("gf:lines:last", L); hist.note(); };
-  const atlas = () => (h.baseAtlas ? h.baseAtlas() : null);
+  // the glyphs: the built-in atlas, or one that also has the characters typed for the text on the lines
+  let textAtlas = null;
+  const atlas = () => (L.textOn && textAtlas) || (h.baseAtlas ? h.baseAtlas() : null);
+  async function readyText() { // outside executeAsModal: may render the font in Photoshop
+    if (!L.textOn || !h.atlasFor) return;
+    try { textAtlas = await h.atlasFor(Lines.textChars(L)); } catch (e) { console.error(e); textAtlas = null; }
+  }
   const live = createLive({ btn: $("lnLive"), label: "Line art", status, errMsg });
   const isGroup = (l) => l && (l.kind === constants.LayerKind.GROUP || String(l.kind) === "group");
   const isOurs = (l) => l && !isGroup(l) && OUT_RE.test(String(l.name));
@@ -225,6 +237,7 @@ module.exports = function setupLines(h) {
       finally { busy = false; }
     }
     const heights = L.heightFrom === "map" ? await mapGrid(frame) : null;
+    await readyText();
     const t0 = Date.now(), F = fieldFor(readKey, frame, heights);
     if (!pv || pv.srcKey !== srcKey) viewer.setCentre(frame.w / 2, frame.h / 2);
     pv = { doc, src, srcKey, frame, F, prepMs: Date.now() - t0 };
@@ -264,7 +277,7 @@ module.exports = function setupLines(h) {
   // The preview of frame rect `rect` at scale z, as RGB (over the source, as the layer would sit above it).
   async function renderRegion(rect, z) {
     if (!pv) return null;
-    const t0 = Date.now(), px = Lines.render(pv.F, L, rect, z, h.baseAtlas && h.baseAtlas()), W = Math.max(1, Math.round(rect.w * z)), H = Math.max(1, Math.round(rect.h * z));
+    const t0 = Date.now(), px = Lines.render(pv.F, L, rect, z, atlas()), W = Math.max(1, Math.round(rect.w * z)), H = Math.max(1, Math.round(rect.h * z));
     const rgb = Lines.composite(px, Lines.sourceRGB(pv.F, rect, z), W * H);
     status(`${L.heightFrom === "map" ? mapLabel(pv.F) : pv.src.layerId == null ? "Visible image" : "“" + pv.src.name + "”"}${L.heightFrom === "layer" ? " · height from a layer" : ""} · ${Date.now() - t0 + pv.prepMs} ms`);
     return { rgb, w: W, h: H };
@@ -289,6 +302,7 @@ module.exports = function setupLines(h) {
     if (L.heightFrom === "map") { // loaded outside executeAsModal: it waits on the network
       try { heights = await mapGrid(await frameOf(doc, resolveSource(doc).layerId, artboardPick())); } catch (e) { return status(errMsg(e), true); }
     }
+    await readyText();
     busy = true;
     try {
       await core.executeAsModal(async (ctx) => {
@@ -319,7 +333,7 @@ module.exports = function setupLines(h) {
             for (let ty = 0; ty < frame.h; ty += TILE) for (let tx = 0; tx < frame.w; tx += TILE) {
               status(`Drawing lines… tile ${++k}/${nT}`);
               const tw = Math.min(TILE, frame.w - tx), th = Math.min(TILE, frame.h - ty);
-              const px = Lines.render(F, L, { x: tx, y: ty, w: tw, h: th }, 1, h.baseAtlas && h.baseAtlas());
+              const px = Lines.render(F, L, { x: tx, y: ty, w: tw, h: th }, 1, atlas());
               const id = await makeImageData(convertOut(new Uint8Array(px.buffer), tw * th, depth, gray), tw, th, gray, profile);
               try { await imaging.putPixels({ documentID: doc.id, layerID: layer.id, imageData: id, replace: k === 1, targetBounds: { left: frame.x + tx, top: frame.y + ty }, commandName: "Line art" }); }
               finally { id.dispose(); }
@@ -334,6 +348,25 @@ module.exports = function setupLines(h) {
     } catch (e) {
       console.error(e); status(errMsg(e), true);
     } finally { busy = false; }
+  }
+
+  // ---------- export SVG ----------
+  async function exportSVG() {
+    const doc = activeDoc();
+    try { checkDoc(doc); } catch (e) { return status(e.message, true); }
+    clearTimeout(pvTimer);
+    while (pvRunning) await pvRunning;
+    try { if (!pv || pv.doc.id !== doc.id) await renderPreview(); } catch (e) { return status(errMsg(e), true); }
+    if (!pv) return;
+    try {
+      const { src, F } = pv;
+      const svg = Lines.toSVG(F, L, atlas());
+      const name = `${src.name.replace(OUT_RE, "").trim() || docBaseName(doc)}-line-art.svg`;
+      const file = await lfs.getFileForSaving(name, { types: ["svg"] });
+      if (!file) return;
+      await file.write(svg, { format: formats.utf8 });
+      status(`Saved ${file.name}`);
+    } catch (e) { console.error(e); status(errMsg(e), true); }
   }
 
   // ---------- editing ----------
@@ -398,13 +431,22 @@ module.exports = function setupLines(h) {
     show("lnMarkRows", L.labelsOn || L.peaks > 0);
     show("lnLabelColorRow", L.labelColorOn);
     show("lnUnitsRow", map);
+    show("lnTextBox", !ridges);
+    show("lnTextRows", L.textOn);
+    show("lnPtTextRows", L.textMode === "text");
+    show("lnPtWhichRow", !!L.indexEvery);
+    show("lnPtMsgColorRow", L.ptMsgColorOn);
+    if ($("lnPtText").value !== L.ptText) $("lnPtText").value = L.ptText;
+    refreshTextApply();
     showMapInfo();
     if (h.refreshFields) h.refreshFields();
   }
   // A look (built-in or saved): every setting from it, except the picture's own (PICTURE_KEYS).
-  function applyLook(st) {
+  // full (Reset): the text on the lines goes back to the look's too.
+  function applyLook(st, full) {
     const keep = {};
     for (const k of PICTURE_KEYS) keep[k] = L[k];
+    if (!full) for (const k of TEXT_KEYS) if (st[k] === undefined) keep[k] = L[k]; // the text on the lines stays unless the look has its own
     L = fresh(Object.assign({}, Lines.DEFAULTS, st, keep));
     sync(); schedule(0);
   }
@@ -434,6 +476,11 @@ module.exports = function setupLines(h) {
     applyLook(st);
     status("Randomized. ↶ Undo goes back.");
   }
+  function refreshTextApply() {
+    const pending = $("lnPtText").value !== L.ptText, b = $("lnPtApply"), label = pending ? "Apply text" : "Applied";
+    b.disabled = !pending; b.classList.toggle("primary", pending);
+    if (b.textContent !== label) b.textContent = label;
+  }
   function setColour(k, hex) { L[k] = hex; sync(); schedule(0); }
 
   function build() {
@@ -449,14 +496,33 @@ module.exports = function setupLines(h) {
     }
     makePresetBox({
       $, loadJSON, saveJSON, setSelect: h.setSelect, status, errMsg, lfs, formats,
-      ids: { select: "lnPreset", reset: "lnPresetReset", name: "lnPresetName", save: "lnPresetSave", del: "lnPresetDelete", exp: "lnPresetExport", imp: "lnPresetImport" },
+      ids: { select: "lnPreset", name: "lnPresetName", save: "lnPresetSave", del: "lnPresetDelete", exp: "lnPresetExport", imp: "lnPresetImport" },
       storeKey: "gf:linesPresets", builtIns: Lines.STYLES.map((x) => ({ id: x.id, name: x.name, settings: x.s })), builtInLabel: "Built-in looks",
       fileName: "ascii-by-star-line-looks.json", fileTag: "asciiByStarLines", current: lookOnly, apply: applyLook, fresh: lookFrom,
+    });
+    // Reset: the chosen look again, all of it (picking a look keeps the text on the lines)
+    $("lnPresetReset").addEventListener("click", () => {
+      const v = $("lnPreset").value, st = v.startsWith("b:") ? (Lines.STYLES.find((x) => x.id === v.slice(2)) || {}).s : v.startsWith("u:") ? (loadJSON("gf:linesPresets", [])[Number(v.slice(2))] || {}).settings : null;
+      applyLook(st || {}, true);
+      status("Back to the look.");
+    });
+    // Reset all: every setting to its default; only the map area (the Map tab's) stays
+    $("lnResetAll").addEventListener("click", () => {
+      const keep = {};
+      for (const k of ["mapPlace", "mapLat", "mapLon", "mapName", "mapWidthKm"]) keep[k] = L[k];
+      L = fresh(keep);
+      sync(); schedule(0);
+      status("Every setting is back to its default. ↶ Undo brings them back.");
     });
     $("lnRandom").addEventListener("click", randomize);
     $("lnUndo").addEventListener("click", () => { if (hist.undo()) status("Undone." + (hist.canUndo() ? "" : " Nothing more to undo.")); });
     for (const [id, k] of Object.entries(SELECTS)) $(id).addEventListener("change", () => { L[k] = $(id).value; sync(); schedule(0); });
     for (const [id, k] of Object.entries(CHECKS)) h.onCheck($(id), (v) => { L[k] = v; sync(); schedule(0); });
+    const applyText = () => { L.ptText = $("lnPtText").value; sync(); schedule(0); };
+    $("lnPtText").addEventListener("input", refreshTextApply);
+    $("lnPtText").addEventListener("keydown", (e) => { if (e.key === "Enter") setTimeout(applyText, 0); }); // Enter applies
+    $("lnPtApply").addEventListener("click", applyText);
+    $("lnPtReseed").addEventListener("click", () => { L.ptSeed = Math.floor(Math.random() * 99999) + 1; schedule(0); });
     $("lnMapEdit").addEventListener("click", () => h.showTab && h.showTab("map"));
     $("lnHeightLayer").addEventListener("change", () => { const v = $("lnHeightLayer").value; L.heightLayer = v ? Number(v) : null; schedule(0); });
     for (const [k, id] of Object.entries(COLOURS)) {
@@ -478,6 +544,14 @@ module.exports = function setupLines(h) {
     });
     $("lnApply").addEventListener("click", () => apply(false));
     $("lnLive").addEventListener("click", toggleLive);
+    $("lnUse").addEventListener("click", () => {
+      if (!pv || !pv.F) return status("Wait for the preview first.", true);
+      const label = L.style === "ridges"
+        ? `Ridge lines (${Math.round(L.rows || 25)} rows)`
+        : `Contour lines (${Math.round(L.levels || 40)} lines)`;
+      if (h.useLines) h.useLines({ label });
+    });
+    $("lnExportSvg").addEventListener("click", exportSVG);
     $("lnUpdate").addEventListener("click", () => apply(true));
     $("lnStopEdit").addEventListener("click", stopEditing);
     $("lnLoad").addEventListener("click", loadSelected);
@@ -487,7 +561,21 @@ module.exports = function setupLines(h) {
   build();
 
   return {
-    apply, preview: renderPreview, stopEditing, settings: () => L, editing: () => editing, // used by the Photoshop tests
+    apply, preview: renderPreview, stopEditing, exportSVG, settings: () => L, editing: () => editing, // used by the Photoshop tests
+    // "Use with effects": the ASCII tab reads the lines through these. readyForAscii (outside executeAsModal)
+    // makes sure the field is there for doc; asciiKey changes whenever the lines would look different.
+    async readyForAscii(doc) {
+      if (!pv || !pv.F || pv.doc.id !== doc.id) { clearTimeout(pvTimer); while (pvRunning) await pvRunning; await renderPreview(); }
+      return !!(pv && pv.F && pv.doc.id === doc.id);
+    },
+    asciiKey: () => (pv && pv.F ? [pv.srcKey, field && field.key, JSON.stringify(L)].join("|") : ""),
+    // The lines over ASCII frame `frame` (document px) at scale z, on transparent: {data RGBA, w, h}.
+    renderForAscii(frame, z) {
+      if (!pv || !pv.F) return null;
+      const s = Object.assign({}, L, { bgMode: "transparent" }), rect = { x: frame.x - pv.frame.x, y: frame.y - pv.frame.y, w: frame.w, h: frame.h };
+      const px = Lines.render(pv.F, s, rect, z, atlas());
+      return { data: new Uint8Array(px.buffer, px.byteOffset, px.byteLength), w: Math.max(1, Math.round(frame.w * z)), h: Math.max(1, Math.round(frame.h * z)) };
+    },
     useLook, randomize, undo: () => hist.undo(), toggleLive, live: () => live,
     relayout: () => viewer && viewer.relayout(),
     get viewer() { return viewer; },

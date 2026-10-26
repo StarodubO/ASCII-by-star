@@ -4,6 +4,7 @@
 // smoothed height field; render() draws any document rect of the frame at any scale from it. Every pixel is
 // computed from document coordinates alone, so tiles, strips and previews match exactly.
 "use strict";
+const Engine = require("./engine.js"); // the Custom text syntax (parseCustom) for text on the lines
 
 const REF = 3000; // sizes are px on a 3000 px long side
 const ANALYSIS = 1600; // long side of the height field
@@ -64,6 +65,20 @@ const DEFAULTS = {
   labelUnits: "m", // map heights: m | ft
   peaks: 0, // spot heights: how many of the highest points get a ▲ and their height
   peakSpacing: 500, // px: the least distance between two spot heights
+  // ---- text on the lines (contours) ----
+  textOn: false, // write characters along the contour lines (see pathGlyphs)
+  textMode: "text", // text = ptText along each line, turned with it | direction = - / | \ from the line's direction, upright
+  ptText: "%h m · ", // Custom text syntax: [A|B] items, [?A|B] at random, {msg} / {msg*N} hidden messages; %h = the line's height
+  ptSize: 28, // px: height of the characters
+  ptSpacing: 1, // × the character width
+  ptWhich: "all", // all | index | others: the lines that get text (the rest stay lines)
+  ptLineOpacity: 0, // the lines under the text (0 = text only)
+  ptRotate: true, // the characters turn with the line (off: upright)
+  ptVertical: false, // vertical type: the characters stand across the line, one below the other along it
+  ptReadable: true, // the text reads left to right (off: the tops face uphill)
+  ptRoom: 0.8, // × size: no characters where the lines are closer together than this (0 = everywhere)
+  ptSeed: 1, // [?random] items and where the {messages} go
+  ptMsgColorOn: true, ptMsgColor: "#e63946", // the {messages}' own colour (off: the line's)
 };
 
 const STYLES = [
@@ -290,6 +305,7 @@ function render(F, s, rect, z, atlas) {
   }
   if (s.style === "ridges") renderRidges(F, s, c, rect, z, W, Hh, out);
   else renderContours(F, s, c, rect, z, W, Hh, out);
+  if (atlas && s.textOn && s.style !== "ridges") drawPathText(F, s, c, atlas, rect, z, W, Hh, out);
   if (c.marks.length) drawMarks(F, s, c, atlas, rect, z, W, Hh, out);
   if (s.followShape && !F.metres) { // nothing where the source is transparent
     const k = F.k;
@@ -316,7 +332,7 @@ function levelsOf(F, s) {
 function renderContours(F, s, c, rect, z, W, Hh, out) {
   const k = F.k, { n, base: f0 } = levelsOf(F, s), every = Math.round(s.indexEvery) | 0, gapMin = s.declutter * c.pxOut;
   const band = [0, 0, 0], grad = (n * k) / z; // |∇f| in output px = |∇H| per analysis px × grad
-  const shading = s.shade > 0, L = c.light, opaque = s.bgMode !== "transparent";
+  const shading = s.shade > 0, L = c.light, opaque = s.bgMode !== "transparent", textLines = s.textOn ? textOnLine(s) : null;
   for (let j = 0; j < Hh; j++) {
     const y = rect.y + (j + 0.5) / z, ay = y * k;
     for (let i = 0; i < W; i++) {
@@ -346,6 +362,7 @@ function renderContours(F, s, c, rect, z, W, Hh, out) {
       let cov = coverage(d, wpx) * s.lineOpacity;
       if (c.gaps.length) cov *= 1 - gapAt(c.gaps, x, y, z);
       if (gapMin > 0 && !isIndex) cov *= clamp01((1 / g - gapMin * 0.6) / (gapMin * 0.4)); // crowded lines fade out
+      if (textLines && textLines(isIndex)) cov *= s.ptLineOpacity; // the text draws these lines
       if (cov <= 0) continue;
       over(out, o, lineColour(F, s, c, x, y, ax, ay, h, isIndex), cov);
     }
@@ -550,6 +567,227 @@ function sampleGlyph(atlas, g, x, y) {
   return (at(ix, iy) * (1 - fx) + at(ix + 1, iy) * fx) * (1 - fy) + (at(ix, iy + 1) * (1 - fx) + at(ix + 1, iy + 1) * fx) * fy;
 }
 
+// ---------- text on the lines ----------
+// With textOn the contour lines are written with characters: each line is traced as a polyline (marching
+// squares), and the characters are laid along it at an even spacing, turned with the line. The layout is made
+// once per field and settings (cached on F, document px) and drawn per pixel, so tiles and previews match.
+
+const hashT = (seed, a, b) => {
+  let h = (Math.imul(seed | 0, 0x9e3779b1) ^ Math.imul(a | 0, 0x85ebca77) ^ Math.imul(b | 0, 0xc2b2ae3d)) | 0;
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d); h = Math.imul(h ^ (h >>> 12), 0x297a2d39); h ^= h >>> 15;
+  return (h >>> 0) / 4294967296;
+};
+// Which lines get text: (isIndex) → bool.
+function textOnLine(s) {
+  const index = (Math.round(s.indexEvery) | 0) > 0;
+  if (s.ptWhich === "index" && index) return (isIndex) => isIndex;
+  if (s.ptWhich === "others" && index) return (isIndex) => !isIndex;
+  return () => true;
+}
+// The contour lines as polylines in document px: [{lv, isIndex, pts: [x0, y0, x1, y1, …], closed}]. Cached on F.
+function contourPolylines(F, s) {
+  const { n, base } = levelsOf(F, s), every = Math.round(s.indexEvery) | 0, key = [n, base, s.offset, every].join("|");
+  if (F._polys && F._polys.key === key) return F._polys.list;
+  const list = [], k = F.k, segs = contourSegments(F, n, base + s.offset);
+  for (const lv of Array.from(segs.keys()).sort((a, b) => a - b)) {
+    const isIndex = every > 0 && ((lv % every) + every) % every === 0;
+    for (const poly of stitchContours(segs.get(lv))) {
+      if (poly.length < 2) continue;
+      const a = poly[0], b = poly[poly.length - 1], closed = poly.length > 3 && Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6;
+      const m = closed ? poly.length - 1 : poly.length, pts = new Float64Array(m * 2);
+      for (let i = 0; i < m; i++) { pts[i * 2] = (poly[i][0] + 0.5) / k; pts[i * 2 + 1] = (poly[i][1] + 0.5) / k; }
+      list.push({ lv, isIndex, pts, closed });
+    }
+  }
+  F._polys = { key, list };
+  return list;
+}
+// Arc-length walker over a polyline: at(t) → [x, y] (t wraps on a closed line, clamps on an open one).
+function walker(pts, closed) {
+  const m = pts.length / 2, segN = closed ? m : m - 1, cum = new Float64Array(segN + 1);
+  for (let i = 0; i < segN; i++) { const j = (i + 1) % m; cum[i + 1] = cum[i] + Math.hypot(pts[j * 2] - pts[i * 2], pts[j * 2 + 1] - pts[i * 2 + 1]); }
+  const len = cum[segN];
+  const at = (t, o) => {
+    if (closed) t = ((t % len) + len) % len; else t = t < 0 ? 0 : t > len ? len : t;
+    let lo = 0, hi = segN - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (cum[mid] <= t) lo = mid; else hi = mid - 1; }
+    const i = lo, j = (i + 1) % m, d = cum[i + 1] - cum[i], f = d > 0 ? (t - cum[i]) / d : 0;
+    o[0] = pts[i * 2] + (pts[j * 2] - pts[i * 2]) * f; o[1] = pts[i * 2 + 1] + (pts[j * 2 + 1] - pts[i * 2 + 1]) * f;
+    return o;
+  };
+  return { len, at };
+}
+// The characters the text needs (for an atlas that has them all).
+function textChars(s) {
+  if (!s.textOn) return "";
+  if (s.textMode === "direction") return "-\\|/";
+  return String(s.ptText || "").replace(/%h/g, "") + "0123456789-";
+}
+// What one line writes: next() → a character (" " = a gap) and whether it belongs to a {message}.
+// Plain text repeats; with a [ ] fill the plain text comes once at the start, then the fill items repeat.
+function lineStream(spec, heightStr, seed, lineNo, msgs) {
+  const sub = (t) => t.replace(/%h/g, heightStr);
+  let plain = Array.from(sub(spec.text));
+  if (plain.length && !spec.fill && plain[plain.length - 1] !== " ") plain.push(" ");
+  const items = spec.fill ? spec.fill.items.map((t) => Array.from(sub(t)).concat(spec.fill.sep ? [" "] : [])) : null;
+  let slot = 0, q = 0, queue = [], n = 0, inPlain = true;
+  return () => {
+    const m = msgs && msgs.find((mm) => slot >= mm.at && slot < mm.at + mm.chars.length);
+    if (m) { const ch = m.chars[slot - m.at]; slot++; return [ch, true]; }
+    slot++;
+    if (inPlain && plain.length) {
+      if (q < plain.length) return [plain[q++], false];
+      if (items) { inPlain = false; q = 0; } else { q = 1; return [plain[0], false]; }
+    }
+    if (!items) return [" ", false];
+    if (q >= queue.length) { queue = spec.fill.random ? items[Math.floor(hashT(seed, lineNo * 7919 + n, 11) * items.length)] : items[n % items.length]; n++; q = 0; }
+    return [queue[q++], false];
+  };
+}
+// The layout: every character's centre (x, y, document px), direction (cos, sin), glyph, height and flags
+// (1 index line, 2 message), plus buckets for finding the ones near a rect. Cached on F.
+function pathGlyphs(F, s, atlas) {
+  const polys = contourPolylines(F, s);
+  const key = [F._polys.key, s.textMode, s.ptText, s.ptSize, s.ptSpacing, s.ptWhich, s.ptRotate, s.ptVertical, s.ptReadable, s.ptRoom, s.ptSeed, s.labelUnits,
+    s.labelGap, s.labelsOn, s.labelEvery, s.labelSpacing, s.labelSize, s.labelUphill, s.peaks, s.peakSpacing].join("|");
+  if (F._pt && F._pt.key === key && F._pt.atlas === atlas) return F._pt;
+  const gm = glyphMetrics(atlas), docPx = F.docLong / REF, size = Math.max(1, s.ptSize) * docPx, sc = size / gm.cap;
+  const vert = !!s.ptVertical && s.textMode !== "direction"; // vertical type: stacked at the cap height plus some leading
+  const adv = Math.max(0.2, s.ptSpacing) * (vert ? gm.cap * 1.35 : gm.adv) * sc, which = textOnLine(s), dir = s.textMode === "direction", k = F.k;
+  const { n } = levelsOf(F, s), room = s.ptRoom * size, gaps = s.labelGap ? (s.labelsOn || s.peaks > 0 ? placeMarks(F, s, atlas) : []) : [];
+  const spec = dir ? null : Engine.parseCustom(s.ptText);
+  const X = [], Y = [], C = [], S = [], G = [], Hs = [], FL = [], p = [0, 0], q0 = [0, 0], q1 = [0, 0];
+  const lines = polys.map((P, i) => ({ P, i, w: which(P.isIndex) ? walker(P.pts, P.closed) : null }));
+  // 1. the slots of every line: centre, direction and whether a character can show there
+  for (const l of lines) {
+    const { P, w } = l;
+    l.slots = [];
+    if (!w || w.len < adv * 2) continue;
+    // runs of the line and which way the text goes along each: [t0, t1, sign]. Readable: the text always runs
+    // left to right and turns round where the line does (with some hysteresis); uphill: one way, tops uphill.
+    const runs = [];
+    if (s.ptReadable || dir) {
+      const step = adv / 2, N = Math.max(1, Math.floor(w.len / step));
+      let sign = 0, from = 0;
+      for (let a = 0; a <= N; a++) {
+        const d = Math.min(w.len, a * step);
+        w.at(d - adv / 2, q0); w.at(d + adv / 2, q1);
+        const tx = q1[0] - q0[0], ty = q1[1] - q0[1], tl = Math.hypot(tx, ty) || 1, cx = tx / tl, cy = ty / tl;
+        // horizontal text runs to the right; vertical text downwards, tilted a little to the right, so lines
+        // that run across the picture all stack the same way
+        const along = vert ? cx * 0.5 + cy * 0.866 : cx, across = vert ? cy * 0.5 - cx * 0.866 : cy;
+        const want = sign === 0 ? (Math.abs(along) > 0.2 ? Math.sign(along) : across > 0 ? -1 : 1) : sign > 0 ? (along < -0.35 ? -1 : 1) : (along > 0.35 ? 1 : -1);
+        if (sign === 0) sign = want;
+        else if (want !== sign) { runs.push([from, d, sign]); from = d; sign = want; }
+      }
+      runs.push([from, w.len, sign]);
+      if (P.closed && runs.length > 1 && runs[0][2] === runs[runs.length - 1][2]) { const last = runs.pop(); runs[0][0] = last[0] - w.len; } // join across the start
+    } else {
+      w.at(w.len / 2, p); w.at(w.len / 2 + 1, q1);
+      const tx = q1[0] - p[0], ty = q1[1] - p[1], ax = p[0] * k, ay = p[1] * k;
+      runs.push([0, w.len, ty * bilinear(F.gx, F.w, F.h, ax, ay) - tx * bilinear(F.gy, F.w, F.h, ax, ay) < 0 ? -1 : 1]); // up = (ty, −tx) should face +f
+    }
+    for (const [t0, t1, sign] of runs) {
+      const slots = Math.floor((t1 - t0) / adv);
+      if (slots < 1) continue;
+      const start = t0 + (t1 - t0 - slots * adv) / 2 + adv / 2;
+      for (let u = 0; u < slots; u++) {
+        const d = sign > 0 ? start + u * adv : start + (slots - 1 - u) * adv;
+        w.at(d, p); w.at(d - adv / 2, q0); w.at(d + adv / 2, q1);
+        let tx = (q1[0] - q0[0]) * sign, ty = (q1[1] - q0[1]) * sign;
+        const tl = Math.hypot(tx, ty), ax = p[0] * k, ay = p[1] * k;
+        let ok = tl > 1e-9;
+        if (ok) { tx /= tl; ty /= tl; }
+        if (ok && room > 0) { const g = Math.hypot(bilinear(F.gx, F.w, F.h, ax, ay), bilinear(F.gy, F.w, F.h, ax, ay)) * n * k; if (g > 0 && 1 / g < room) ok = false; }
+        if (ok && gaps.length && gapAt(gaps, p[0], p[1], 1e9) > 0) ok = false;
+        l.slots.push({ x: p[0], y: p[1], tx, ty, ok, first: u === 0 });
+      }
+    }
+  }
+  // 2. where the {messages} go: hashed onto stretches of slots that all show (within one run), at a hashed place
+  const msgsOf = new Map();
+  if (spec && spec.messages.length) {
+    let r = 0;
+    for (const msg of spec.messages) {
+      const chars = Array.from(msg.text), need = chars.length;
+      const fits = []; // [line, first slot of a free stretch, its length]
+      for (const l of lines) {
+        let a = -1; // start of the current stretch
+        for (let j = 0; j <= l.slots.length; j++) {
+          const sl = l.slots[j];
+          if (a >= 0 && (!sl || !sl.ok || sl.first)) { if (j - a >= need) fits.push([l, a, j - a]); a = -1; }
+          if (sl && sl.ok && a < 0) a = j;
+        }
+      }
+      for (let c = 0; c < msg.count && fits.length; c++, r++) {
+        const [l, a, len] = fits[Math.floor(hashT(s.ptSeed, r, 21) * fits.length)], at = a + Math.floor(hashT(s.ptSeed, r, 22) * (len - need + 1));
+        if (!msgsOf.has(l.i)) msgsOf.set(l.i, []);
+        msgsOf.get(l.i).push({ at, chars });
+      }
+    }
+  }
+  // 3. the characters: each line's text runs through all its slots; the ones that show become glyphs
+  for (const l of lines) {
+    if (!l.slots.length) continue;
+    const next = dir ? null : lineStream(spec, heightText(F, s, l.P.lv), s.ptSeed, l.i, msgsOf.get(l.i));
+    for (const sl of l.slots) {
+      const [ch, isMsg] = dir ? ["", false] : next();
+      if (!sl.ok) continue;
+      let c = ch;
+      if (dir) { let a = Math.atan2(sl.ty, sl.tx); if (a < 0) a += Math.PI; c = a < Math.PI / 8 || a >= (7 * Math.PI) / 8 ? "-" : a < (3 * Math.PI) / 8 ? "\\" : a < (5 * Math.PI) / 8 ? "|" : "/"; }
+      if (c === " ") continue;
+      const g = atlas.index.get(c);
+      if (g === undefined) continue;
+      const upright = dir || !s.ptRotate;
+      // the glyph's x axis (cos, sin): along the line, or for vertical type across it (its down then runs along the line)
+      X.push(sl.x); Y.push(sl.y); C.push(upright ? 1 : vert ? sl.ty : sl.tx); S.push(upright ? 0 : vert ? -sl.tx : sl.ty); G.push(g);
+      Hs.push(cubic(F.H, F.w, F.h, sl.x * k, sl.y * k)); FL.push((l.P.isIndex ? 1 : 0) | (isMsg ? 2 : 0));
+    }
+  }
+  // buckets by centre
+  const B = Math.max(8, size * 4), bw = Math.ceil(F.fw / B) + 1, bh = Math.ceil(F.fh / B) + 1, buckets = new Map();
+  for (let q = 0; q < X.length; q++) {
+    const bk = Math.min(bh - 1, Math.max(0, Math.floor(Y[q] / B))) * bw + Math.min(bw - 1, Math.max(0, Math.floor(X[q] / B)));
+    let a = buckets.get(bk); if (!a) buckets.set(bk, (a = [])); a.push(q);
+  }
+  F._pt = { key, atlas, n: X.length, X, Y, C, S, G, Hs, FL, sc, size, B, bw, bh, buckets, r: (Math.hypot(atlas.cellW, atlas.cellH) / 2) * sc };
+  return F._pt;
+}
+// The characters whose box can touch rect (document px), in layout order.
+function pathGlyphsIn(P, rect) {
+  const r = P.r + 1, out = [];
+  const bx0 = Math.max(0, Math.floor((rect.x - r) / P.B)), bx1 = Math.min(P.bw - 1, Math.floor((rect.x + rect.w + r) / P.B));
+  const by0 = Math.max(0, Math.floor((rect.y - r) / P.B)), by1 = Math.min(P.bh - 1, Math.floor((rect.y + rect.h + r) / P.B));
+  for (let by = by0; by <= by1; by++) for (let bx = bx0; bx <= bx1; bx++) {
+    const a = P.buckets.get(by * P.bw + bx);
+    if (a) for (const q of a) if (P.X[q] + r > rect.x && P.X[q] - r < rect.x + rect.w && P.Y[q] + r > rect.y && P.Y[q] - r < rect.y + rect.h) out.push(q);
+  }
+  return out.sort((a, b) => a - b);
+}
+function drawPathText(F, s, c, atlas, rect, z, W, Hh, out) {
+  const P = pathGlyphs(F, s, atlas);
+  if (!P.n) return;
+  const cw = atlas.cellW, gm = glyphMetrics(atlas), vc = gm.top + gm.cap / 2, sc = P.sc, k = F.k;
+  const ss = Math.min(4, Math.max(1, Math.ceil(1 / (sc * z) / 1.5))), inv = 1 / (ss * ss * 255); // supersampling when the characters are small
+  const msgCol = s.ptMsgColorOn ? hexToRgb(s.ptMsgColor) : null, col = [0, 0, 0], r = P.r + 1 / z;
+  for (const q of pathGlyphsIn(P, rect)) {
+    const x0 = P.X[q], y0 = P.Y[q], co = P.C[q], si = P.S[q], g = P.G[q], fl = P.FL[q];
+    const colour = fl & 2 && msgCol ? msgCol : lineColour(F, s, c, x0, y0, x0 * k, y0 * k, P.Hs[q], !!(fl & 1));
+    col[0] = colour[0]; col[1] = colour[1]; col[2] = colour[2];
+    const i0 = Math.max(0, Math.floor((x0 - r - rect.x) * z)), i1 = Math.min(W - 1, Math.ceil((x0 + r - rect.x) * z));
+    const j0 = Math.max(0, Math.floor((y0 - r - rect.y) * z)), j1 = Math.min(Hh - 1, Math.ceil((y0 + r - rect.y) * z));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      let acc = 0;
+      for (let sy = 0; sy < ss; sy++) for (let sx = 0; sx < ss; sx++) {
+        const dx = rect.x + (i + (sx + 0.5) / ss) / z - x0, dy = rect.y + (j + (sy + 0.5) / ss) / z - y0;
+        const gx = (dx * co + dy * si) / sc + cw / 2, gy = (dy * co - dx * si) / sc + vc;
+        if (gx > -1 && gx < cw + 1 && gy > -1 && gy < atlas.cellH + 1) acc += sampleGlyph(atlas, g, gx, gy);
+      }
+      if (acc > 0) over(out, (j * W + i) * 4, col, Math.min(1, acc * inv) * s.lineOpacity);
+    }
+  }
+}
+
 // RGB of RGBA `px` over RGB `under` (both n pixels), for the preview.
 function composite(px, under, n) {
   const out = new Uint8Array(n * 3);
@@ -570,5 +808,228 @@ function sourceRGB(F, rect, z) {
   return out;
 }
 
-const Lines = { REF, ANALYSIS, SETTINGS_VERSION, DEFAULTS, STYLES, migrate, analysisZ, levelsOf, prepare, render, composite, sourceRGB, hexToRgb };
+const rgbToHex = (r, g, b) => "#" + ((1 << 24) | (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b)).toString(16).slice(1);
+
+function simplifyPoly(poly, tol) {
+  if (poly.length <= 2) return poly;
+  const out = [poly[0]];
+  for (let i = 1; i < poly.length - 1; i++) {
+    const prev = out[out.length - 1], curr = poly[i], next = poly[i + 1];
+    const dx = next[0] - prev[0], dy = next[1] - prev[1], len = Math.hypot(dx, dy);
+    if (len < 1e-4) continue;
+    const dist = Math.abs((curr[0] - prev[0]) * dy - (curr[1] - prev[1]) * dx) / len;
+    if (dist >= tol) out.push(curr);
+  }
+  out.push(poly[poly.length - 1]);
+  return out;
+}
+
+function stitchContours(segs) {
+  if (!segs.length) return [];
+  const lines = [], Q = 100;
+  const key = (p) => Math.round(p[0] * Q) * 4194304 + Math.round(p[1] * Q); // exact up to 41943 px
+  const startMap = new Map(), endMap = new Map();
+  const unvis = new Uint8Array(segs.length / 2);
+  unvis.fill(1);
+  for (let i = 0; i < segs.length; i += 2) {
+    const si = i >> 1, sk = key(segs[i]), ek = key(segs[i + 1]);
+    let sl = startMap.get(sk); if (!sl) startMap.set(sk, (sl = [])); sl.push(si);
+    let el = endMap.get(ek); if (!el) endMap.set(ek, (el = [])); el.push(si);
+  }
+  for (let i = 0; i < unvis.length; i++) {
+    if (!unvis[i]) continue;
+    unvis[i] = 0;
+    const poly = [segs[i * 2], segs[i * 2 + 1]];
+    let curr = poly[poly.length - 1];
+    while (true) {
+      const ck = key(curr), nexts = startMap.get(ck);
+      let found = false;
+      if (nexts) {
+        for (let j = 0; j < nexts.length; j++) {
+          const idx = nexts[j];
+          if (unvis[idx]) { unvis[idx] = 0; curr = segs[idx * 2 + 1]; poly.push(curr); found = true; break; }
+        }
+      }
+      if (!found) {
+        const revs = endMap.get(ck);
+        if (revs) {
+          for (let j = 0; j < revs.length; j++) {
+            const idx = revs[j];
+            if (unvis[idx]) { unvis[idx] = 0; curr = segs[idx * 2]; poly.push(curr); found = true; break; }
+          }
+        }
+      }
+      if (!found) break;
+    }
+    curr = poly[0];
+    while (true) {
+      const ck = key(curr), prevs = endMap.get(ck);
+      let found = false;
+      if (prevs) {
+        for (let j = 0; j < prevs.length; j++) {
+          const idx = prevs[j];
+          if (unvis[idx]) { unvis[idx] = 0; curr = segs[idx * 2]; poly.unshift(curr); found = true; break; }
+        }
+      }
+      if (!found) {
+        const revs = startMap.get(ck);
+        if (revs) {
+          for (let j = 0; j < revs.length; j++) {
+            const idx = revs[j];
+            if (unvis[idx]) { unvis[idx] = 0; curr = segs[idx * 2 + 1]; poly.unshift(curr); found = true; break; }
+          }
+        }
+      }
+      if (!found) break;
+    }
+    lines.push(poly);
+  }
+  return lines;
+}
+
+// Marching squares on the height field: line segments per level (f = H·n + f0 whole), as point pairs in analysis
+// grid coordinates (sample (x, y) of F.H sits at analysis px x + 0.5, y + 0.5).
+function contourSegments(F, n, f0) {
+  const w = F.w, h = F.h, Hfield = F.H, segsByLevel = new Map();
+
+  for (let y = 0; y < h - 1; y++) {
+    for (let x = 0; x < w - 1; x++) {
+      const v0 = Hfield[y * w + x], v1 = Hfield[y * w + x + 1], v2 = Hfield[(y + 1) * w + x + 1], v3 = Hfield[(y + 1) * w + x];
+      const minV = Math.min(v0, v1, v2, v3), maxV = Math.max(v0, v1, v2, v3);
+      const minL = Math.ceil(minV * n + f0), maxL = Math.floor(maxV * n + f0);
+      if (minL > maxL) continue;
+
+      for (let lv = minL; lv <= maxL; lv++) {
+        const th = (lv - f0) / n;
+        const code = (v0 >= th ? 1 : 0) | (v1 >= th ? 2 : 0) | (v2 >= th ? 4 : 0) | (v3 >= th ? 8 : 0);
+        if (code === 0 || code === 15) continue;
+        const pTop = [x + (th - v0) / (v1 - v0), y];
+        const pRight = [x + 1, y + (th - v1) / (v2 - v1)];
+        const pBot = [x + (th - v3) / (v2 - v3), y + 1];
+        const pLeft = [x, y + (th - v0) / (v3 - v0)];
+        let list = segsByLevel.get(lv);
+        if (!list) segsByLevel.set(lv, (list = []));
+        switch (code) {
+          case 1: case 14: list.push(pLeft, pTop); break;
+          case 2: case 13: list.push(pTop, pRight); break;
+          case 3: case 12: list.push(pLeft, pRight); break;
+          case 4: case 11: list.push(pRight, pBot); break;
+          case 5:
+            if ((v0 + v1 + v2 + v3) / 4 >= th) list.push(pLeft, pTop, pRight, pBot);
+            else list.push(pLeft, pBot, pTop, pRight);
+            break;
+          case 6: case 9: list.push(pTop, pBot); break;
+          case 7: case 8: list.push(pLeft, pBot); break;
+          case 10:
+            if ((v0 + v1 + v2 + v3) / 4 >= th) list.push(pTop, pRight, pLeft, pBot);
+            else list.push(pLeft, pTop, pRight, pBot);
+            break;
+        }
+      }
+    }
+  }
+  return segsByLevel;
+}
+
+// Exports the line art to an SVG vector string.
+function toSVG(F, s, atlas) {
+  const W = F.fw, H = F.fh, px = F.docLong / REF;
+  const out = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`];
+  if (s.bgMode !== "transparent") out.push(`<rect width="100%" height="100%" fill="${s.bgColor}"/>`);
+
+  const c = context(F, s, 1);
+
+  if (s.style === "ridges") {
+    const k = F.k, rows = Math.max(2, Math.round(s.rows)), sp = F.fh / (rows + 1);
+    const lift = s.amp * sp, R = rows + Math.ceil(Math.max(0, s.amp));
+    const bgFill = s.bgMode !== "transparent" ? s.bgColor : "none";
+    const wpx = (s.lineWidth * px).toFixed(1);
+    const op = s.lineOpacity < 1 ? ` stroke-opacity="${s.lineOpacity}"` : "";
+    const dx = Math.max(1, Math.round(W / 600));
+
+    out.push(`<g id="ridges">`);
+    for (let r = 0; r < R; r++) {
+      const by = (r + 1) * sp, floor = s.ridgeLocal ? rowFloor(F, by * k) : 0;
+      const pts = [];
+      for (let x = 0; x <= W; x += dx) {
+        const ax = x * k, ay = by * k;
+        const h = cubic(F.H, F.w, F.h, ax, ay);
+        const y = by - lift * (h - floor);
+        pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+      }
+      if (bgFill !== "none") out.push(`<polygon points="0,${H} ${pts.join(" ")} ${W},${H}" fill="${bgFill}"/>`);
+      out.push(`<polyline points="${pts.join(" ")}" fill="none" stroke="${s.lineColor}" stroke-width="${wpx}" stroke-linecap="round" stroke-linejoin="round"${op}/>`);
+    }
+    out.push(`</g>`);
+  } else {
+    // Contours
+    const k = F.k;
+    const { n, base } = levelsOf(F, s);
+    const offset = s.offset, every = Math.round(s.indexEvery) | 0;
+    const baseW = s.lineWidth * px;
+    const segsByLevel = contourSegments(F, n, base + offset);
+
+    out.push(`<g id="contours">`);
+    for (const [lv, segs] of segsByLevel) {
+      const polylines = stitchContours(segs);
+      const isIndex = every > 0 && ((lv % every) + every) % every === 0;
+      const lw = (isIndex ? baseW * s.indexWidth : baseW).toFixed(1);
+      let color = s.lineColor;
+      if (isIndex && s.indexColorOn) color = s.indexColor;
+      else if (s.lineFrom === "height") {
+        const th = (lv - base - offset) / n;
+        color = rgbToHex(...ramp(c.lineA, c.lineMid, c.lineB, th, c.tmp));
+      }
+      const dParts = [];
+      for (const poly of polylines) {
+        if (poly.length < 2) continue;
+        const sp = simplifyPoly(poly, 0.2);
+        let d = `M${((sp[0][0] + 0.5) / k).toFixed(1)} ${((sp[0][1] + 0.5) / k).toFixed(1)}`;
+        for (let i = 1; i < sp.length; i++) d += `L${((sp[i][0] + 0.5) / k).toFixed(1)} ${((sp[i][1] + 0.5) / k).toFixed(1)}`;
+        dParts.push(d);
+      }
+      const lineOp = s.lineOpacity * (s.textOn && textOnLine(s)(isIndex) ? s.ptLineOpacity : 1); // the text draws these lines
+      if (dParts.length && lineOp > 0) {
+        const op = lineOp < 1 ? ` stroke-opacity="${lineOp}"` : "";
+        out.push(`<path d="${dParts.join(" ")}" fill="none" stroke="${color}" stroke-width="${lw}" stroke-linecap="round" stroke-linejoin="round"${op}/>`);
+      }
+    }
+    out.push(`</g>`);
+
+    if (atlas && s.textOn) { // the text on the lines: one <text> per character, turned with the line
+      const P = pathGlyphs(F, s, atlas), esc = (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[ch] || ch);
+      const fs = (atlas.fontSize || atlas.cellH * 0.85) * P.sc, msgCol = s.ptMsgColorOn ? s.ptMsgColor : null, op = s.lineOpacity < 1 ? ` fill-opacity="${s.lineOpacity}"` : "";
+      out.push(`<g id="text" font-family="Menlo, Consolas, monospace" font-size="${fs.toFixed(1)}" text-anchor="middle" dominant-baseline="central"${op}>`);
+      for (let q = 0; q < P.n; q++) {
+        const x = P.X[q], y = P.Y[q], col = P.FL[q] & 2 && msgCol ? msgCol : rgbToHex(...lineColour(F, s, c, x, y, x * k, y * k, P.Hs[q], !!(P.FL[q] & 1)));
+        const deg = (Math.atan2(P.S[q], P.C[q]) * 180) / Math.PI, rot = Math.abs(deg) > 0.05 ? ` transform="rotate(${deg.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)})"` : "";
+        out.push(`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" fill="${col}"${rot}>${esc(atlas.chars[P.G[q]])}</text>`);
+      }
+      out.push(`</g>`);
+    }
+
+    if (atlas && (s.labelsOn || s.peaks > 0)) {
+      const marks = placeMarks(F, s, atlas);
+      if (marks.length) {
+        const col = s.labelColorOn ? s.labelColor : s.lineColor;
+        out.push(`<g id="labels">`);
+        for (const m of marks) {
+          const halo = s.labelGap && s.bgMode !== "transparent" ? ` stroke="${s.bgColor}" stroke-width="${(m.h * 0.35).toFixed(1)}" paint-order="stroke fill" stroke-linejoin="round"` : "";
+          if (m.kind === "peak") {
+            out.push(`<text x="${m.x.toFixed(1)}" y="${m.y.toFixed(1)}" text-anchor="middle" dominant-baseline="central" font-family="Menlo, Consolas, sans-serif" font-size="${m.h.toFixed(1)}" fill="${col}"${halo}>▲ ${m.text}</text>`);
+          } else {
+            const deg = (Math.atan2(m.ty, m.tx) * 180 / Math.PI).toFixed(1);
+            out.push(`<text x="${m.x.toFixed(1)}" y="${m.y.toFixed(1)}" text-anchor="middle" dominant-baseline="central" transform="rotate(${deg} ${m.x.toFixed(1)} ${m.y.toFixed(1)})" font-family="Menlo, Consolas, sans-serif" font-size="${m.h.toFixed(1)}" fill="${col}"${halo}>${m.text}</text>`);
+          }
+        }
+        out.push(`</g>`);
+      }
+    }
+  }
+
+  out.push("</svg>");
+  return out.join("\n");
+}
+
+const Lines = { REF, ANALYSIS, SETTINGS_VERSION, DEFAULTS, STYLES, migrate, analysisZ, levelsOf, prepare, render, composite, sourceRGB, hexToRgb, toSVG, textChars, pathGlyphs };
 if (typeof module !== "undefined") module.exports = Lines;

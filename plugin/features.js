@@ -241,11 +241,166 @@ function maskOf(P, s, cat, rect) {
 function counts(P, s) {
   const out = {};
   for (const c of CATS) out[c.id] = 0;
-  for (const it of P.items) for (const c of CATS) if (c.pick(it.f, Object.assign({}, s, { roadsMinor: true, riversStreams: true }))) out[c.id]++;
+  out.all = 0;
+  for (const it of P.items) {
+    if (it.box[2] < 0 || it.box[3] < 0 || it.box[0] > P.fw || it.box[1] > P.fh) continue; // (around the frame: the preview's bleed)
+    out.all++;
+    for (const c of CATS) if (c.pick(it.f, Object.assign({}, s, { roadsMinor: true, riversStreams: true }))) out[c.id]++;
+  }
   return out;
+}
+
+function partToPath(p, isFill) {
+  if (!p || p.length < 4) return "";
+  let d = `M${p[0].toFixed(1)} ${p[1].toFixed(1)}`;
+  for (let i = 2; i < p.length; i += 2) d += `L${p[i].toFixed(1)} ${p[i + 1].toFixed(1)}`;
+  if (isFill) d += "Z";
+  return d;
+}
+
+// Exports the map features to an SVG vector string.
+function toSVG(P, s) {
+  const W = P.fw, H = P.fh, px = P.docLong / REF, inFrame = { x: 0, y: 0, w: W, h: H };
+  const out = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`];
+  if (s.bgMode !== "transparent") out.push(`<rect width="100%" height="100%" fill="${s.bgColor}"/>`);
+
+  for (const c of CATS) {
+    if (!s[c.id + "On"]) continue;
+    if (c.kind === "fill") {
+      const paths = [];
+      for (const it of P.items) {
+        if (!c.pick(it.f, s) || !inRect(it, inFrame, 0)) continue;
+        for (const p of it.parts) {
+          const d = partToPath(p, true);
+          if (d) paths.push(d);
+        }
+      }
+      if (paths.length) {
+        const op = s[c.id + "Opacity"] < 1 ? ` fill-opacity="${s[c.id + "Opacity"]}"` : "";
+        out.push(`<g id="${c.id}" fill="${s[c.id + "Color"]}"${op} fill-rule="nonzero"><path d="${paths.join(" ")}"/></g>`);
+      }
+    } else if (c.id === "rivers") {
+      const byW = new Map();
+      for (const it of P.items) {
+        const k = c.pick(it.f, s);
+        if (!k || !inRect(it, inFrame, 2)) continue;
+        const w = (s.riversWidth * px * k).toFixed(1);
+        let list = byW.get(w);
+        if (!list) byW.set(w, (list = []));
+        for (const p of it.parts) {
+          const d = partToPath(p, false);
+          if (d) list.push(d);
+        }
+      }
+      if (byW.size) {
+        const op = s.riversOpacity < 1 ? ` stroke-opacity="${s.riversOpacity}"` : "";
+        out.push(`<g id="rivers" fill="none" stroke="${s.riversColor}" stroke-linecap="round" stroke-linejoin="round"${op}>`);
+        for (const [w, list] of byW) out.push(`<path d="${list.join(" ")}" stroke-width="${w}"/>`);
+        out.push("</g>");
+      }
+    } else if (c.id === "roads") {
+      if (s.roadsCasing) {
+        const byW = new Map();
+        for (const it of P.items) {
+          const k = c.pick(it.f, s);
+          if (!k) continue;
+          const isTunnel = it.f.brunnel === "tunnel";
+          if (isTunnel && s.roadsTunnels <= 0) continue;
+          const w = ((s.roadsWidth * k + s.roadsCasingWidth * 2) * px).toFixed(1);
+          if (!inRect(it, inFrame, Number(w) + 2)) continue;
+          const key = isTunnel && s.roadsTunnels < 1 ? `${w}|${(s.roadsOpacity * s.roadsTunnels).toFixed(2)}` : w;
+          let list = byW.get(key);
+          if (!list) byW.set(key, (list = []));
+          for (const p of it.parts) {
+            const d = partToPath(p, false);
+            if (d) list.push(d);
+          }
+        }
+        if (byW.size) {
+          const op = s.roadsOpacity < 1 ? ` stroke-opacity="${s.roadsOpacity}"` : "";
+          out.push(`<g id="roads-casing" fill="none" stroke="${s.roadsCasingColor}" stroke-linecap="round" stroke-linejoin="round"${op}>`);
+          for (const [key, list] of byW) {
+            const [w, top] = key.split("|");
+            out.push(`<path d="${list.join(" ")}" stroke-width="${w}"${top ? ` stroke-opacity="${top}"` : ""}/>`);
+          }
+          out.push("</g>");
+        }
+      }
+      const fills = new Map(), majors = new Map();
+      for (const it of P.items) {
+        const k = c.pick(it.f, s);
+        if (!k) continue;
+        const isTunnel = it.f.brunnel === "tunnel";
+        if (isTunnel && s.roadsTunnels <= 0) continue;
+        const isMajor = s.roadsMajorOn && MAJOR_ROADS.has(it.f.cls);
+        const map = isMajor ? majors : fills;
+        const w = (s.roadsWidth * px * k).toFixed(1);
+        if (!inRect(it, inFrame, Number(w) + 2)) continue;
+        const key = isTunnel && s.roadsTunnels < 1 ? `${w}|${(s.roadsOpacity * s.roadsTunnels).toFixed(2)}` : w;
+        let list = map.get(key);
+        if (!list) map.set(key, (list = []));
+        for (const p of it.parts) {
+          const d = partToPath(p, false);
+          if (d) list.push(d);
+        }
+      }
+      if (fills.size) {
+        const op = s.roadsOpacity < 1 ? ` stroke-opacity="${s.roadsOpacity}"` : "";
+        out.push(`<g id="roads" fill="none" stroke="${s.roadsColor}" stroke-linecap="round" stroke-linejoin="round"${op}>`);
+        for (const [key, list] of fills) {
+          const [w, top] = key.split("|");
+          out.push(`<path d="${list.join(" ")}" stroke-width="${w}"${top ? ` stroke-opacity="${top}"` : ""}/>`);
+        }
+        out.push("</g>");
+      }
+      if (majors.size) {
+        const op = s.roadsOpacity < 1 ? ` stroke-opacity="${s.roadsOpacity}"` : "";
+        out.push(`<g id="roads-major" fill="none" stroke="${s.roadsMajorColor}" stroke-linecap="round" stroke-linejoin="round"${op}>`);
+        for (const [key, list] of majors) {
+          const [w, top] = key.split("|");
+          out.push(`<path d="${list.join(" ")}" stroke-width="${w}"${top ? ` stroke-opacity="${top}"` : ""}/>`);
+        }
+        out.push("</g>");
+      }
+    } else if (c.id === "rail") {
+      const byW = new Map();
+      for (const it of P.items) {
+        const k = c.pick(it.f, s);
+        if (!k) continue;
+        const isTunnel = it.f.brunnel === "tunnel";
+        if (isTunnel && s.roadsTunnels <= 0) continue;
+        const w = (s.railWidth * px * k).toFixed(1);
+        if (!inRect(it, inFrame, Number(w) + 2)) continue;
+        const key = isTunnel && s.roadsTunnels < 1 ? `${w}|${(s.railOpacity * s.roadsTunnels).toFixed(2)}` : w;
+        let list = byW.get(key);
+        if (!list) byW.set(key, (list = []));
+        for (const p of it.parts) {
+          const d = partToPath(p, false);
+          if (d) list.push(d);
+        }
+      }
+      if (byW.size) {
+        const op = s.railOpacity < 1 ? ` stroke-opacity="${s.railOpacity}"` : "";
+        out.push(`<g id="rail" fill="none" stroke="${s.railColor}" stroke-linecap="round" stroke-linejoin="round"${op}>`);
+        for (const [key, list] of byW) {
+          const [w, top] = key.split("|");
+          out.push(`<path d="${list.join(" ")}" stroke-width="${w}"${top ? ` stroke-opacity="${top}"` : ""}/>`);
+        }
+        out.push("</g>");
+      }
+    }
+  }
+
+  if (s.creditOn) {
+    const size = (s.creditSize * px).toFixed(1), margin = (s.creditSize * px * 0.6).toFixed(1);
+    out.push(`<text x="${(W - margin)}" y="${(H - margin)}" text-anchor="end" font-family="Menlo, Consolas, sans-serif" font-size="${size}" fill="${s.creditColor}">${CREDIT}</text>`);
+  }
+
+  out.push("</svg>");
+  return out.join("\n");
 }
 
 function migrate(s) { s.version = SETTINGS_VERSION; return s; }
 
-const Features = { REF, SETTINGS_VERSION, DEFAULTS, STYLES, CATS, migrate, prepare, render, layerParts, maskOf, counts, hexToRgb, CREDIT };
+const Features = { REF, SETTINGS_VERSION, DEFAULTS, STYLES, CATS, migrate, prepare, render, layerParts, maskOf, counts, hexToRgb, CREDIT, toSVG };
 if (typeof module !== "undefined") module.exports = Features;

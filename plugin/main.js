@@ -18,6 +18,7 @@ const { enhanceAllSelects } = require("./dropdown.js");
 const { enhanceAllFields, refreshFields } = require("./fields.js");
 const { createViewer } = require("./viewer.js");
 const { findLayers, findLayerById, fullFrame, sameFrame, frameOf, forgetArtboards, fillArtboardSelect, toRGBA8, convertOut, makeImageData, makeReader, hasAlpha, throwawayStep, readWithHidden, layersAbove, selectionBounds, withoutSelection } = require("./pixels.js");
+const { rootDoc, parents: liveParents } = require("./live.js");
 
 const $ = (id) => document.getElementById(id);
 // Layers made by the plugin end in "ASCII by Star" (older versions used a "#xxxxxx" tag).
@@ -94,12 +95,31 @@ const artboardPick = () => $("artboard").value || "auto";
 async function capture(ctx, doc, layerId, scale, ownHistory, frame) {
   frame = frame || fullFrame(doc);
   if (S.textArtOn) return textArtSource(ctx, doc, frame, ownHistory);
+  if (S.linesArtOn) return linesArtSource(ctx, doc, frame, scale, ownHistory);
   const aw = Math.max(1, Math.round(frame.w * scale)), ah = Math.max(1, Math.round(frame.h * scale)), R = { x: frame.x * scale, y: frame.y * scale, w: aw, h: ah };
   const data = layerId === null
     ? await throwawayStep(ctx, doc, () => readWithHidden(doc, null, ourOutputs(doc), R, scale), ownHistory)
     : await readWithHidden(doc, layerId, [], R, scale);
   const underRead = needsUnder(S), under = underRead ? await readBelow(ctx, doc, layerId, R, scale, ownHistory) : null;
   return { docId: doc.id, layerId, frame, scale, docW: frame.w, docH: frame.h, w: aw, h: ah, data, under, underRead, stale: false };
+}
+
+// Line art from the Lines tab: contour or ridge lines rendered at the needed scale.
+async function linesArtSource(ctx, doc, frame, scale, ownHistory) {
+  const aw = Math.max(1, Math.round(frame.w * scale)), ah = Math.max(1, Math.round(frame.h * scale)), R = { x: frame.x * scale, y: frame.y * scale, w: aw, h: ah };
+  const linePx = lines && lines.renderForAscii(frame, scale);
+  if (!linePx) throw new Error("The line art isn't ready: open the Lines tab, or click Use the image.");
+  const underRead = needsUnder(S);
+  let under = null;
+  if (underRead) {
+    try {
+      const px = await throwawayStep(ctx, doc, () => readWithHidden(doc, null, ourOutputs(doc), R, scale), ownHistory);
+      under = hasAlpha(px) ? px : null;
+    } catch (e) {
+      console.error("line art backdrop", e);
+    }
+  }
+  return { docId: doc.id, layerId: null, frame, scale, docW: frame.w, docH: frame.h, w: aw, h: ah, data: linePx.data, under, underRead, linesArt: true, stale: false };
 }
 
 // Text art needs no pixels: the grid comes from S.textArt (Engine.textArtAnalysis). Colours from "the layer
@@ -157,11 +177,12 @@ async function ensureSource(full, forDoc) {
   const doc = forDoc || sourceDoc();
   if (!doc) { src = null; return false; }
   checkDoc(doc);
-  const layerId = S.textArtOn ? null : sourceLayerId(doc), frame = await frameOf(doc, layerId, artboardPick());
+  const layerId = (S.textArtOn || S.linesArtOn) ? null : sourceLayerId(doc), frame = await frameOf(doc, layerId, artboardPick());
   const scale = S.textArtOn ? 1 : full ? neededScale(frame) : baseScale(frame);
-  if (src && !src.stale && !!src.textArt === !!S.textArtOn && src.docId === doc.id && src.layerId === layerId && sameFrame(src.frame, frame) && src.scale >= scale - 1e-6 && (src.underRead || !needsUnder(S))) return true;
+  const linesKey = S.linesArtOn && lines && (await lines.readyForAscii(doc)) ? lines.asciiKey() : "";
+  if (src && !src.stale && !!src.textArt === !!S.textArtOn && (src.linesKey || "") === linesKey && src.docId === doc.id && src.layerId === layerId && sameFrame(src.frame, frame) && src.scale >= scale - 1e-6 && (src.underRead || !needsUnder(S))) return true;
   busy = true;
-  try { src = await core.executeAsModal((ctx) => capture(ctx, doc, layerId, scale, true, frame), { commandName: "ASCII by Star: read pixels" }); }
+  try { src = await core.executeAsModal((ctx) => capture(ctx, doc, layerId, scale, true, frame), { commandName: "ASCII by Star: read pixels" }); if (src.linesArt) src.linesKey = linesKey; }
   finally { busy = false; }
   return true;
 }
@@ -301,10 +322,17 @@ async function atlasFor(chars) {
 }
 // The Text art tab's "Use with effects": the art becomes the ASCII tab's picture.
 function useArt(art, font) {
-  Object.assign(S, { textArtOn: true, textArt: art, textArtFont: font });
+  Object.assign(S, { textArtOn: true, textArt: art, textArtFont: font, linesArtOn: false });
   src = null;
   showTab("ascii"); syncUI(); fitLayout(true);
   status(`Text art in ${font}. Every effect applies; Apply puts it in your document.`);
+}
+// The Lines tab's "Use with effects": the contour/ridge lines become the ASCII tab's picture.
+function useLines(info) {
+  Object.assign(S, { linesArtOn: true, linesArtLabel: info && info.label ? info.label : "Line art", textArtOn: false });
+  src = null;
+  showTab("ascii"); syncUI(); fitLayout(true); schedulePreview(0);
+  status(`${S.linesArtLabel}. Every effect applies; Apply puts it in your document.`);
 }
 async function readyAtlas() {
   if (!baseAtlas) return;
@@ -365,7 +393,7 @@ function showPreviewMsg(t) { if (viewer) viewer.showMessage(t); else { $("previe
 
 function docById(id) { try { const ds = app.documents; for (let i = 0; i < ds.length; i++) if (ds[i].id === id) return ds[i]; } catch (e) { /* none open */ } return null; }
 // The document being converted: the active one, unless the live preview window is in front.
-function sourceDoc() { const a = activeDoc(); if (live && a && a.id === live.docId) return docById(live.sourceDocId); return a; }
+function sourceDoc() { return rootDoc(activeDoc()); } // a live window (any tab's) → the file it came from
 const qualityScale = () => Number($("quality").value) || 1;
 
 // Temporary transparent 8-bit document (live preview, PNG export, smart-object render). Inside executeAsModal.
@@ -401,6 +429,7 @@ async function toggleLive() {
   const doc = sourceDoc();
   try { checkDoc(doc); } catch (e) { return status(e.message, true); }
   await readyAtlas();
+  if (S.linesArtOn && lines && !(await lines.readyForAscii(doc))) return status("The line art isn't ready: open the Lines tab, or click Use the image.", true);
   busy = true;
   status("Opening live smart object…");
   try {
@@ -422,6 +451,7 @@ async function toggleLive() {
       if (!psb || psb.id === doc.id) throw new Error("Photoshop didn't open the smart object contents");
       const inner = psb.layers.find ? psb.layers.find((l) => l.kind !== "group") || psb.layers[0] : psb.layers[0];
       live = { docId: psb.id, layerId: inner.id, sourceDocId: doc.id, soLayerId: so.id, soName: so.name, sourceLayerId: layerId, scale: psb.width / (src ? src.frame.w : doc.width) };
+      liveParents.set(psb.id, doc.id);
     }, { commandName: "ASCII by Star live smart object" });
   } catch (e) { console.error(e); live = null; status("Couldn't open the live smart object: " + errMsg(e), true); }
   finally { busy = false; }
@@ -666,6 +696,7 @@ async function applyRaster(update) {
   try { checkDoc(doc); } catch (e) { return status(e.message, true); }
   if (update && (!editing || editing.docId !== doc.id)) return status("The edited layer is in another document. Switch back to it.", true);
   await readyAtlas();
+  if (S.linesArtOn && lines && !(await lines.readyForAscii(doc))) return status("The line art isn't ready: open the Lines tab, or click Use the image.", true);
   busy = true;
   status("Rendering…");
   const t0 = Date.now();
@@ -924,7 +955,7 @@ function applyLook(settings) {
 }
 // The settings that belong to one picture rather than to a look: symbol edits, the text art and the messages and
 // fill added to a built-in character set.
-const PICTURE_KEYS = ["extraChars", "cellEdits", "textArtOn", "textArt", "textArtFont"];
+const PICTURE_KEYS = ["extraChars", "cellEdits", "textArtOn", "textArt", "textArtFont", "linesArtOn", "linesArtLabel"];
 const pictureOf = (s) => Object.fromEntries(PICTURE_KEYS.map((k) => [k, JSON.parse(JSON.stringify(s[k] === undefined ? null : s[k]))]));
 // Settings without them (for presets)
 function lookOnly(s) { const out = JSON.parse(JSON.stringify(s)); for (const k of PICTURE_KEYS) out[k] = JSON.parse(JSON.stringify(Engine.DEFAULTS[k] === undefined ? null : Engine.DEFAULTS[k])); return out; }
@@ -1401,6 +1432,8 @@ function buildUI() {
   $("rrReseed").addEventListener("click", () => { S.rrSeed = Math.floor(Math.random() * 99999) + 1; syncUI(); schedulePreview(0); });
   $("textArtEdit").addEventListener("click", () => showTab("text"));
   $("textArtOff").addEventListener("click", () => { S.textArtOn = false; src = null; syncUI(); fitLayout(true); schedulePreview(0); status("Converting the document's image again. The text art stays in the Text art tab."); });
+  $("linesArtEdit").addEventListener("click", () => showTab("lines"));
+  $("linesArtOff").addEventListener("click", () => { S.linesArtOn = false; src = null; syncUI(); fitLayout(true); schedulePreview(0); status("Converting the document's image again. The line art stays in the Lines tab."); });
   $("rrCopy").addEventListener("click", () => { // the Matrix rain's look, into the ring's own settings
     for (const [k, rk] of Object.entries(Engine.RING_RAIN)) S[rk] = JSON.parse(JSON.stringify(S[k]));
     syncUI(); schedulePreview(0); status("The ring's rain now looks like the Matrix rain.");
@@ -1658,6 +1691,8 @@ function refreshVisibility() {
   show($("rainRows"), !!S.rainOn);
   show($("textArtBox"), !!S.textArtOn); show(sliderEls.textArtMargin.row, !!S.textArtFit);
   if (S.textArtOn) $("textArtLabel").textContent = `Text art${S.textArtFont ? " · " + S.textArtFont : ""} (instead of the image)`;
+  show($("linesArtBox"), !!S.linesArtOn);
+  if (S.linesArtOn) $("linesArtLabel").textContent = `${S.linesArtLabel || "Line art"} (instead of the image)`;
   show($("rainCharsRow"), S.rainCharset === "custom");
   show(sliderEls.rainDistance.row, S.rainFrom !== "everywhere");
   const radial = S.rainDir === "out" || S.rainDir === "in";
@@ -1791,7 +1826,7 @@ async function init() {
   buildUI();
   syncUI();
   ink = setupInk({ $, loadJSON, saveJSON, errMsg, toRGBA8, makeImageData, convertOut, createLayer, findLayers, findLayerById, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck, refreshFields });
-  lines = setupLines({ $, loadJSON, saveJSON, errMsg, setSelect, baseAtlas: () => baseAtlas, mapArea: () => mapTab && mapTab.area(), showTab, createLayer, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck, refreshFields });
+  lines = setupLines({ $, loadJSON, saveJSON, errMsg, setSelect, baseAtlas: () => baseAtlas, mapArea: () => mapTab && mapTab.area(), showTab, createLayer, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck, refreshFields, useLines, atlasFor });
   mapTab = setupMap({ $, loadJSON, saveJSON, errMsg, setSelect, baseAtlas: () => baseAtlas, createLayer, bitDepth, isGray, activeDoc, askColor, docBaseName, fitLayout, onCheck, refreshFields, onAreaToLines: () => { lines.useMap(); showTab("lines"); } });
   textTab = setupTextArt({ $, loadJSON, saveJSON, errMsg, setSelect, fitLayout, onCheck, refreshFields, atlasFor, baseAtlas: () => baseAtlas, useArt });
   for (const k of Object.keys(TAB_IDS)) $(TAB_IDS[k].btn).addEventListener("click", () => showTab(k));

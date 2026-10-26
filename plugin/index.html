@@ -44,7 +44,7 @@
   .section { border-top: 1px solid var(--uxp-host-border-color); margin: 0 -8px; padding: 6px 8px 4px 8px; background: rgba(255, 255, 255, 0.06); }
   .section.alt { background: rgba(0, 0, 0, 0.2); }
   .head { display: flex; flex-direction: row; align-items: center; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; font-size: 10px; padding: 3px 0 6px 0; cursor: pointer; }
-  .ctlHead { display: flex; flex-direction: row; align-items: center; font-size: 10px; cursor: pointer; padding: 1px 0 4px 0; }
+  .ctlHead { display: flex; flex-direction: row; align-items: center; font-size: 10px; cursor: pointer; padding: 4px 0 4px 0; }
   .ctlHead .ctlLabel { opacity: 0.65; }
   /* fold / unfold controls (section heads, Controls, the preview): small square buttons */
   .head .chev, .ctlHead .chev, .chevBtn { box-sizing: border-box; display: flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; flex: 0 0 auto; padding: 0 5px; margin-right: 6px; border: 1px solid var(--uxp-host-border-color); border-radius: 4px; background: rgba(128, 128, 128, 0.2); font-size: 12px; font-weight: normal; letter-spacing: 0; cursor: pointer; }
@@ -117,6 +117,8 @@
   <div id="previewWrap"><img id="preview" alt=""><div id="previewMsg">Open a document to begin</div></div>
   <div class="pvGrip" id="previewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
   <div class="row zoomBar" id="zoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
+ </div>
+ <div id="scroller">
   <div class="ctlHead" id="ctlHead" title="Show or hide the controls under the preview (more room for the settings)"><span class="chev">▾</span><span class="ctlLabel">Controls</span></div>
   <div id="ctlBody">
   <div class="row btnrow" style="margin-top:5px">
@@ -135,6 +137,10 @@
     <div class="row"><span class="grow" id="textArtLabel"></span><button id="textArtEdit" title="Change the lettering in the Text art tab">Edit</button><button id="textArtOff" title="Convert the document's image again">Use the image</button></div>
     <div class="row"><label><input type="checkbox" id="textArtFit"> Fit the text art to the area</label></div>
     <div id="sl-textArtMargin"></div>
+  </div>
+  <div id="linesArtBox" class="editing hidden">
+    <div class="row"><span class="grow" id="linesArtLabel">Line art (Lines tab)</span></div>
+    <div class="row"><button id="linesArtEdit" class="grow" title="Change the lines in the Lines tab">Edit lines</button><button id="linesArtOff" class="grow" title="Convert the document's image again">Use the image</button></div>
   </div>
   <div class="row hidden" id="artboardRow"><select id="artboard" class="grow" title="Which artboard to convert. Auto follows the source layer (or the selected layer)."><option value="auto">Artboard: auto (follows the layer)</option></select></div>
   <div id="status"></div>
@@ -161,8 +167,6 @@
   </div>
 
   </div>
-  </div>
- <div id="scroller">
   <div class="section" data-section="look">
     <div class="head"><span class="chev">▾</span>Look</div>
     <div class="body">
@@ -654,6 +658,8 @@
   <div id="inkPreviewWrap"><img id="inkPreview" alt=""><div id="inkPreviewMsg">Select a layer to begin</div></div>
   <div class="pvGrip" id="inkPreviewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
   <div class="row zoomBar" id="inkZoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
+ </div>
+ <div id="inkScroller">
   <div class="ctlHead" id="inkCtlHead" title="Show or hide the controls under the preview (more room for the settings)"><span class="chev">▾</span><span class="ctlLabel">Controls</span></div>
   <div id="inkCtlBody">
   <div class="row">
@@ -671,8 +677,6 @@
   </div>
   <div class="row"><button id="inkApply" class="primary grow" title="Adds a group of blend-mode layers above the source. The source layer is not changed.">Add ink bleed overlay</button></div>
   </div>
- </div>
- <div id="inkScroller">
   <div class="section" data-section="inkType">
     <div class="head"><span class="chev">▾</span>Paper type</div>
     <div class="body">
@@ -758,6 +762,8 @@
   <div id="lnPreviewWrap"><img id="lnPreview" alt=""><div id="lnPreviewMsg">Select a layer to begin</div></div>
   <div class="pvGrip" id="lnPreviewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
   <div class="row zoomBar" id="lnZoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
+ </div>
+ <div id="lnScroller">
   <div class="ctlHead" id="lnCtlHead" title="Show or hide the controls under the preview (more room for the settings)"><span class="chev">▾</span><span class="ctlLabel">Controls</span></div>
   <div id="lnCtlBody">
   <div class="row">
@@ -773,16 +779,16 @@
     <div id="lnEditLabel" style="margin-bottom:5px"></div>
     <div class="row btnrow"><button id="lnUpdate" class="primary">Update line art</button><button id="lnStopEdit">Done</button></div>
   </div>
-  <div class="row"><button id="lnRandom" class="grow" title="A random look: line style, spacing, widths, colours, fill and shading. The height settings stay.">Randomize</button><button id="lnUndo" style="flex:0 0 auto" title="Undo the last change in this tab: a setting, a look or Randomize" disabled>↶ Undo</button></div>
+  <div class="row"><button id="lnRandom" class="grow" title="A random look: line style, spacing, widths, colours, fill and shading. The height settings stay.">Randomize</button><button id="lnUndo" style="flex:0 0 auto" title="Undo the last change in this tab: a setting, a look or Randomize" disabled>↶ Undo</button><button id="lnResetAll" style="flex:0 0 auto" title="Every setting in this tab back to its default (the map area stays)">Reset all</button></div>
   <div class="row"><button id="lnApply" class="primary grow" title="Adds a Line Art layer above the source. The source layer is not changed.">Add line art layer</button></div>
   <div class="row"><button id="lnLive" class="grow" title="Places the line art as a smart object above the source and opens its contents. Changes update it live; Save & close puts the final result into your document.">Open live smart object</button></div>
+  <div class="row"><button id="lnUse" class="grow" title="Opens the ASCII tab with these lines: every effect (detail, outline, rain, glitch, custom text) applies to them">Use with effects (ASCII tab)</button></div>
+  <div class="row"><button id="lnExportSvg" class="grow" title="Save the line art as a vector .svg file">Export SVG…</button></div>
   </div>
- </div>
- <div id="lnScroller">
   <div class="section" data-section="lnStyle">
     <div class="head"><span class="chev">▾</span>Look</div>
     <div class="body">
-      <div class="row"><select id="lnPreset" class="grow"></select><button id="lnPresetReset" style="flex:0 0 auto" title="Back to the chosen look, without your changes">Reset</button></div>
+      <div class="row"><select id="lnPreset" class="grow"></select><button id="lnPresetReset" style="flex:0 0 auto" title="Back to the chosen look, without your changes (the height source stays)">Reset</button></div>
       <div class="row"><input type="text" id="lnPresetName" placeholder="Preset name"><button id="lnPresetSave">Save</button><button id="lnPresetDelete" title="Delete the selected preset">Delete</button></div>
       <div class="row btnrow"><button id="lnPresetExport">Export presets…</button><button id="lnPresetImport">Import…</button></div>
       <div class="row"><span class="label">Lines</span><select id="lnStyle" class="grow">
@@ -930,6 +936,31 @@
     </div>
   </div>
 
+  <div class="section" data-section="lnText" id="lnTextBox">
+    <div class="head"><span class="chev">▾</span>Text on the lines</div>
+    <div class="body">
+      <div class="row"><label title="Each contour line is traced and written with characters that follow it"><input type="checkbox" id="lnTextOn"> Write the lines with text</label></div>
+      <div class="sub" id="lnTextRows">
+        <div class="row"><span class="label">Characters</span><select id="lnTextMode" class="grow"><option value="text">Your text, along the line</option><option value="direction">- / | \ from the line's direction</option></select></div>
+        <div id="lnPtTextRows">
+          <div class="row"><span class="label">Text</span><input type="text" id="lnPtText" title="Written along every line, over and over. %h is the line's height. [A|B] repeats the items, [?A|B] picks them at random (after plain text: that comes once at the start of each line). {HELLO} or {HELLO*5} hides a message on the lines."></div>
+          <div class="row"><button id="lnPtApply" class="grow" title="Use the text above (the preview waits until you apply; Enter applies too)">Apply text</button><button id="lnPtReseed" style="flex:0 0 auto" title="Other random items and other places for the messages">New random</button></div>
+          <div class="row"><label title="Off: every character stays upright"><input type="checkbox" id="lnPtRotate"> Turn the characters with the line</label></div>
+          <div class="row"><label title="Like vertical type on a path: the characters stand across the line, one below the other along it (with Turn off: upright, stacked along the line)"><input type="checkbox" id="lnPtVertical"> Vertical type (stacked along the line)</label></div>
+        </div>
+        <div class="row"><label title="Off: the text runs one way along each whole line, with the tops facing uphill, like survey labels"><input type="checkbox" id="lnPtReadable"> Always readable (turns round with the line)</label></div>
+        <div id="lsl-ptSize"></div>
+        <div id="lsl-ptSpacing"></div>
+        <div id="lsl-ptRoom"></div>
+        <div id="lsl-ptLineOpacity"></div>
+        <div class="row" id="lnPtWhichRow"><span class="label">Lines</span><select id="lnPtWhich" class="grow"><option value="all">All lines</option><option value="index">Only the index lines</option><option value="others">All but the index lines</option></select></div>
+        <div class="row"><label><input type="checkbox" id="lnPtMsgColorOn"> Messages in their own colour</label></div>
+        <div class="row" id="lnPtMsgColorRow"><span class="label">Colour</span><div class="swatchInk" id="lnPtMsgSwatch"></div><input type="text" class="hexInk" id="lnPtMsgHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+      </div>
+      <p class="hint">The characters take the lines' colour (Line colour) and opacity. Export SVG writes them as text.</p>
+    </div>
+  </div>
+
   <div class="section" data-section="lnLayers">
     <div class="head"><span class="chev">▾</span>Layers</div>
     <div class="body">
@@ -946,6 +977,8 @@
   <div id="mpPreviewWrap"><img id="mpPreview" alt=""><div id="mpPreviewMsg">Choose an area</div></div>
   <div class="pvGrip" id="mpPreviewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
   <div class="row zoomBar" id="mpZoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
+ </div>
+ <div id="mpScroller">
   <div class="ctlHead" id="mpCtlHead" title="Show or hide the controls under the preview (more room for the settings)"><span class="chev">▾</span><span class="ctlLabel">Controls</span></div>
   <div id="mpCtlBody">
   <div class="row hidden" id="mpArtboardRow"><select id="mpArtboard" class="grow" title="Which artboard the map fills. Auto follows the selected layer."><option value="auto">Artboard: auto (follows the layer)</option></select></div>
@@ -957,10 +990,9 @@
   <div class="row"><button id="mpRandom" class="grow" title="Random colours and widths. The area stays.">Randomize</button><button id="mpUndo" style="flex:0 0 auto" title="Undo the last change in this tab" disabled>↶ Undo</button></div>
   <div class="row"><button id="mpApply" class="primary grow" title="Adds a group with one layer per kind of feature, filling the canvas (or the artboard)">Add map layers</button></div>
   <div class="row"><button id="mpLive" class="grow" title="Places the map as one smart object at the top and opens its contents. Changes update it live; Save & close puts the final result into your document. Add map layers gives one layer per kind instead.">Open live smart object</button></div>
+  <div class="row"><button id="mpExportSvg" class="grow" title="Save the map as a vector .svg file">Export SVG…</button></div>
   <div class="row"><select id="mpSelectWhat" class="grow" title="Which features to select"></select><button id="mpSelect" title="Makes a Photoshop selection of these features on the canvas">Select</button></div>
   </div>
- </div>
- <div id="mpScroller">
   <div class="section" data-section="mpArea">
     <div class="head"><span class="chev">▾</span>Area</div>
     <div class="body">
@@ -1074,14 +1106,14 @@
   <div id="textPreviewWrap"><img id="textPreview" alt=""><div id="textPreviewMsg">Type some text</div></div>
   <div class="pvGrip" id="textPreviewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
   <div class="row zoomBar" id="textZoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
+ </div>
+ <div id="textScroller">
   <div class="ctlHead" id="textCtlHead" title="Show or hide the controls under the preview (more room for the settings)"><span class="chev">▾</span><span class="ctlLabel">Controls</span></div>
   <div id="textCtlBody">
   <div class="row"><button id="taUse" class="primary grow" title="Open it in the ASCII tab, where colours, outline, rain, echo, cell backgrounds, glitch and the rest apply, and Apply puts it in your document">Use with effects (ASCII tab)</button><button id="taCopy" style="flex:0 0 auto" title="Copy the text art as plain text">Copy text</button></div>
   <div class="row"><button id="taRandom" class="grow" title="A random style for your text: font, layout, case, spacing, frame and more. The text stays.">Randomize</button><button id="taUndo" style="flex:0 0 auto" title="Undo the last change in this tab: a setting, a font, a style, Randomize or your typing" disabled>↶ Undo</button></div>
   <div id="taStatus"></div>
   </div>
- </div>
- <div id="textScroller">
   <div class="section" data-section="taStyle">
     <div class="head"><span class="chev">▾</span>Style presets</div>
     <div class="body">
