@@ -13,7 +13,14 @@
   },
   "requiredPermissions": {
     "localFileSystem": "request",
-    "clipboard": "readAndWrite"
+    "clipboard": "readAndWrite",
+    "network": {
+      "domains": [
+        "https://s3.amazonaws.com",
+        "https://photon.komoot.io",
+        "https://tiles.openfreemap.org"
+      ]
+    }
   },
   "entrypoints": [
     {

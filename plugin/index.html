@@ -16,8 +16,8 @@
   #taStatus { min-height: 16px; font-size: 11px; opacity: 0.85; margin-top: 4px; }
   .tool { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   .tool.hidden { display: none; }
-  #top, #inkTop, #textTop { flex: 0 0 auto; padding: 8px 8px 4px 8px; border-bottom: 1px solid var(--uxp-host-border-color); }
-  #scroller, #inkScroller, #textScroller { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px 16px 8px; }
+  #top, #inkTop, #textTop, #lnTop, #mpTop { flex: 0 0 auto; padding: 8px 8px 4px 8px; border-bottom: 1px solid var(--uxp-host-border-color); }
+  #scroller, #inkScroller, #textScroller, #lnScroller, #mpScroller { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px 16px 8px; }
   .row > * { min-width: 0; }
   .row { display: flex; flex-direction: row; align-items: center; margin-bottom: 5px; }
   .row > * { margin-right: 4px; }
@@ -57,16 +57,16 @@
   button.danger { color: #ff7070; font-weight: bold; }
   .sicon { width: 18px; height: 18px; flex: 0 0 18px; margin-right: 7px; }
   .collapsed .body { display: none; }
-  #previewWrap, #inkPreviewWrap, #textPreviewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
-  #previewWrap.hidden, #inkPreviewWrap.hidden, #textPreviewWrap.hidden { display: none; }
+  #previewWrap, #inkPreviewWrap, #textPreviewWrap, #lnPreviewWrap, #mpPreviewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+  #previewWrap.hidden, #inkPreviewWrap.hidden, #textPreviewWrap.hidden, #lnPreviewWrap.hidden, #mpPreviewWrap.hidden { display: none; }
   .zoomBar .ztoggle.grow { flex: 1 1 auto; }
   .pvGrip { height: 9px; cursor: ns-resize; display: flex; align-items: center; justify-content: center; }
   .pvGrip > div { width: 40px; height: 3px; border-radius: 2px; background: rgba(128, 128, 128, 0.6); }
-  #preview, #inkPreview, #textPreview { position: absolute; left: 0; top: 0; max-width: none; cursor: grab; }
+  #preview, #inkPreview, #textPreview, #lnPreview, #mpPreview { position: absolute; left: 0; top: 0; max-width: none; cursor: grab; }
   .zoomBar { margin: 0; }
   .zoomBar .zlabel { width: 40px; flex: 0 0 40px; cursor: pointer; }
-  #previewMsg, #inkPreviewMsg, #textPreviewMsg { position: absolute; padding: 12px; text-align: center; color: #bbb; }
-  #status, #inkStatus { font-size: 10px; opacity: 0.75; height: 26px; overflow: hidden; margin: 4px 0; }
+  #previewMsg, #inkPreviewMsg, #textPreviewMsg, #lnPreviewMsg, #mpPreviewMsg { position: absolute; padding: 12px; text-align: center; color: #bbb; }
+  #status, #inkStatus, #lnStatus, #mpStatus { font-size: 10px; opacity: 0.75; height: 26px; overflow: hidden; margin: 4px 0; }
   .swatch, .swatchInk { width: 28px; height: 20px; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; flex: 0 0 28px; cursor: pointer; }
   .hex { width: 62px; flex: 0 1 62px; font-family: Menlo, monospace; }
   button { font-size: 11px; }
@@ -95,7 +95,7 @@
   .tf { box-sizing: border-box; flex: 1 1 auto; min-width: 0; height: 22px; line-height: 14px; padding: 3px 6px; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; background: rgba(0, 0, 0, 0.18); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; font-size: 11px; }
   .tf.tfArea { height: 44px; white-space: pre-wrap; font-family: Menlo, monospace; }
   .tf.tfHex { width: 62px; flex: 0 1 62px; font-family: Menlo, monospace; }
-  .tf.tfEmpty { opacity: 0.5; }
+  .tf.tfEmpty { opacity: 0.45; font-style: italic; }
   .tf.hidden { display: none; }
   .row > label { cursor: pointer; }
   .ck { width: 12px; height: 12px; flex: 0 0 12px; margin: 0 6px 0 0; border: 1px solid rgba(160, 160, 160, 0.8); border-radius: 2px; display: flex; align-items: center; justify-content: center; }
@@ -110,7 +110,7 @@
 </style>
 </head>
 <body>
- <div id="tabs"><div class="tab" id="tabAscii">ASCII</div><div class="tab" id="tabText">Text art</div><div class="tab" id="tabInk">Ink bleed</div></div>
+ <div id="tabs"><div class="tab" id="tabAscii">ASCII</div><div class="tab" id="tabText">Text art</div><div class="tab" id="tabInk">Ink bleed</div><div class="tab" id="tabLines">Lines</div><div class="tab" id="tabMap">Map</div></div>
  <div id="asciiTool" class="tool">
  <div id="top">
   <div class="ctlHead" id="previewHead"><span class="chev">▾</span><span class="ctlLabel">Preview</span></div>
@@ -186,13 +186,31 @@
       <div id="customRows">
         <p class="hint">Hide a message in the picture: put it in curly braces, e.g. <b>{HELLO}</b>. <b>{XO*5}</b> hides it 5 times.</p>
         <p class="hint">Fill the artwork: <b>[STAR]</b> writes STAR all over it, <b>[STAR|LOVE|★]</b> takes turns, <b>[?STAR|LOVE|★]</b> picks at random, <b>[?01]</b> random characters. Characters outside the brackets (<b>.:-= [STAR]</b>) draw the lighter tones.</p>
-        <div class="row"><textarea id="customChars" placeholder="Characters, words or a phrase, e.g.  .:-=+*#%@  {HELLO}  [STAR|LOVE]"></textarea></div>
+        <div class="row"><textarea id="customChars" placeholder="Click to type characters, words or a phrase, e.g.  .:-=+*#%@  {HELLO}  [STAR|LOVE]"></textarea></div>
         <div class="row"><button id="customApply" class="grow" title="Use the text above (the preview waits until you apply)">Apply text</button></div>
-        <div class="row" id="hideRow"><label class="grow"><input type="checkbox" id="hideMark"> Highlight messages in the preview</label><button id="hideMove" title="Put the hidden messages somewhere else">Move</button></div>
-        <div id="fillRows">
-          <div id="sl-fillLevel"></div>
-          <div class="row" id="fillShuffleRow"><span class="grow hint" style="margin:0">Random fill order</span><button id="fillShuffle" title="Pick the random items again">Shuffle</button></div>
+      </div>
+      <div id="extraRows">
+        <div class="row" id="extraOpenRow"><button id="extraOpen" class="grow" title="Hide a message or add a fill, keeping these characters">Add a hidden message or fill…</button></div>
+        <div id="extraBox">
+          <p class="hint">These characters stay. <b>{HELLO}</b> hides a message, <b>{XO*5}</b> 5 times. <b>[STAR]</b> writes STAR over the darker tones, <b>[STAR|LOVE]</b> takes turns, <b>[?STAR|LOVE]</b> picks at random. Other characters are ignored.</p>
+          <div class="row"><textarea id="extraChars" placeholder="Click to type, e.g.  {HELLO}  [STAR|LOVE]"></textarea></div>
+          <div class="row"><button id="extraApply" class="grow" title="Use the text above (the preview waits until you apply)">Apply text</button><button id="extraClear" title="Remove the hidden messages and the fill">Remove</button></div>
         </div>
+      </div>
+      <div class="row" id="hideRow"><label class="grow"><input type="checkbox" id="hideMark"> Highlight messages in the preview</label><button id="hideMove" title="Put the hidden messages somewhere else">Move</button></div>
+      <div id="fillRows">
+        <div id="sl-fillLevel"></div>
+        <div class="row" id="fillShuffleRow"><span class="grow hint" style="margin:0">Random fill order</span><button id="fillShuffle" title="Pick the random items again">Shuffle</button></div>
+      </div>
+      <div id="specialRows">
+        <div class="subhead">Colour of messages { } and fills [ ]</div>
+        <div class="row"><span class="label">Messages</span><select id="msgColorFrom" class="grow"><option value="keep">Like the text around them</option><option value="own">A colour of your own</option><option value="image">The image's colours</option><option value="under">The layer below</option></select></div>
+        <div class="row" id="msgColorRow"><span class="label">Colour</span><div class="swatch" data-color="msgColor"></div><input type="text" class="hex" data-hex="msgColor"></div>
+        <div id="sl-msgOpacity"></div>
+        <div class="row"><span class="label">Fills</span><select id="fillColorFrom" class="grow"><option value="keep">Like the text around them</option><option value="own">A colour of your own</option><option value="image">The image's colours</option><option value="under">The layer below</option></select></div>
+        <div class="row" id="fillColorRow"><span class="label">Colour</span><div class="swatch" data-color="fillColor"></div><input type="text" class="hex" data-hex="fillColor"></div>
+        <div id="sl-fillOpacity"></div>
+        <p class="hint">Wherever you type them: Custom text, the text added to a character set, the outline and its ring, and Edit symbols ▸ write. A message inside a fill takes the message colour. The rain's own [ ] keeps the rain's colours; messages in the rain change.</p>
       </div>
       <div id="textModeRows">
         <div class="row"><span class="label">Use the text</span><select id="textMode" class="grow">
@@ -729,6 +747,322 @@
     <div class="body">
       <p class="hint">The overlay is a group of four layers above the source: Ink bleed and Ink pooling (Multiply), Ink gaps (Normal: shows the paper under your layer through the ink) and Paper (Multiply). Light ink on dark paper swaps Multiply and Screen. Hide Ink gaps, or lower Dry skip, Mottling and Pooling, for solid ink. Change any layer's opacity, or hide it, to fine-tune.</p>
       <div class="row btnrow"><button id="inkLoad">Edit selected Ink Bleed group</button></div>
+    </div>
+  </div>
+ </div>
+ </div>
+
+ <div id="lnTool" class="tool hidden">
+ <div id="lnTop">
+  <div class="ctlHead" id="lnPreviewHead"><span class="chev">▾</span><span class="ctlLabel">Preview</span></div>
+  <div id="lnPreviewWrap"><img id="lnPreview" alt=""><div id="lnPreviewMsg">Select a layer to begin</div></div>
+  <div class="pvGrip" id="lnPreviewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
+  <div class="row zoomBar" id="lnZoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
+  <div class="ctlHead" id="lnCtlHead" title="Show or hide the controls under the preview (more room for the settings)"><span class="chev">▾</span><span class="ctlLabel">Controls</span></div>
+  <div id="lnCtlBody">
+  <div class="row">
+    <select id="lnSource" class="grow">
+      <option value="layer" selected>Source: Selected layer</option>
+      <option value="merged">Source: Visible (merged)</option>
+    </select>
+    <button id="lnRefresh" title="Re-read the document">↻</button>
+  </div>
+  <div class="row hidden" id="lnArtboardRow"><select id="lnArtboard" class="grow" title="Which artboard to work on. Auto follows the source layer."><option value="auto">Artboard: auto (follows the layer)</option></select></div>
+  <div id="lnStatus"></div>
+  <div id="lnEditBox" class="editing hidden">
+    <div id="lnEditLabel" style="margin-bottom:5px"></div>
+    <div class="row btnrow"><button id="lnUpdate" class="primary">Update line art</button><button id="lnStopEdit">Done</button></div>
+  </div>
+  <div class="row"><button id="lnRandom" class="grow" title="A random look: line style, spacing, widths, colours, fill and shading. The height settings stay.">Randomize</button><button id="lnUndo" style="flex:0 0 auto" title="Undo the last change in this tab: a setting, a look or Randomize" disabled>↶ Undo</button></div>
+  <div class="row"><button id="lnApply" class="primary grow" title="Adds a Line Art layer above the source. The source layer is not changed.">Add line art layer</button></div>
+  <div class="row"><button id="lnLive" class="grow" title="Places the line art as a smart object above the source and opens its contents. Changes update it live; Save & close puts the final result into your document.">Open live smart object</button></div>
+  </div>
+ </div>
+ <div id="lnScroller">
+  <div class="section" data-section="lnStyle">
+    <div class="head"><span class="chev">▾</span>Look</div>
+    <div class="body">
+      <div class="row"><select id="lnPreset" class="grow"></select><button id="lnPresetReset" style="flex:0 0 auto" title="Back to the chosen look, without your changes">Reset</button></div>
+      <div class="row"><input type="text" id="lnPresetName" placeholder="Preset name"><button id="lnPresetSave">Save</button><button id="lnPresetDelete" title="Delete the selected preset">Delete</button></div>
+      <div class="row btnrow"><button id="lnPresetExport">Export presets…</button><button id="lnPresetImport">Import…</button></div>
+      <div class="row"><span class="label">Lines</span><select id="lnStyle" class="grow">
+        <option value="contours">Contour lines (topographic)</option>
+        <option value="ridges">Ridge lines</option>
+      </select></div>
+      <p class="hint">Contour lines join points of equal height, like a map. Ridge lines are rows lifted by the height, with nearer rows hiding the ones behind. A look (or Randomize) sets the lines and colours and keeps the height settings.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="lnHeight">
+    <div class="head"><span class="chev">▾</span>Height</div>
+    <div class="body">
+      <div class="row"><span class="label">Height from</span><select id="lnHeightFrom" class="grow">
+        <option value="source">The source's brightness</option>
+        <option value="layer">Another layer (a depth map)</option>
+        <option value="map">A place on the map</option>
+      </select></div>
+      <div class="row hidden" id="lnHeightLayerRow"><span class="label">Layer</span><select id="lnHeightLayer" class="grow"><option value="">Choose a layer…</option></select></div>
+      <div id="lnMapBox" class="hidden">
+        <p class="hint" id="lnMapInfo">No area yet.</p>
+        <div class="row btnrow"><button id="lnMapEdit" title="The area (place and width) is chosen in the Map tab">Choose the area (Map tab)</button></div>
+        <div class="row"><label title="Off: the sea is flat at sea level"><input type="checkbox" id="lnSeaFloor"> Show the sea floor</label></div>
+        <p class="hint">Terrain: AWS Terrain Tiles (Mapzen, open data; about 30 m detail, finer in places). Tiles are cached until Photoshop quits.</p>
+      </div>
+      <div class="row" id="lnInvertRow"><label><input type="checkbox" id="lnInvert"> <span id="lnInvertText">Dark is high</span></label></div>
+      <div class="row" id="lnEqualizeRow"><label title="Spreads the lines evenly over the tones, instead of bunching them where the tones change fastest. Maps keep their real heights."><input type="checkbox" id="lnEqualize"> Spread the levels evenly</label></div>
+      <div id="lsl-smooth"></div>
+      <p class="hint" id="lnDepthHint">Light is high by default. For real depth, make a depth map (Filter ▸ Neural Filters ▸ Depth Blur ▸ Output depth map only, or any depth app) and pick its layer here; white is near.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="lnLines">
+    <div class="head"><span class="chev">▾</span>Spacing</div>
+    <div class="body">
+      <div id="lsl-levels"></div>
+      <div id="lsl-mapInterval"></div>
+      <div id="lsl-offset"></div>
+      <div id="lsl-declutter"></div>
+      <div id="lsl-rows"></div>
+      <div id="lsl-amp"></div>
+      <div class="row" id="lnRidgeLocalRow"><label title="Off: every row is lifted from the lowest point of the whole picture, so high ground lifts whole rows"><input type="checkbox" id="lnRidgeLocal"> Lift each row from its own lowest point</label></div>
+    </div>
+  </div>
+
+  <div class="section" data-section="lnWidth">
+    <div class="head"><span class="chev">▾</span>Width</div>
+    <div class="body">
+      <div id="lsl-lineWidth"></div>
+      <div id="lsl-toneWeight"></div>
+      <div id="lsl-heightWeight"></div>
+      <div id="lsl-indexEvery"></div>
+      <div id="lsl-indexWidth"></div>
+    </div>
+  </div>
+
+  <div class="section" data-section="lnColour">
+    <div class="head"><span class="chev">▾</span>Line colour</div>
+    <div class="body">
+      <div class="row"><span class="label">Colour</span><select id="lnLineFrom" class="grow">
+        <option value="own">One colour</option>
+        <option value="image">Sampled from the image</option>
+        <option value="height">Gradient by height</option>
+        <option value="across">Gradient across the picture</option>
+      </select></div>
+      <div class="row" id="lnLineColorRow"><span class="label">Line colour</span><div class="swatchInk" id="lnLineSwatch"></div><input type="text" class="hexInk" id="lnLineHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+      <div id="lnLineGradRows">
+        <div class="row"><span class="label">Low / start</span><div class="swatchInk" id="lnLineASwatch"></div><input type="text" class="hexInk" id="lnLineAHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div class="row"><label><input type="checkbox" id="lnLineMidOn"> Middle colour</label></div>
+        <div class="row" id="lnLineMidRow"><span class="label">Middle</span><div class="swatchInk" id="lnLineMidSwatch"></div><input type="text" class="hexInk" id="lnLineMidHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div class="row"><span class="label">High / end</span><div class="swatchInk" id="lnLineBSwatch"></div><input type="text" class="hexInk" id="lnLineBHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="lsl-lineAngle"></div>
+      </div>
+      <div id="lnSampleRows">
+        <div id="lsl-sampleSat"></div>
+        <div id="lsl-sampleBright"></div>
+      </div>
+      <div id="lsl-lineOpacity"></div>
+      <div id="lnIndexBox">
+        <div class="row"><label><input type="checkbox" id="lnIndexColorOn"> Index lines in their own colour</label></div>
+        <div class="row" id="lnIndexColorRow"><span class="label">Index colour</span><div class="swatchInk" id="lnIndexSwatch"></div><input type="text" class="hexInk" id="lnIndexHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" data-section="lnUnder">
+    <div class="head"><span class="chev">▾</span>Background and fill</div>
+    <div class="body">
+      <div class="row"><span class="label">Background</span><select id="lnBgMode" class="grow">
+        <option value="color">Colour</option>
+        <option value="gradient">Gradient</option>
+        <option value="transparent">Transparent</option>
+      </select></div>
+      <div class="row" id="lnBgColorRow"><span class="label">Colour</span><div class="swatchInk" id="lnBgSwatch"></div><input type="text" class="hexInk" id="lnBgHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+      <div id="lnBgGradRows">
+        <div class="row"><span class="label">End colour</span><div class="swatchInk" id="lnBg2Swatch"></div><input type="text" class="hexInk" id="lnBg2Hex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="lsl-bgAngle"></div>
+      </div>
+      <div id="lnBandsBox">
+        <div class="subhead">Fill between the lines</div>
+        <div class="row"><span class="label">Fill</span><select id="lnBands" class="grow">
+          <option value="none">None</option>
+          <option value="steps">Steps by height</option>
+          <option value="smooth">Smooth by height</option>
+          <option value="alternate">Alternating</option>
+        </select></div>
+        <div id="lnBandRows">
+          <div class="row"><span class="label">Low</span><div class="swatchInk" id="lnBandASwatch"></div><input type="text" class="hexInk" id="lnBandAHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+          <div id="lnBandMidBox">
+            <div class="row"><label><input type="checkbox" id="lnBandMidOn"> Middle colour</label></div>
+            <div class="row" id="lnBandMidRow"><span class="label">Middle</span><div class="swatchInk" id="lnBandMidSwatch"></div><input type="text" class="hexInk" id="lnBandMidHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+          </div>
+          <div class="row"><span class="label">High</span><div class="swatchInk" id="lnBandBSwatch"></div><input type="text" class="hexInk" id="lnBandBHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+          <div id="lsl-bandOpacity"></div>
+        </div>
+        <div class="subhead">Hill shading</div>
+        <div id="lsl-shade"></div>
+        <div id="lsl-shadeAngle"></div>
+        <div id="lsl-shadeRelief"></div>
+      </div>
+      <div class="row" id="lnFollowRow"><label title="Nothing is drawn where the source layer is transparent"><input type="checkbox" id="lnFollow"> Follow the image's shape</label></div>
+    </div>
+  </div>
+
+  <div class="section" data-section="lnLabels">
+    <div class="head"><span class="chev">▾</span>Height labels</div>
+    <div class="body">
+      <div class="row"><label title="Numbers on the contour lines, like a survey map"><input type="checkbox" id="lnLabelsOn"> Label the contour lines</label></div>
+      <div class="sub" id="lnLabelRows">
+        <div id="lsl-labelEvery"></div>
+        <div id="lsl-labelSpacing"></div>
+        <div class="row"><label title="Off: the numbers are always readable left to right"><input type="checkbox" id="lnLabelUphill"> Tops of the numbers face uphill</label></div>
+      </div>
+      <div id="lsl-peaks"></div>
+      <div id="lsl-peakSpacing"></div>
+      <div id="lnMarkRows">
+        <div class="subhead">Look of the numbers</div>
+        <div id="lsl-labelSize"></div>
+        <div class="row"><label title="Cut the lines under each number"><input type="checkbox" id="lnLabelGap"> Gap in the lines</label></div>
+        <div class="row"><label><input type="checkbox" id="lnLabelColorOn"> Own colour (off: the line's colour)</label></div>
+        <div class="row" id="lnLabelColorRow"><span class="label">Colour</span><div class="swatchInk" id="lnLabelSwatch"></div><input type="text" class="hexInk" id="lnLabelHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div class="row" id="lnUnitsRow"><span class="label">Units</span><select id="lnLabelUnits" class="grow"><option value="m">Metres</option><option value="ft">Feet</option></select></div>
+      </div>
+      <p class="hint">Labels go on the index lines (every line when index lines are off), where the line runs calmly and there is room. Without a map, the numbers are the line counts from the lowest line.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="lnLayers">
+    <div class="head"><span class="chev">▾</span>Layers</div>
+    <div class="body">
+      <p class="hint">The line art is one layer, “… Line Art”, right above the source. Select it and press the button below to change it later.</p>
+      <div class="row btnrow"><button id="lnLoad">Edit selected Line Art layer</button></div>
+    </div>
+  </div>
+ </div>
+ </div>
+
+ <div id="mapTool" class="tool hidden">
+ <div id="mpTop">
+  <div class="ctlHead" id="mpPreviewHead"><span class="chev">▾</span><span class="ctlLabel">Preview</span></div>
+  <div id="mpPreviewWrap"><img id="mpPreview" alt=""><div id="mpPreviewMsg">Choose an area</div></div>
+  <div class="pvGrip" id="mpPreviewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
+  <div class="row zoomBar" id="mpZoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
+  <div class="ctlHead" id="mpCtlHead" title="Show or hide the controls under the preview (more room for the settings)"><span class="chev">▾</span><span class="ctlLabel">Controls</span></div>
+  <div id="mpCtlBody">
+  <div class="row hidden" id="mpArtboardRow"><select id="mpArtboard" class="grow" title="Which artboard the map fills. Auto follows the selected layer."><option value="auto">Artboard: auto (follows the layer)</option></select></div>
+  <div id="mpStatus"></div>
+  <div id="mpEditBox" class="editing hidden">
+    <div id="mpEditLabel" style="margin-bottom:5px"></div>
+    <div class="row btnrow"><button id="mpUpdate" class="primary">Update map</button><button id="mpStopEdit">Done</button></div>
+  </div>
+  <div class="row"><button id="mpRandom" class="grow" title="Random colours and widths. The area stays.">Randomize</button><button id="mpUndo" style="flex:0 0 auto" title="Undo the last change in this tab" disabled>↶ Undo</button></div>
+  <div class="row"><button id="mpApply" class="primary grow" title="Adds a group with one layer per kind of feature, filling the canvas (or the artboard)">Add map layers</button></div>
+  <div class="row"><button id="mpLive" class="grow" title="Places the map as one smart object at the top and opens its contents. Changes update it live; Save & close puts the final result into your document. Add map layers gives one layer per kind instead.">Open live smart object</button></div>
+  <div class="row"><select id="mpSelectWhat" class="grow" title="Which features to select"></select><button id="mpSelect" title="Makes a Photoshop selection of these features on the canvas">Select</button></div>
+  </div>
+ </div>
+ <div id="mpScroller">
+  <div class="section" data-section="mpArea">
+    <div class="head"><span class="chev">▾</span>Area</div>
+    <div class="body">
+      <div class="row"><input type="text" id="mpPlace" class="grow" placeholder="Google Maps link, lat, lon or a place"><button id="mpFind" title="Find the place (Enter does the same)">Find</button></div>
+      <p class="hint" id="mpAreaInfo">Paste a Google Maps link (its centre and zoom are used), coordinates, or a place name. The area takes the shape of your canvas (or artboard).</p>
+      <div id="msl-widthKm"></div>
+      <div class="row btnrow"><button id="mpToLines" title="Opens the Lines tab with its height taken from this area: contour lines, height labels, ridges">Contours of this area (Lines tab)</button></div>
+      <p class="hint">Map data © OpenStreetMap contributors, served by OpenFreeMap (OpenMapTiles). Credit them when you publish the map; the credit line below does it for you.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="mpLook">
+    <div class="head"><span class="chev">▾</span>Look</div>
+    <div class="body">
+      <div class="row"><select id="mpPreset" class="grow"></select><button id="mpPresetReset" style="flex:0 0 auto" title="Back to the chosen look, without your changes">Reset</button></div>
+      <div class="row"><input type="text" id="mpPresetName" placeholder="Preset name"><button id="mpPresetSave">Save</button><button id="mpPresetDelete" title="Delete the selected preset">Delete</button></div>
+      <div class="row btnrow"><button id="mpPresetExport">Export presets…</button><button id="mpPresetImport">Import…</button></div>
+      <p class="hint">A look sets every colour, width and switch below. The area stays.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="mpAreas">
+    <div class="head"><span class="chev">▾</span>Areas</div>
+    <div class="body">
+      <div class="row"><label><input type="checkbox" id="mp_builtOn"> <b>Built-up areas</b></label></div>
+      <div class="sub" id="mp_builtRows">
+        <div class="row"><span class="label">Colour</span><div class="swatchInk" id="mp_builtSwatch"></div><input type="text" class="hexInk" id="mp_builtHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="msl-builtOpacity"></div>
+      </div>
+      <div class="row"><label><input type="checkbox" id="mp_greenOn"> <b>Parks and woods</b></label></div>
+      <div class="sub" id="mp_greenRows">
+        <div class="row"><span class="label">Colour</span><div class="swatchInk" id="mp_greenSwatch"></div><input type="text" class="hexInk" id="mp_greenHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="msl-greenOpacity"></div>
+      </div>
+      <div class="row"><label><input type="checkbox" id="mp_bareOn"> <b>Rock, ice and sand</b></label></div>
+      <div class="sub" id="mp_bareRows">
+        <div class="row"><span class="label">Colour</span><div class="swatchInk" id="mp_bareSwatch"></div><input type="text" class="hexInk" id="mp_bareHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="msl-bareOpacity"></div>
+      </div>
+      <div class="row"><label><input type="checkbox" id="mp_waterOn"> <b>Lakes and sea</b></label></div>
+      <div class="sub" id="mp_waterRows">
+        <div class="row"><span class="label">Colour</span><div class="swatchInk" id="mp_waterSwatch"></div><input type="text" class="hexInk" id="mp_waterHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="msl-waterOpacity"></div>
+      </div>
+      <div class="row"><label><input type="checkbox" id="mp_buildingsOn"> <b>Buildings</b></label></div>
+      <div class="sub" id="mp_buildingsRows">
+        <div class="row"><span class="label">Colour</span><div class="swatchInk" id="mp_buildingsSwatch"></div><input type="text" class="hexInk" id="mp_buildingsHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="msl-buildingsOpacity"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" data-section="mpLines">
+    <div class="head"><span class="chev">▾</span>Roads, rail and rivers</div>
+    <div class="body">
+      <div class="row"><label><input type="checkbox" id="mp_riversOn"> <b>Rivers and streams</b></label></div>
+      <div class="sub" id="mp_riversRows">
+        <div class="row"><span class="label">Colour</span><div class="swatchInk" id="mp_riversSwatch"></div><input type="text" class="hexInk" id="mp_riversHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="msl-riversOpacity"></div>
+        <div id="msl-riversWidth"></div>
+        <div class="row"><label><input type="checkbox" id="mp_riversStreams"> Small streams and ditches</label></div>
+      </div>
+      <div class="row"><label><input type="checkbox" id="mp_roadsOn"> <b>Roads</b></label></div>
+      <div class="sub" id="mp_roadsRows">
+        <div class="row"><span class="label">Colour</span><div class="swatchInk" id="mp_roadsSwatch"></div><input type="text" class="hexInk" id="mp_roadsHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="msl-roadsOpacity"></div>
+        <div id="msl-roadsWidth"></div>
+        <div class="row"><label><input type="checkbox" id="mp_roadsMinor"> Paths and tracks</label></div>
+        <div class="row"><label><input type="checkbox" id="mp_roadsCasing"> Outline (casing)</label></div>
+        <div class="row" id="mp_casingColorRow"><span class="label">Outline colour</span><div class="swatchInk" id="mp_roadsCasingColorSwatch"></div><input type="text" class="hexInk" id="mp_roadsCasingColorHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="msl-roadsCasingWidth"></div>
+        <div class="row"><label><input type="checkbox" id="mp_roadsMajorOn"> Main roads in their own colour</label></div>
+        <div class="row" id="mp_majorColorRow"><span class="label">Main roads</span><div class="swatchInk" id="mp_roadsMajorColorSwatch"></div><input type="text" class="hexInk" id="mp_roadsMajorColorHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="msl-roadsTunnels"></div>
+      </div>
+      <div class="row"><label><input type="checkbox" id="mp_railOn"> <b>Railways</b></label></div>
+      <div class="sub" id="mp_railRows">
+        <div class="row"><span class="label">Colour</span><div class="swatchInk" id="mp_railSwatch"></div><input type="text" class="hexInk" id="mp_railHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="msl-railOpacity"></div>
+        <div id="msl-railWidth"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" data-section="mpBg">
+    <div class="head"><span class="chev">▾</span>Background and credit</div>
+    <div class="body">
+      <div class="row"><span class="label">Background</span><select id="mpBgMode" class="grow"><option value="color">Colour</option><option value="transparent">Transparent</option></select></div>
+      <div class="row" id="mp_bgRow"><span class="label">Colour</span><div class="swatchInk" id="mp_bgSwatch"></div><input type="text" class="hexInk" id="mp_bgHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+      <div class="row"><label><input type="checkbox" id="mp_creditOn"> Credit line (© OpenStreetMap contributors)</label></div>
+      <div class="sub" id="mp_creditRows">
+        <div class="row"><span class="label">Colour</span><div class="swatchInk" id="mp_creditSwatch"></div><input type="text" class="hexInk" id="mp_creditHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div id="msl-creditSize"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" data-section="mpLayers">
+    <div class="head"><span class="chev">▾</span>Layers</div>
+    <div class="body">
+      <p class="hint">“Add map layers” makes a group “… Map” at the top with one layer per kind of feature (Background, areas, rivers, water, buildings, roads, railways, credit), so you can restyle or mask each one in Photoshop. Select one kind with the menu under the preview to use it as a mask.</p>
+      <div class="row btnrow"><button id="mpLoad">Edit selected Map group</button></div>
     </div>
   </div>
  </div>

@@ -13,6 +13,10 @@ let icons: [(String, String, UInt32)] = [
   ("shadow", "blend", 0x4b5563), ("cells", "layout-grid", 0xea580c), ("glitch", "zap", 0xa21caf), ("output", "download", 0x2563eb), ("batch", "folder-open", 0x0d9488),
   ("inkType", "scroll-text", 0xa16207), ("inkInk", "droplet", 0x1e3a8a), ("inkPaper", "sticky-note", 0xb45309), ("inkLayers", "layers", 0x475569),
   ("taStyle", "sparkles", 0xca8a04), ("taShape", "blend", 0x9333ea), ("taText", "pencil", 0x0891b2), ("taFont", "type", 0xdb2777), ("taLayout", "grid-3x3", 0x65a30d),
+  ("lnStyle", "sparkles", 0x0f766e), ("lnHeight", "mountain-snow", 0x15803d), ("lnLines", "rows-3", 0x2563eb), ("lnWidth", "move-horizontal", 0xc2410c),
+  ("lnColour", "palette", 0xbe185d), ("lnUnder", "paint-bucket", 0x7c3aed), ("lnLayers", "layers", 0x475569), ("lnLabels", "hash", 0xa16207),
+  ("mpArea", "map-pin", 0xdc2626), ("mpLook", "sparkles", 0x0d9488), ("mpAreas", "trees", 0x15803d), ("mpLines", "route", 0xd97706),
+  ("mpBg", "image", 0x6d28d9), ("mpLayers", "layers", 0x475569),
 ]
 let S = 36, inset: CGFloat = 7
 for (id, name, rgb) in icons {

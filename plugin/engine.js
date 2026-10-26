@@ -22,6 +22,7 @@ const clamp255 = (v) => (v < 0 ? 0 : v > 255 ? 255 : Math.round(v));
 const DEFAULTS = {
   charset: "bourke",
   customChars: " .:-=+*#%@",
+  extraChars: "", // with a built-in character set: its {messages} and [fill] (see customOf); other characters are ignored
   textMode: "ramp", // custom text: ramp (one character per brightness step) | words | phrase (written out, repeating)
   phraseShade: true, // phrase: letters fade with the image
   phraseWrap: true, // phrase: carry on where the previous line stopped (off: every line starts the text again)
@@ -92,6 +93,9 @@ const DEFAULTS = {
   // [ ] fill in custom text (see parseCustom)
   fillLevel: 0.5, // with ramp characters outside the brackets: cells darker than this get the fill
   fillSeed: 1, // order of [?random] items
+  // {messages} and [ ] fills in their own colour wherever they are written (see colorSpecial)
+  msgColorFrom: "keep", msgColor: "#ff2a6d", msgOpacity: 1, // keep (as the text around them) | own | image | under
+  fillColorFrom: "keep", fillColor: "#00e5ff", fillOpacity: 1,
   // Matrix rain (inert unless rainOn; see applyRain). Lengths and distances are in character cells.
   rainOn: false, rainFrom: "object", // object (falls from the shape's lower edges) | everywhere (the whole image)
   rainCharset: "katakana_half", rainChars: "01", // a character set id, or "custom" for rainChars ([ ] syntax works)
@@ -234,6 +238,14 @@ function parseCustom(str) {
   const fill = fills.length ? fillSpec([].concat(...fills.map((f) => f.items)), fills.some((f) => f.random)) : null;
   return { text, messages, fill };
 }
+// The custom text the grid uses: Custom text, or with a built-in character set the {messages} and [fill] added
+// to it (extraChars, without its plain characters: the set stays the ramp).
+function customOf(s) {
+  if (s.charset === "custom") return parseCustom(s.customChars);
+  if (!s.extraChars) return null;
+  const p = parseCustom(s.extraChars);
+  return p.messages.length || p.fill ? { text: "", messages: p.messages, fill: p.fill } : null;
+}
 const specChars = (spec) => (spec ? spec.items.join("") + spec.sep : "");
 // What the rain draws with: its preset's characters at random, or its custom text (plain characters at random,
 // or a [ ] expression).
@@ -262,7 +274,7 @@ const OUTLINE_LINES = "|/-\\"; // edge lines by direction: vertical, rising, hor
 // The characters the settings draw with: the ramp (custom text without its hidden messages and fill) and the
 // extras. rainPresetChars / ringPresetChars: the characters of the rain's and the ring rain's character sets.
 function charsetParts(s, presetChars, rainPresetChars, ringPresetChars) {
-  const custom = s.charset === "custom" ? parseCustom(s.customChars) : null;
+  const custom = customOf(s);
   const own = (p) => p.text + p.messages.map((m) => m.text).join("") + specChars(p.fill); // every character a custom text draws
   let extra = custom ? custom.messages.map((m) => m.text).join("") + specChars(custom.fill) : "";
   if (s.outlineOn) {
@@ -278,7 +290,7 @@ function charsetParts(s, presetChars, rainPresetChars, ringPresetChars) {
   if (ringRain) extra += specChars(ringRain) + rainMessages(rs).map((m) => m.text).join("");
   if (s.textArtOn) extra += textArtLines(s).join("");
   if (s.cellEdits && s.cellEdits.length) extra += s.cellEdits.map((e) => (e.op === "write" && e.text ? own(parseCustom(e.text)) : "")).join("");
-  return { ramp: custom ? custom.text : presetChars, extra, spread: s.dither === "none", rain, ringRain };
+  return { ramp: s.charset === "custom" ? custom.text : presetChars, extra, spread: s.dither === "none", rain, ringRain };
 }
 function charsetOf(atlas, s, presetChars, rainPresetChars, ringPresetChars) {
   const p = charsetParts(s, presetChars, rainPresetChars, ringPresetChars);
@@ -371,15 +383,36 @@ function computeGrid(src, geo, s, cs) {
 // Everything after the characters are chosen: fills, outline, hidden messages, rain, edits, glitch.
 function finishGrid(an, grid, s, cs) {
   if (an.under) grid.under = an.under;
-  const custom = s.charset === "custom" ? parseCustom(s.customChars) : null;
-  if (custom && custom.fill) applyFill(grid, s, cs, custom.fill, custom.text.trim() !== "");
+  const custom = customOf(s);
+  if (custom && custom.fill) applyFill(grid, s, cs, custom.fill, s.charset !== "custom" || custom.text.trim() !== "");
   const track = s._parts || s.echoOn ? partTracker(grid) : null; // which stage drew each cell (grid.part): separate layers, depth echo
   if (s.outlineOn) { applyOutline(grid, s, cs, an); if (track) track(PART.outline); }
   if (custom) hideMessages(grid, s, cs, custom.messages);
   if (s.rainOn) { applyRain(grid, s, cs); if (track) track(PART.rain); }
   if (s.cellEdits && s.cellEdits.length) { applyEdits(grid, s, cs); if (track) track(PART.edits); }
+  colorSpecial(grid, s);
   if (track && grid.hidden) grid.hidden.forEach((h, i) => { if (h) grid.part[i] = PART.hidden; });
   return s.glitchOn ? glitchGrid(grid, cs, s) : grid;
+}
+
+// Hidden {messages} (grid.hidden) and [ ] fills (grid.filled) in their own colour and opacity, wherever they were
+// written: Custom text, the text added to a character set, the outline, the outer ring and symbol edits. From:
+// keep (as the text around them), own (msgColor / fillColor), image (the source's colours) or under (the layer
+// below). Opacity goes through grid.shade. A message wins over a fill; the rain's own [ ] keeps the rain's colours.
+const specialColors = (s) => (s.msgColorFrom && s.msgColorFrom !== "keep") || (s.fillColorFrom && s.fillColorFrom !== "keep");
+function colorSpecial(grid, s) {
+  const { glyph, hidden, filled } = grid, cells = grid.cols * grid.rows;
+  for (const [mask, from, hex, opacity, isFill] of [[hidden, s.msgColorFrom, s.msgColor, s.msgOpacity, false], [filled, s.fillColorFrom, s.fillColor, s.fillOpacity, true]]) {
+    if (!mask) continue;
+    const set = from && from !== "keep" ? colorSetter(grid, from, hex) : null, op = opacity === undefined ? 1 : clamp01(opacity);
+    if (!set && op >= 1) continue;
+    if (op < 1 && !grid.shade) grid.shade = new Float32Array(cells).fill(1);
+    for (let i = 0; i < cells; i++) {
+      if (!mask[i] || glyph[i] < 0 || (isFill && hidden && hidden[i])) continue;
+      if (set) set(i);
+      if (op < 1) grid.shade[i] *= op;
+    }
+  }
 }
 
 // ---------- text art ----------
@@ -561,6 +594,12 @@ function itemStream(cs, spec, seed) {
   };
 }
 
+// Marks cell i as written by a [ ] fill (on) or by something else (off), for the fills' own colour (grid.filled,
+// see colorSpecial). Without any fill there is no grid.filled.
+function markFill(grid, i, on) {
+  if (!grid.filled) { if (!on) return; grid.filled = new Uint8Array(grid.cols * grid.rows); }
+  grid.filled[i] = on ? 1 : 0;
+}
 // [ ] fill (see parseCustom): writes the items in reading order into every inked cell or, when ramp characters
 // stand outside the brackets, only into cells darker than fillLevel, leaving the rest to the ramp. Solid letters.
 function applyFill(grid, s, cs, fill, withRamp) {
@@ -569,7 +608,7 @@ function applyFill(grid, s, cs, fill, withRamp) {
   if (!next) return;
   const lvl = withRamp ? s.fillLevel : Math.max(s.threshold, 0.04);
   for (let i = 0; i < cells; i++) {
-    if (ink[i] > lvl) { glyph[i] = next(); if (grid.shade) grid.shade[i] = 1; }
+    if (ink[i] > lvl) { glyph[i] = next(); markFill(grid, i, true); if (grid.shade) grid.shade[i] = 1; }
     else if (!withRamp) glyph[i] = -1;
   }
 }
@@ -691,6 +730,7 @@ function writeCustom(grid, s, cs, an, text, mode, pick, lvl) {
   const { cols, rows, glyph } = grid, cells = cols * rows, p = parseCustom(text), hasText = p.text.trim() !== "";
   const k = 1 / Math.max(1e-6, 1 - lvl), ink = new Float32Array(cells);
   for (let i = 0; i < cells; i++) ink[i] = clamp01((an.ink[i] - lvl) * k);
+  if (grid.filled) for (let i = 0; i < cells; i++) if (pick(i)) grid.filled[i] = 0;
   if (hasText && mode === "phrase") writeSeq(glyph, cols, rows, glyphSeq(cs, p.text), pick, true);
   else if (hasText && cs.atlas) {
     const sub = new Float32Array(an.sub.length);
@@ -703,7 +743,7 @@ function writeCustom(grid, s, cs, an, text, mode, pick, lvl) {
   }
   if (p.fill) { // with text, only the darker tones (fillLevel); on its own, every cell
     const next = itemStream(cs, p.fill, (s.fillSeed | 0) + 307);
-    if (next) for (let i = 0; i < cells; i++) if (pick(i) && (!hasText || ink[i] > s.fillLevel)) glyph[i] = next();
+    if (next) for (let i = 0; i < cells; i++) if (pick(i) && (!hasText || ink[i] > s.fillLevel)) { glyph[i] = next(); markFill(grid, i, true); }
   }
   hideMessages(grid, s, cs, p.messages, pick, 37);
 }
@@ -721,9 +761,10 @@ function maskDistance(mask, want, cols, rows) {
 // outer ring's random picks apart from the outline's.
 function drawStroke(grid, s, cs, stroke, dIn, dOut, off) {
   const { cols, rows, glyph } = grid, cells = cols * rows;
+  if (grid.filled) for (let i = 0; i < cells; i++) if (stroke[i]) grid.filled[i] = 0;
   if (s.outlineStyle === "chars") {
     const p = parseCustom(s.outlineChars), next = p.fill && itemStream(cs, p.fill, (s.fillSeed | 0) + 401 + off);
-    if (next) { for (let i = 0; i < cells; i++) if (stroke[i]) glyph[i] = next(); }
+    if (next) { for (let i = 0; i < cells; i++) if (stroke[i]) { glyph[i] = next(); markFill(grid, i, true); } }
     else writeSeq(glyph, cols, rows, glyphSeq(cs, p.text), (i) => stroke[i], true);
     hideMessages(grid, s, cs, p.messages, (i) => stroke[i], 53 + off);
   } else {
@@ -809,7 +850,7 @@ function outlineRing(grid, s, cs, inside, dIn, stroke) {
     for (let i = 0; i < cells; i++) if (ring[i]) { colorOf(i); if (grid.shade) grid.shade[i] = ro; }
   }
   if (mode === "none") return;
-  for (let i = 0; i < cells; i++) if (band[i]) { glyph[i] = -1; if (grid.shade) grid.shade[i] = 1; }
+  for (let i = 0; i < cells; i++) if (band[i]) { glyph[i] = -1; markFill(grid, i, false); if (grid.shade) grid.shade[i] = 1; }
   const colorOf = ringColorOf(grid, s, s.outlineRingTextColorFrom, s.outlineRingTextColor);
   if (mode === "text") {
     const p = parseCustom(s.outlineRingChars), next = p.fill && itemStream(cs, p.fill, seed), seq = glyphSeq(cs, p.text);
@@ -817,6 +858,7 @@ function outlineRing(grid, s, cs, inside, dIn, stroke) {
     for (let i = 0; i < cells; i++) {
       if (!band[i] || hash3(seed, i % cols, Math.floor(i / cols)) >= density) continue;
       glyph[i] = next ? next() : seq.length ? seq[k++ % seq.length] : -1;
+      if (next) markFill(grid, i, true);
       colorOf(i);
     }
     hideMessages(grid, s, cs, p.messages, (i) => band[i] === 1, 89);
@@ -847,7 +889,7 @@ function bandRays(grid, s, cs, band, ctr, mode, density, seed, colorOf) {
     runs.forEach((run, j) => {
       if (hash3(seed + 1, j, 0) >= density) return;
       const next = p.fill && itemStream(cs, p.fill, seed + 50 + j);
-      run.forEach((i, k) => { glyph[i] = next ? next() : seq.length ? seq[k % seq.length] : -1; colorOf(i); });
+      run.forEach((i, k) => { glyph[i] = next ? next() : seq.length ? seq[k % seq.length] : -1; if (next) markFill(grid, i, true); colorOf(i); });
     });
     hideInRuns(grid, s, cs, runs, p.messages, 97);
   } else if (mode === "rain" && cs.ringRain) {
@@ -1000,11 +1042,12 @@ function rainStream(grid, s, cs, i, len) {
     color[j * 3] = clamp255(cl[0]); color[j * 3 + 1] = clamp255(cl[1]); color[j * 3 + 2] = clamp255(cl[2]);
     grid.shade[j] = isHead ? 1 : 1 - fade * (1 - t);
     if (grid.hidden) grid.hidden[j] = 0;
+    markFill(grid, j, false);
   }
 }
 function applyEdits(grid, s, cs) {
   const { glyph, color, geo } = grid;
-  const orig = { glyph: glyph.slice(), color: color.slice(), shade: grid.shade ? grid.shade.slice() : null, hidden: grid.hidden ? grid.hidden.slice() : null };
+  const orig = { glyph: glyph.slice(), color: color.slice(), shade: grid.shade ? grid.shade.slice() : null, hidden: grid.hidden ? grid.hidden.slice() : null, filled: grid.filled ? grid.filled.slice() : null };
   s.cellEdits.forEach((e, ei) => {
     if (!e) return;
     const cells = editCells(e, geo), below = e.color === "under" ? underOf(grid) : null, col = e.color && !below ? hexToRgb(e.color) : null;
@@ -1018,6 +1061,7 @@ function applyEdits(grid, s, cs) {
         color[i * 3] = orig.color[i * 3]; color[i * 3 + 1] = orig.color[i * 3 + 1]; color[i * 3 + 2] = orig.color[i * 3 + 2];
         if (grid.shade) grid.shade[i] = orig.shade ? orig.shade[i] : 1;
         if (grid.hidden) grid.hidden[i] = orig.hidden ? orig.hidden[i] : 0;
+        markFill(grid, i, !!(orig.filled && orig.filled[i]));
         return;
       }
       if (e.op === "erase") glyph[i] = -1;
@@ -1028,6 +1072,7 @@ function applyEdits(grid, s, cs) {
       if (ec && (e.op === "write" || glyph[i] >= 0)) { color[i * 3] = ec[0]; color[i * 3 + 1] = ec[1]; color[i * 3 + 2] = ec[2]; }
       if (e.op !== "color" && grid.shade) grid.shade[i] = 1;
       if (grid.hidden) grid.hidden[i] = 0; // no longer part of a hidden message
+      markFill(grid, i, e.op === "write" && !!fillNext && !ec); // an edit's own colour wins over the fills' colour
     });
     if (p) hideInRuns(grid, s, cs, [cells], p.messages, 600 + ei);
   });
@@ -1068,6 +1113,7 @@ function rainWriter(grid, s, cs, o) {
       glyph[i] = g;
       color[i * 3] = clamp255(col[0]); color[i * 3 + 1] = clamp255(col[1]); color[i * 3 + 2] = clamp255(col[2]);
       shade[i] = isHead ? 1 : (1 - fade * (1 - t)) * (o.everywhere && !shape[i] ? outside : 1);
+      markFill(grid, i, false); // the rain's own [ ] are its characters: it keeps its colours
       run.push(i);
     }
   };
@@ -1831,8 +1877,8 @@ function toText(grid, cs) { return gridLines(grid, cs).map((l) => l.replace(/\s+
 const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 // Per-cell colours in text exports: colour modes other than mono, the rain (its own colours, with the fade
-// mixed into the background where there is one) and recoloured symbol edits.
-const perCellColor = (s) => s.colorMode !== "mono" || s.rainOn || (s.cellEdits || []).some((e) => e && e.color);
+// mixed into the background where there is one), messages and fills in their own colour and recoloured symbol edits.
+const perCellColor = (s) => s.colorMode !== "mono" || s.rainOn || specialColors(s) || (s.cellEdits || []).some((e) => e && e.color);
 function colorRuns(grid, cs, r, s) {
   const runs = [], fadeTo = s.rainOn && grid.shade && s.bgMode !== "transparent" ? hexToRgb(s.bg) : null;
   let cur = null;
@@ -1896,5 +1942,5 @@ function toSVG(grid, cs, s) {
   return parts.join("\n");
 }
 
-const Engine = { RING_RAIN, migrateSettings, layerParts, renderPart, PART_NAMES, DIFFUSION, ORDERED, resampleGlyph, DEFAULTS, prepareAtlas, buildCharset, parseCustom, charsetParts, charsetOf, computeGeometry, computeGrid, editCells, render, flattenForPreview, gridLines, toText, toHTML, toSVG, hexToRgb, rgbToHex, luma };
+const Engine = { RING_RAIN, migrateSettings, layerParts, renderPart, PART_NAMES, DIFFUSION, ORDERED, resampleGlyph, DEFAULTS, prepareAtlas, buildCharset, parseCustom, customOf, charsetParts, charsetOf, computeGeometry, computeGrid, editCells, render, flattenForPreview, gridLines, toText, toHTML, toSVG, hexToRgb, rgbToHex, luma };
 if (typeof module !== "undefined") module.exports = Engine;

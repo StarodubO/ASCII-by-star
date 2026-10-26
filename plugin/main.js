@@ -10,6 +10,8 @@ const { makePresetBox } = require("./presetbox.js");
 const { makePicker } = require("./picker.js");
 const { makeHistory } = require("./history.js");
 const setupInk = require("./inkui.js");
+const setupLines = require("./linesui.js");
+const setupMap = require("./mapui.js");
 const setupTextArt = require("./textart.js");
 const { makeSlider, trackDrag, onDoubleClick, SLIDER_HTML } = require("./slider.js");
 const { enhanceAllSelects } = require("./dropdown.js");
@@ -34,8 +36,10 @@ let editing = null; // {docId, layerId, tag, name, sourceLayerId}
 let live = null; // live preview window {docId, layerId, sourceDocId, scale}
 let gridCache = { key: null, src: null, grid: null, cs: null, geo: null };
 let looks = null; // the Look presets (presetbox.js; saved ones in gf:userPresets)
-let tab = loadJSON("gf:tab", "ascii"); // "ascii" | "text" | "ink"
+let tab = loadJSON("gf:tab", "ascii"); // "ascii" | "text" | "ink" | "lines"
 let ink = null; // the Ink bleed tab (inkui.js)
+let lines = null; // the Lines tab (linesui.js)
+let mapTab = null; // the Map tab (mapui.js)
 let textTab = null; // the Text art tab (textart.js)
 
 // ---------- utils ----------
@@ -117,7 +121,7 @@ async function textArtSource(ctx, doc, frame, ownHistory) {
 function needsUnder(s) {
   const ring = s.outlineOn && s.outlineRingOn && [s.outlineRingColorFrom, s.outlineRingTextColorFrom, s.outlineRingFill === "rain" && s.rrColorMode].includes("under");
   return s.colorMode === "under" || (s.outlineOn && s.outlineColorFrom === "under") || (s.rainOn && s.rainColorMode === "under") || ring ||
-    (s.cfOn && s.cfFrom === "under") || (s.cellEdits || []).some((e) => e && e.color === "under");
+    (s.cfOn && s.cfFrom === "under") || s.msgColorFrom === "under" || s.fillColorFrom === "under" || (s.cellEdits || []).some((e) => e && e.color === "under");
 }
 // The visible image under the source as RGBA (rect R at scale z, like capture), or null when nothing is below.
 // Inside executeAsModal. ownHistory: the temporary hiding goes into a history step that is thrown away.
@@ -918,8 +922,9 @@ function applyLook(settings) {
   syncUI();
   schedulePreview(0);
 }
-// The settings that belong to one picture rather than to a look: symbol edits and the text art.
-const PICTURE_KEYS = ["cellEdits", "textArtOn", "textArt", "textArtFont"];
+// The settings that belong to one picture rather than to a look: symbol edits, the text art and the messages and
+// fill added to a built-in character set.
+const PICTURE_KEYS = ["extraChars", "cellEdits", "textArtOn", "textArt", "textArtFont"];
 const pictureOf = (s) => Object.fromEntries(PICTURE_KEYS.map((k) => [k, JSON.parse(JSON.stringify(s[k] === undefined ? null : s[k]))]));
 // Settings without them (for presets)
 function lookOnly(s) { const out = JSON.parse(JSON.stringify(s)); for (const k of PICTURE_KEYS) out[k] = JSON.parse(JSON.stringify(Engine.DEFAULTS[k] === undefined ? null : Engine.DEFAULTS[k])); return out; }
@@ -1167,6 +1172,8 @@ const SLIDERS = {
   saturation: ["Saturation", 0, 3, 0.01, pct],
   colorBoost: ["Lift darks", 0, 1, 0.01, pct],
   glyphOpacity: ["Text opacity", 0, 1, 0.01, pct],
+  msgOpacity: ["Opacity", 0, 1, 0.01, pct],
+  fillOpacity: ["Opacity", 0, 1, 0.01, pct],
   mosaicAmount: ["Mosaic", 0, 1, 0.01, pct],
   bgOpacity: ["Opacity", 0, 1, 0.01, pct],
   gPixelSort: ["Pixel sort", 0, 1, 0.01, pct],
@@ -1344,10 +1351,10 @@ function visibleShadow(key) {
 }
 const sliderEls = {};
 // controls whose id is the setting they edit
-const SELECTS = ["charset", "textMode", "sizeMode", "dither", "colorMode", "bgMode", "gSortDir", "gChannelSwap", "outlinePos", "outlineStyle", "outlineFill", "outlineFillMode", "outlineColorFrom", "outlineRingFill", "outlineRingDir", "outlineRingColorFrom", "outlineRingTextColorFrom", "rainDir", "rainCentre", "cfFill", "cfFrom", "cfTo", "cfBlend", "cfGradShape", "cfGradSpan", "echoDir", "echoCentre", "echoColorMode", "rainFrom", "rainCharset", "rainColorMode", "rrCharset", "rrColorMode"];
+const SELECTS = ["charset", "msgColorFrom", "fillColorFrom", "textMode", "sizeMode", "dither", "colorMode", "bgMode", "gSortDir", "gChannelSwap", "outlinePos", "outlineStyle", "outlineFill", "outlineFillMode", "outlineColorFrom", "outlineRingFill", "outlineRingDir", "outlineRingColorFrom", "outlineRingTextColorFrom", "rainDir", "rainCentre", "cfFill", "cfFrom", "cfTo", "cfBlend", "cfGradShape", "cfGradSpan", "echoDir", "echoCentre", "echoColorMode", "rainFrom", "rainCharset", "rainColorMode", "rrCharset", "rrColorMode"];
 const CHECKS = ["textArtFit", "sortByDensity", "invert", "serpentine", "glitchOn", "gradientMid", "keepAlpha", "phraseShade", "phraseWrap", "dropOn", "longOn", "offOn", "glowOn", "glowTextColor", "outlineOn", "outlineRingOn", "outlineRingStroke", "cfOn", "cfOnlyGlyphs", "cfGradMidOn", "cfGradReverse", "echoOn", "echoOutline", "echoRain", "echoText", "rainOn", "rainHead", "rainGradientMid", "rrHead", "rrGradientMid"];
-const TEXTS = ["customChars", "outlineChars", "outlineFillChars", "outlineRingChars", "rainChars", "rrChars"];
-const APPLY_TEXTS = { customChars: "customApply", rainChars: "rainApply", outlineChars: "outlineApply", outlineFillChars: "outlineFillApply", outlineRingChars: "outlineRingApply", rrChars: "rrApply" }; // text box → its Apply button
+const TEXTS = ["customChars", "extraChars", "outlineChars", "outlineFillChars", "outlineRingChars", "rainChars", "rrChars"];
+const APPLY_TEXTS = { customChars: "customApply", extraChars: "extraApply", rainChars: "rainApply", outlineChars: "outlineApply", outlineFillChars: "outlineFillApply", outlineRingChars: "outlineRingApply", rrChars: "rrApply" }; // text box → its Apply button
 function refreshApply() {
   for (const [k, btn] of Object.entries(APPLY_TEXTS)) {
     const pending = $(k).value !== S[k];
@@ -1356,9 +1363,10 @@ function refreshApply() {
   }
 }
 let markHidden = loadJSON("gf:markHidden", false); // preview only: show where hidden messages went
+let extraOpen = false; // the box for messages and a fill on a built-in character set, opened by its button
 
 // Sections with a badge (plugin/icons/sections/<id>.png, made by tools/make_section_icons.swift)
-const SECTION_ICONS = new Set(["taStyle", "taText", "taFont", "taLayout", "taShape", "look", "chars", "outline", "rain", "depth", "edit", "grid", "tone", "color", "shadow", "cells", "glitch", "output", "batch", "inkType", "inkInk", "inkPaper", "inkLayers"]);
+const SECTION_ICONS = new Set(["taStyle", "taText", "taFont", "taLayout", "taShape", "look", "chars", "outline", "rain", "depth", "edit", "grid", "tone", "color", "shadow", "cells", "glitch", "output", "batch", "inkType", "inkInk", "inkPaper", "inkLayers", "lnStyle", "lnHeight", "lnLines", "lnWidth", "lnColour", "lnUnder", "lnLabels", "lnLayers", "mpArea", "mpLook", "mpAreas", "mpLines", "mpBg", "mpLayers"]);
 function buildUI() {
   for (const [key, [label, min, max, step, fmt]] of Object.entries(SLIDERS)) {
     const host = $("sl-" + key);
@@ -1407,6 +1415,8 @@ function buildUI() {
     $(btn).addEventListener("click", apply);
     if (String($(k).tagName).toUpperCase() === "INPUT") $(k).addEventListener("keydown", (e) => { if (e.key === "Enter") setTimeout(apply, 0); }); // one-line boxes: Enter applies
   }
+  $("extraOpen").addEventListener("click", () => { extraOpen = true; refreshVisibility(); });
+  $("extraClear").addEventListener("click", () => { S.extraChars = ""; extraOpen = false; syncUI(); schedulePreview(0); });
   $("hideMark").checked = markHidden;
   onCheck($("hideMark"), (v) => { markHidden = v; saveJSON("gf:markHidden", v); schedulePreview(0); });
   $("hideMove").addEventListener("click", () => { S.hideSeed = Math.floor(Math.random() * 99999) + 1; schedulePreview(0); });
@@ -1496,7 +1506,7 @@ function buildUI() {
   });
 
   // the controls under each preview can fold away, leaving more room for the settings
-  for (const id of ["ctl", "textCtl", "inkCtl"]) {
+  for (const id of ["ctl", "textCtl", "inkCtl", "lnCtl", "mpCtl"]) {
     const head = $(id + "Head"), body = $(id + "Body"), key = "gf:" + id + "Folded";
     const apply = (f) => { body.classList.toggle("hidden", f); head.querySelector(".chev").textContent = f ? "▸" : "▾"; head.querySelector(".ctlLabel").textContent = f ? "Controls (source, apply, live smart object)" : "Controls"; fitLayout(true); };
     head.addEventListener("click", () => { const f = !body.classList.contains("hidden"); saveJSON(key, f); apply(f); });
@@ -1514,7 +1524,7 @@ function setupSections() {
   const restripe = (box) => sectionsOf(box).forEach((sec, i) => sec.classList.toggle("alt", i % 2 === 1)); // light and dark bands alternate
   const orderKey = (box) => "gf:sectionOrder:" + box.id;
   const fold = (sec, f) => { collapsed[sec.dataset.section] = f; sec.classList.toggle("collapsed", f); sec.querySelector(".chev").textContent = f ? "▸" : "▾"; };
-  for (const [box, controls] of [[$("scroller"), $("ctlBody")], [$("textScroller"), $("textCtlBody")], [$("inkScroller"), $("inkCtlBody")]]) {
+  for (const [box, controls] of [[$("scroller"), $("ctlBody")], [$("textScroller"), $("textCtlBody")], [$("inkScroller"), $("inkCtlBody")], [$("lnScroller"), $("lnCtlBody")], [$("mpScroller"), $("mpCtlBody")]]) {
     const secs = sectionsOf(box), original = secs.map((x) => x.dataset.section), last = secs[secs.length - 1], after = last ? last.nextSibling : null;
     const place = (order) => { // order: section ids; ones not listed keep their usual place after them
       const byId = new Map(secs.map((x) => [x.dataset.section, x]));
@@ -1604,10 +1614,11 @@ function refreshVisibility() {
   const show = (el, on) => el.classList.toggle("hidden", !on);
   const custom = S.charset === "custom", mode = custom ? S.textMode : "ramp";
   show($("customRows"), custom);
-  const parsed = custom ? Engine.parseCustom(S.customChars) : null;
+  const parsed = Engine.customOf(S), extra = !custom && (extraOpen || !!S.extraChars || $("extraChars").value !== "");
+  show($("extraRows"), !custom); show($("extraOpenRow"), !custom && !extra); show($("extraBox"), extra);
   show($("hideRow"), !!parsed && parsed.messages.length > 0);
   show($("fillRows"), !!(parsed && parsed.fill));
-  show(sliderEls.fillLevel.row, !!(parsed && parsed.fill && parsed.text.trim()));
+  show(sliderEls.fillLevel.row, !!(parsed && parsed.fill && (!custom || parsed.text.trim())));
   show($("fillShuffleRow"), !!(parsed && parsed.fill && parsed.fill.random));
   show($("textModeRows"), custom);
   show($("phraseRows"), mode === "phrase");
@@ -1618,6 +1629,7 @@ function refreshVisibility() {
   show(sliderEls.size.row, S.sizeMode === "px");
   show(sliderEls.columns.row, S.sizeMode === "cols");
   show($("fgRow"), S.colorMode === "mono");
+  show($("msgColorRow"), S.msgColorFrom === "own"); show($("fillColorRow"), S.fillColorFrom === "own");
   show($("gradRows"), S.colorMode === "gradient");
   for (const id of ["gradMidSwatch", "gradMidHex"]) $(id).style.opacity = S.gradientMid ? "" : "0.35";
   show($("outlineRows"), !!S.outlineOn);
@@ -1718,7 +1730,7 @@ let lastH = -1, lastTop = -1;
 function fitLayout(force) {
   const H = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0;
   if (!H) return;
-  const ids = TAB_IDS[tab], top = $(ids.top), other = tab === "ink" ? ink : tab === "text" ? textTab : null;
+  const ids = TAB_IDS[tab], top = $(ids.top), other = tab === "ink" ? ink : tab === "lines" ? lines : tab === "map" ? mapTab : tab === "text" ? textTab : null;
   const setH = (el, prop, px) => { const v = px + "px"; if (el.style[prop] !== v) el.style[prop] = v; };
   const v = tab === "ascii" ? viewer : other && other.viewer;
   if (v) v.layout(H);
@@ -1733,6 +1745,8 @@ const TAB_IDS = {
   ascii: { top: "top", scroller: "scroller", btn: "tabAscii", tool: "asciiTool" },
   text: { top: "textTop", scroller: "textScroller", btn: "tabText", tool: "textTool" },
   ink: { top: "inkTop", scroller: "inkScroller", btn: "tabInk", tool: "inkTool" },
+  lines: { top: "lnTop", scroller: "lnScroller", btn: "tabLines", tool: "lnTool" },
+  map: { top: "mpTop", scroller: "mpScroller", btn: "tabMap", tool: "mapTool" },
 };
 function showTab(t) {
   tab = TAB_IDS[t] ? t : "ascii";
@@ -1740,6 +1754,8 @@ function showTab(t) {
   for (const [k, ids] of Object.entries(TAB_IDS)) { $(ids.btn).classList.toggle("on", k === tab); $(ids.tool).classList.toggle("hidden", k !== tab); }
   fitLayout(true);
   if (ink) { if (tab === "ink") ink.activate(); else ink.deactivate(); }
+  if (lines) { if (tab === "lines") lines.activate(); else lines.deactivate(); }
+  if (mapTab) { if (tab === "map") mapTab.activate(); else mapTab.deactivate(); }
   if (textTab) { if (tab === "text") textTab.activate(); else textTab.deactivate(); }
   if (tab === "ascii") { if (src) src.stale = true; schedulePreview(0); }
 }
@@ -1755,6 +1771,8 @@ function onPsEvent(evt, desc) {
   forgetArtboards(); // a document or layer changed: look at the artboards again
   if (live && evt === "close" && !docById(live.docId)) { live = null; updateLiveBtn(); }
   if (tab === "ink") { if (src) src.stale = true; if (ink) ink.onPsEvent(evt, desc); return; }
+  if (tab === "lines") { if (src) src.stale = true; if (lines) lines.onPsEvent(evt, desc); return; }
+  if (tab === "map") { if (src) src.stale = true; if (mapTab) mapTab.onPsEvent(evt, desc); return; }
   if (tab === "text") { if (src) src.stale = true; return; } // the lettering doesn't depend on the document
   if (busy) return;
   const a = activeDoc();
@@ -1773,6 +1791,8 @@ async function init() {
   buildUI();
   syncUI();
   ink = setupInk({ $, loadJSON, saveJSON, errMsg, toRGBA8, makeImageData, convertOut, createLayer, findLayers, findLayerById, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck, refreshFields });
+  lines = setupLines({ $, loadJSON, saveJSON, errMsg, setSelect, baseAtlas: () => baseAtlas, mapArea: () => mapTab && mapTab.area(), showTab, createLayer, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck, refreshFields });
+  mapTab = setupMap({ $, loadJSON, saveJSON, errMsg, setSelect, baseAtlas: () => baseAtlas, createLayer, bitDepth, isGray, activeDoc, askColor, docBaseName, fitLayout, onCheck, refreshFields, onAreaToLines: () => { lines.useMap(); showTab("lines"); } });
   textTab = setupTextArt({ $, loadJSON, saveJSON, errMsg, setSelect, fitLayout, onCheck, refreshFields, atlasFor, baseAtlas: () => baseAtlas, useArt });
   for (const k of Object.keys(TAB_IDS)) $(TAB_IDS[k].btn).addEventListener("click", () => showTab(k));
   showTab(tab);
