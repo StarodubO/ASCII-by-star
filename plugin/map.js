@@ -246,7 +246,8 @@ async function loadRegion({ lat, lon, widthKm, w, h, fetchFn, onProgress }) {
 // Streets, railways, rivers, water, buildings and green areas from OpenFreeMap (free, no key): Mapbox Vector
 // Tiles in the OpenMapTiles schema, data © OpenStreetMap contributors. Tiles go up to zoom 14.
 const FEATURE_INFO = "https://tiles.openfreemap.org/planet"; // TileJSON: names the current tile set
-const FEATURE_LAYERS = ["transportation", "waterway", "water", "building", "park", "landcover", "landuse"];
+const FEATURE_LAYERS = ["transportation", "waterway", "water", "building", "park", "landcover", "landuse", "place", "poi", "water_name", "mountain_peak"];
+const NAME_LAYERS = new Set(["place", "poi", "water_name", "mountain_peak"]); // their features keep their names (f.names)
 const MAX_FEATURE_Z = 14, MAX_FEATURE_TILES = 90;
 let tileTemplate = null; // a promise of the tile URL template (asked once, even by parallel loads)
 
@@ -393,7 +394,12 @@ async function loadFeatures({ lat, lon, widthKm, aspect, fetchFn, onProgress, ex
         const k = 256 / L.extent;
         for (const f of L.features) {
           const parts = f.parts.map((p) => { const a = new Float64Array(p.length); for (let i = 0; i < p.length; i += 2) { a[i] = U(p[i] * k); a[i + 1] = V(p[i + 1] * k); } return a; });
-          out.push({ layer, cls: f.props.class || "", sub: f.props.subclass || "", brunnel: f.props.brunnel || "", type: f.type, parts, clip, order: out.length });
+          const item = { layer, cls: f.props.class || "", sub: f.props.subclass || "", brunnel: f.props.brunnel || "", type: f.type, parts, clip, order: out.length };
+          if (NAME_LAYERS.has(layer)) {
+            const pr = f.props;
+            item.names = { local: pr.name || "", en: pr.name_en || pr["name:en"] || "", latin: pr["name:latin"] || pr.name_int || "", rank: Number(pr.rank) || 0, ele: pr.ele != null ? Number(pr.ele) : null, capital: Number(pr.capital) || 0 };
+          }
+          out.push(item);
         }
       }
       if (onProgress) onProgress(++done, plan.tiles.length);

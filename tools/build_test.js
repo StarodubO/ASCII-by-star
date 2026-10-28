@@ -24,7 +24,7 @@ function __el(id) {
 const document = { getElementById: __el, querySelectorAll: () => [], createElement: (t) => __el("new-" + t + Math.random()) };
 const __ls = new Map();
 const localStorage = { getItem: (k) => (__ls.has(k) ? __ls.get(k) : null), setItem: (k, v) => __ls.set(k, String(v)) };
-${["engine", "charsets", "presets", "slider", "dropdown", "fields", "viewer", "pixels", "ink", "inkui", "figlet", "picker", "presetbox", "history", "lines", "map", "live", "linesui", "features", "mapui", "textart"].map((n) => wrap(n, n + ".js")).join("")}
+${["engine", "charsets", "presets", "slider", "dropdown", "fields", "viewer", "pixels", "ink", "inkui", "figlet", "picker", "presetbox", "history", "glitch", "glitchui", "lines", "map", "live", "linesui", "features", "mapui", "textart", "dither", "ditherui"].map((n) => wrap(n, n + ".js")).join("")}
 ${main}
 function __b64(s) {
   const T = new Uint8Array(128); const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

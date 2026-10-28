@@ -14,10 +14,13 @@ function overrides() {
   for (const kv of String(opt("--set", "")).split(",").filter(Boolean)) { const [k, v] = kv.split("="); o[k] = v === "true" ? true : v === "false" ? false : isNaN(+v) ? v : +v; }
   return o;
 }
+// Features.render with the glitch, as mapui draws it
+const Glitch = require("../plugin/glitch.js");
+const FR = (P, s, rect, z, cache) => (Glitch.active(s) ? Glitch.renderWith((r, zz) => Features.render(P, s, r, zz, null, atlas), rect, z, W, H, s, cache, "null") : Features.render(P, s, rect, z, null, atlas));
 function renderTiled(P, s, tile) {
-  const full = new Uint8ClampedArray(W * H * 4);
+  const strips = new Map(), full = new Uint8ClampedArray(W * H * 4);
   for (let ty = 0; ty < H; ty += tile) for (let tx = 0; tx < W; tx += tile) {
-    const tw = Math.min(tile, W - tx), th = Math.min(tile, H - ty), px = Features.render(P, s, { x: tx, y: ty, w: tw, h: th }, 1, null, atlas);
+    const tw = Math.min(tile, W - tx), th = Math.min(tile, H - ty), px = FR(P, s, { x: tx, y: ty, w: tw, h: th }, 1, strips);
     for (let y = 0; y < th; y++) full.set(px.subarray(y * tw * 4, (y + 1) * tw * 4), ((ty + y) * W + tx) * 4);
   }
   return full;

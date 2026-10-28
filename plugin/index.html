@@ -16,8 +16,8 @@
   #taStatus { min-height: 16px; font-size: 11px; opacity: 0.85; margin-top: 4px; }
   .tool { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   .tool.hidden { display: none; }
-  #top, #inkTop, #textTop, #lnTop, #mpTop { flex: 0 0 auto; padding: 8px 8px 4px 8px; border-bottom: 1px solid var(--uxp-host-border-color); }
-  #scroller, #inkScroller, #textScroller, #lnScroller, #mpScroller { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px 16px 8px; }
+  #top, #inkTop, #textTop, #lnTop, #mpTop, #dtTop { flex: 0 0 auto; padding: 8px 8px 4px 8px; border-bottom: 1px solid var(--uxp-host-border-color); }
+  #scroller, #inkScroller, #textScroller, #lnScroller, #mpScroller, #dtScroller { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px 16px 8px; }
   .row > * { min-width: 0; }
   .row { display: flex; flex-direction: row; align-items: center; margin-bottom: 5px; }
   .row > * { margin-right: 4px; }
@@ -57,16 +57,16 @@
   button.danger { color: #ff7070; font-weight: bold; }
   .sicon { width: 18px; height: 18px; flex: 0 0 18px; margin-right: 7px; }
   .collapsed .body { display: none; }
-  #previewWrap, #inkPreviewWrap, #textPreviewWrap, #lnPreviewWrap, #mpPreviewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
-  #previewWrap.hidden, #inkPreviewWrap.hidden, #textPreviewWrap.hidden, #lnPreviewWrap.hidden, #mpPreviewWrap.hidden { display: none; }
+  #previewWrap, #inkPreviewWrap, #textPreviewWrap, #lnPreviewWrap, #mpPreviewWrap, #dtPreviewWrap { background: #1d1d1d; border: 1px solid var(--uxp-host-border-color); display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+  #previewWrap.hidden, #inkPreviewWrap.hidden, #textPreviewWrap.hidden, #lnPreviewWrap.hidden, #mpPreviewWrap.hidden, #dtPreviewWrap.hidden { display: none; }
   .zoomBar .ztoggle.grow { flex: 1 1 auto; }
   .pvGrip { height: 9px; cursor: ns-resize; display: flex; align-items: center; justify-content: center; }
   .pvGrip > div { width: 40px; height: 3px; border-radius: 2px; background: rgba(128, 128, 128, 0.6); }
-  #preview, #inkPreview, #textPreview, #lnPreview, #mpPreview { position: absolute; left: 0; top: 0; max-width: none; cursor: grab; }
+  #preview, #inkPreview, #textPreview, #lnPreview, #mpPreview, #dtPreview { position: absolute; left: 0; top: 0; max-width: none; cursor: grab; }
   .zoomBar { margin: 0; }
   .zoomBar .zlabel { width: 40px; flex: 0 0 40px; cursor: pointer; }
-  #previewMsg, #inkPreviewMsg, #textPreviewMsg, #lnPreviewMsg, #mpPreviewMsg { position: absolute; padding: 12px; text-align: center; color: #bbb; }
-  #status, #inkStatus, #lnStatus, #mpStatus { font-size: 10px; opacity: 0.75; height: 26px; overflow: hidden; margin: 4px 0; }
+  #previewMsg, #inkPreviewMsg, #textPreviewMsg, #lnPreviewMsg, #mpPreviewMsg, #dtPreviewMsg { position: absolute; padding: 12px; text-align: center; color: #bbb; }
+  #status, #inkStatus, #lnStatus, #mpStatus, #dtStatus { font-size: 10px; opacity: 0.75; height: 26px; overflow: hidden; margin: 4px 0; }
   .swatch, .swatchInk { width: 28px; height: 20px; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; flex: 0 0 28px; cursor: pointer; }
   .hex { width: 62px; flex: 0 1 62px; font-family: Menlo, monospace; }
   button { font-size: 11px; }
@@ -82,6 +82,17 @@
   #fontChev, #taFontChev { margin-left: 6px; opacity: 0.7; }
   #fontList, .fontListBox { max-height: 220px; }
   #version { text-align: center; font-size: 10px; opacity: 0.5; margin-top: 12px; }
+  .palRow { display: flex; flex-direction: row; flex-wrap: wrap; margin-bottom: 4px; }
+  .palSw { width: 22px; height: 22px; margin: 0 4px 4px 0; border: 1px solid var(--uxp-host-border-color); border-radius: 3px; cursor: pointer; box-sizing: border-box; }
+  .palSw.on { border: 2px solid rgba(80, 160, 255, 0.95); }
+  .palSw.clear { opacity: 0.45; }
+  #tabMenuBtn { flex: 0 0 auto; padding: 6px 8px 5px 8px; cursor: pointer; opacity: 0.7; font-size: 12px; }
+  #tabMenuBtn:hover, #tabMenuBtn.on { opacity: 1; }
+  #tabMenu { flex: 0 0 auto; border-bottom: 1px solid var(--uxp-host-border-color); padding: 6px 8px; background: rgba(0, 0, 0, 0.15); }
+  .tmRow { display: flex; flex-direction: row; align-items: center; padding: 3px 0; }
+  .tmRow.dragging { outline: 1px solid rgba(80, 160, 255, 0.9); }
+  .tmRow .tmName { flex: 1 1 auto; margin-left: 6px; }
+  .tmRow .sgrip { margin-left: 6px; }
   .subhead { font-size: 10px; opacity: 0.7; margin: 8px 0 4px 0; text-transform: uppercase; letter-spacing: 0.4px; }
   .editing { background: rgba(80, 160, 255, 0.15); border: 1px solid rgba(80, 160, 255, 0.5); border-radius: 4px; padding: 6px; margin-bottom: 6px; }
   .hint { font-size: 10px; opacity: 0.65; margin: 0 0 6px 0; }
@@ -110,7 +121,8 @@
 </style>
 </head>
 <body>
- <div id="tabs"><div class="tab" id="tabAscii">ASCII</div><div class="tab" id="tabText">Text art</div><div class="tab" id="tabInk">Ink bleed</div><div class="tab" id="tabLines">Lines</div><div class="tab" id="tabMap">Map</div></div>
+ <div id="tabs"><div id="tabMenuBtn" title="Tabs: show, hide and reorder">☰</div><div class="tab" id="tabAscii">ASCII</div><div class="tab" id="tabText">Text art</div><div class="tab" id="tabInk">Ink bleed</div><div class="tab" id="tabLines">Lines</div><div class="tab" id="tabMap">Map</div><div class="tab" id="tabDither">Dither</div></div>
+ <div id="tabMenu" class="hidden"><div class="subhead" style="margin-top:2px">Tabs: tick to show, drag ⠿ to reorder</div><div id="tabMenuList"></div><div class="row" style="margin-top:4px"><button id="tabMenuReset" class="grow" title="Every tab shown, in the usual order">Show all, usual order</button><button id="tabMenuClose" style="flex:0 0 auto">Done</button></div></div>
  <div id="asciiTool" class="tool">
  <div id="top">
   <div class="ctlHead" id="previewHead"><span class="chev">▾</span><span class="ctlLabel">Preview</span></div>
@@ -794,8 +806,10 @@
       <div class="row"><span class="label">Lines</span><select id="lnStyle" class="grow">
         <option value="contours">Contour lines (topographic)</option>
         <option value="ridges">Ridge lines</option>
+        <option value="maze">Labyrinth (lines denser where it's dark)</option>
+        <option value="points">Point cloud (3D, from the height)</option>
       </select></div>
-      <p class="hint">Contour lines join points of equal height, like a map. Ridge lines are rows lifted by the height, with nearer rows hiding the ones behind. A look (or Randomize) sets the lines and colours and keeps the height settings.</p>
+      <p class="hint">Contour lines join points of equal height, like a map. Ridge lines are rows lifted by the height, with nearer rows hiding the ones behind. Labyrinth grows winding lines, close together where the height is low (dark) and wide apart where it's high. Point cloud scatters points and lifts them towards you by the height (a depth map works best), seen from a turned camera. A look (or Randomize) sets the lines and colours and keeps the height settings.</p>
     </div>
   </div>
 
@@ -830,7 +844,31 @@
       <div id="lsl-declutter"></div>
       <div id="lsl-rows"></div>
       <div id="lsl-amp"></div>
+      <div id="lsl-mzSpacing"></div>
+      <div id="lsl-mzRange"></div>
+      <div id="lsl-mzCurve"></div>
+      <div class="row" id="lnMzSeedRow"><button id="lnMzSeed" class="grow" title="The same density, other winding lines">New labyrinth</button></div>
+      <div id="lsl-pcSpacing"></div>
+      <div id="lsl-pcJitter"></div>
+      <div id="lsl-pcToneDensity"></div>
+      <div id="lsl-pcHeightDensity"></div>
+      <div id="lsl-pcCut"></div>
+      <div class="row" id="lnPcSeedRow"><button id="lnPcSeed" class="grow" title="The same density, points in other places">New points</button></div>
       <div class="row" id="lnRidgeLocalRow"><label title="Off: every row is lifted from the lowest point of the whole picture, so high ground lifts whole rows"><input type="checkbox" id="lnRidgeLocal"> Lift each row from its own lowest point</label></div>
+    </div>
+  </div>
+
+  <div class="section" data-section="lnView" id="lnViewBox">
+    <div class="head"><span class="chev">▾</span>3D view</div>
+    <div class="body">
+      <div id="lsl-pcDepth"></div>
+      <div id="lsl-pcYaw"></div>
+      <div id="lsl-pcPitch"></div>
+      <div id="lsl-pcPersp"></div>
+      <div id="lsl-pcZoom"></div>
+      <div id="lsl-pcSizeNear"></div>
+      <div id="lsl-pcFog"></div>
+      <div class="row"><span class="label">Points</span><select id="lnPcShape" class="grow"><option value="round">Round</option><option value="square">Square</option></select></div>
     </div>
   </div>
 
@@ -861,6 +899,16 @@
         <div class="row" id="lnLineMidRow"><span class="label">Middle</span><div class="swatchInk" id="lnLineMidSwatch"></div><input type="text" class="hexInk" id="lnLineMidHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
         <div class="row"><span class="label">High / end</span><div class="swatchInk" id="lnLineBSwatch"></div><input type="text" class="hexInk" id="lnLineBHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
         <div id="lsl-lineAngle"></div>
+        <div class="subhead">Gradient shape</div>
+        <div id="lsl-lineGradFrom"></div>
+        <div id="lsl-lineGradTo"></div>
+        <div id="lsl-lineGradMid"></div>
+        <div id="lsl-lineGradCurve"></div>
+        <div id="lsl-lineGradSteps"></div>
+        <div id="lsl-lineGradRepeat"></div>
+        <div class="row" id="lnLineGradMirrorRow"><label title="Off: each repeat starts again at the low colour (a saw). On: back and forth."><input type="checkbox" id="lnLineGradMirror"> Mirror the repeats</label></div>
+        <div class="row"><label><input type="checkbox" id="lnLineGradReverse"> Reverse</label></div>
+        <p class="hint">Start and end pick the part of the height the colours span (below and above it the end colours stay). Steps make hard colour bands; repeats run the colours several times up the slope.</p>
       </div>
       <div id="lnSampleRows">
         <div id="lsl-sampleSat"></div>
@@ -904,16 +952,18 @@
           <div class="row"><span class="label">High</span><div class="swatchInk" id="lnBandBSwatch"></div><input type="text" class="hexInk" id="lnBandBHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
           <div id="lsl-bandOpacity"></div>
         </div>
-        <div class="subhead">Hill shading</div>
-        <div id="lsl-shade"></div>
-        <div id="lsl-shadeAngle"></div>
-        <div id="lsl-shadeRelief"></div>
+        <div id="lnShadeBox">
+          <div class="subhead">Hill shading</div>
+          <div id="lsl-shade"></div>
+          <div id="lsl-shadeAngle"></div>
+          <div id="lsl-shadeRelief"></div>
+        </div>
       </div>
       <div class="row" id="lnFollowRow"><label title="Nothing is drawn where the source layer is transparent"><input type="checkbox" id="lnFollow"> Follow the image's shape</label></div>
     </div>
   </div>
 
-  <div class="section" data-section="lnLabels">
+  <div class="section" data-section="lnLabels" id="lnLabelsBox">
     <div class="head"><span class="chev">▾</span>Height labels</div>
     <div class="body">
       <div class="row"><label title="Numbers on the contour lines, like a survey map"><input type="checkbox" id="lnLabelsOn"> Label the contour lines</label></div>
@@ -940,11 +990,25 @@
     <div class="head"><span class="chev">▾</span>Text on the lines</div>
     <div class="body">
       <div class="row"><label title="Each contour line is traced and written with characters that follow it"><input type="checkbox" id="lnTextOn"> Write the lines with text</label></div>
+      <div class="row"><span class="label">Font</span><div id="lnFontPicker" class="picker grow" title="Click to choose a font"><span id="lnFontCurrent" class="grow">Built-in (Menlo)</span><span id="lnFontChev">▾</span></div></div>
+      <div id="lnFontPanel" class="hidden">
+        <div class="row"><input type="text" id="lnFontSearch" placeholder="Search (optional)…"></div>
+        <div id="lnFontList" class="fontListBox"></div>
+      </div>
+      <p class="hint">Any installed font, each letter as wide as it is (the built-in Menlo spaces them evenly). Photoshop draws the characters once, then they're cached. The rain and vertical type stay evenly spaced; height labels stay in Menlo.</p>
+
       <div class="sub" id="lnTextRows">
-        <div class="row"><span class="label">Characters</span><select id="lnTextMode" class="grow"><option value="text">Your text, along the line</option><option value="direction">- / | \ from the line's direction</option></select></div>
+        <div class="row"><span class="label">Characters</span><select id="lnTextMode" class="grow"><option value="text">Your text, along the line</option><option value="set">A character set, at random</option><option value="direction">- / | \ from the line's direction</option><option value="rain">Matrix rain along the lines</option></select></div>
         <div id="lnPtTextRows">
-          <div class="row"><span class="label">Text</span><input type="text" id="lnPtText" title="Written along every line, over and over. %h is the line's height. [A|B] repeats the items, [?A|B] picks them at random (after plain text: that comes once at the start of each line). {HELLO} or {HELLO*5} hides a message on the lines."></div>
-          <div class="row"><button id="lnPtApply" class="grow" title="Use the text above (the preview waits until you apply; Enter applies too)">Apply text</button><button id="lnPtReseed" style="flex:0 0 auto" title="Other random items and other places for the messages">New random</button></div>
+          <div class="row"><textarea id="lnPtText" placeholder="Click to type, e.g.  %h m ·   or one row per line" title="Written along the lines, over and over. One row = every line. Several rows: each height gets its own row, lowest line first, repeating; an empty row leaves that height without text. %h is the line's height. [A|B] repeats the items, [?A|B] picks them at random (after plain text: that comes once at the start of each line). {HELLO} or {HELLO*5} hides a message on the lines."></textarea></div>
+          <div class="row"><button id="lnPtApply" class="grow" title="Use the text above (the preview waits until you apply; ⌘/Ctrl+Enter applies too)">Apply text</button><button id="lnPtRows" style="flex:0 0 auto" title="One row for every line height in the picture, lowest first, with its height written out, ready to change each one">Row per line</button><button id="lnPtReseed" style="flex:0 0 auto" title="Other random items and other places for the messages">New random</button></div>
+          <p class="hint">Several rows give every line its own text: the first row goes on the lowest line, the next row on the line above, and so on. “Row per line” lists every line's height so you can edit each one.</p>
+        </div>
+        <div id="lnPtSetRows">
+          <div class="row"><span class="label">Set</span><select id="lnPtSet" class="grow"><option value="bourke">Standard Long (70)</option><option value="standard">Standard (10)</option><option value="alnum">Letters and digits</option><option value="upper">Uppercase</option><option value="lower">Lowercase</option><option value="digits">Digits</option><option value="binary">Binary 0 1</option><option value="hex">Hexadecimal</option><option value="katakana_half">Matrix (half katakana)</option><option value="shade">Shade blocks</option><option value="braille">Braille</option><option value="boxlight">Box lines</option><option value="dots">Dots</option><option value="stars">Stars</option><option value="arrows">Arrows</option><option value="dna">DNA</option><option value="morse">Morse</option></select></div>
+          <div class="row"><button id="lnPtSetReseed" class="grow" title="Other random characters">New random</button></div>
+        </div>
+        <div id="lnPtTurnRows">
           <div class="row"><label title="Off: every character stays upright"><input type="checkbox" id="lnPtRotate"> Turn the characters with the line</label></div>
           <div class="row"><label title="Like vertical type on a path: the characters stand across the line, one below the other along it (with Turn off: upright, stacked along the line)"><input type="checkbox" id="lnPtVertical"> Vertical type (stacked along the line)</label></div>
         </div>
@@ -953,11 +1017,79 @@
         <div id="lsl-ptSpacing"></div>
         <div id="lsl-ptRoom"></div>
         <div id="lsl-ptLineOpacity"></div>
-        <div class="row" id="lnPtWhichRow"><span class="label">Lines</span><select id="lnPtWhich" class="grow"><option value="all">All lines</option><option value="index">Only the index lines</option><option value="others">All but the index lines</option></select></div>
+        <div class="row" id="lnPtWhichRow"><span class="label">Lines</span><select id="lnPtWhich" class="grow"><option value="all">All lines</option><option value="index">Only the index lines</option><option value="others">All but the index lines</option><option value="picked">Only the lines you choose</option></select></div>
         <div class="row"><label><input type="checkbox" id="lnPtMsgColorOn"> Messages in their own colour</label></div>
         <div class="row" id="lnPtMsgColorRow"><span class="label">Colour</span><div class="swatchInk" id="lnPtMsgSwatch"></div><input type="text" class="hexInk" id="lnPtMsgHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
       </div>
       <p class="hint">The characters take the lines' colour (Line colour) and opacity. Export SVG writes them as text.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="lnPicks" id="lnPicksBox">
+    <div class="head"><span class="chev">▾</span>Single lines</div>
+    <div class="body">
+      <div class="row"><button id="lnPickBtn" class="grow" title="Then click a contour line in the preview to choose it (Option/Alt-drag still moves the view). Click a chosen line again to select it.">Choose lines on the preview</button></div>
+      <div id="lnPickRows">
+        <div class="row"><span class="label">Line</span><select id="lnPickList" class="grow"></select><button id="lnPickDel" style="flex:0 0 auto" title="Forget this line: it goes back to the settings above">Remove</button></div>
+        <div class="row"><span class="label">Gets</span><select id="lnPickMode" class="grow"><option value="text">Its own text</option><option value="rain">Matrix rain</option><option value="line">Only the line, no text</option><option value="hide">Nothing (hidden)</option></select></div>
+        <div class="row"><label title="Off: only the piece you clicked. On: every line at this height (on a map: the whole contour, however many pieces)"><input type="checkbox" id="lnPickAll"> Every line at this height</label></div>
+        <div id="lnPickTextRows">
+          <div class="row"><span class="label">Text</span><input type="text" id="lnPickText" title="Written along this line only. Empty: the text of Text on the lines. %h is the line's height; [A|B], [?A|B] and {messages} work as above."></div>
+          <div class="row"><button id="lnPickApply" class="grow" title="Use the text above (Enter applies too)">Apply text</button></div>
+        </div>
+        <div class="row"><label><input type="checkbox" id="lnPickColorOn"> Its own colour</label></div>
+        <div class="row" id="lnPickColorRow"><span class="label">Colour</span><div class="swatchInk" id="lnPickSwatch"></div><input type="text" class="hexInk" id="lnPickHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div class="row"><button id="lnPickClear" class="grow" title="Forget every chosen line">Remove all</button></div>
+      </div>
+      <p class="hint">Choose a contour and give it its own text, Matrix rain or colour, or hide it. The chosen line is outlined in pink on the preview (not in the layer). Each choice follows the line nearest to where you clicked, so it stays on its line when you change the settings a little. Text on the lines ▸ Lines ▸ “Only the lines you choose” leaves text off every other line.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="lnRain" id="lnRainBox">
+    <div class="head"><span class="chev">▾</span>Matrix rain on the lines</div>
+    <div class="body">
+      <div class="row"><span class="label">Preset</span><select id="lnPrPreset" class="grow" title="Puts a character set in the field below"><option value="">Choose a set…</option><option value="matrix">Matrix (katakana + digits)</option><option value="bourke">Standard Long (70)</option><option value="standard">Standard (10)</option><option value="alnum">Letters and digits</option><option value="upper">Uppercase</option><option value="lower">Lowercase</option><option value="digits">Digits</option><option value="binary">Binary 0 1</option><option value="hex">Hexadecimal</option><option value="katakana_half">Matrix (half katakana)</option><option value="shade">Shade blocks</option><option value="braille">Braille</option><option value="boxlight">Box lines</option><option value="dots">Dots</option><option value="stars">Stars</option><option value="arrows">Arrows</option><option value="dna">DNA</option><option value="morse">Morse</option></select></div>
+      <div class="row"><span class="label">Characters</span><input type="text" id="lnPrChars" title="Picked at random along the streams. [A|B] items count as their characters."></div>
+      <div class="row"><button id="lnPrApply" class="grow" title="Use the characters above (Enter applies too)">Apply characters</button><button id="lnPrSeed" style="flex:0 0 auto" title="Other characters and other places for the streams">New rain</button></div>
+      <div id="lsl-prLength"></div>
+      <div id="lsl-prLengthVar"></div>
+      <div id="lsl-prGaps"></div>
+      <div id="lsl-prFade"></div>
+      <div class="row"><label title="Off: streams run in the direction the text reads"><input type="checkbox" id="lnPrReverse"> Run the other way</label></div>
+      <div class="row"><label><input type="checkbox" id="lnPrColorOn"> Rain in its own colour</label></div>
+      <div class="row" id="lnPrColorRow"><span class="label">Colour</span><div class="swatchInk" id="lnPrSwatch"></div><input type="text" class="hexInk" id="lnPrHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+      <div class="row"><label><input type="checkbox" id="lnPrHead"> Bright head</label></div>
+      <div class="row" id="lnPrHeadRow"><span class="label">Head</span><div class="swatchInk" id="lnPrHeadSwatch"></div><input type="text" class="hexInk" id="lnPrHeadHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+      <p class="hint">Streams of characters run along the lines, fading towards their tail. Size, spacing, Room and the turn options come from Text on the lines.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="lnGlitch">
+    <div class="head"><span class="chev">▾</span>Glitch</div>
+    <div class="body">
+      <div class="row"><label class="grow"><input type="checkbox" id="lnGlOn"> Glitch</label><button id="lnGlRandom" title="A random mix of glitch effects (the rest of the look stays)">Random glitch</button></div>
+      <div id="lnGlBody">
+        <div class="row" id="lnGlWhereRow"><span class="label">Glitch</span><select id="lnGlWhere" class="grow" title="On the result, or on the picture before it becomes lines (the glitch is then drawn in the effect's own style)"><option value="after">The result</option><option value="before">The picture, before lines</option></select></div>
+        <div class="row"><button id="lnGlSeed" class="grow" title="Another random pattern of the same effects">New seed</button><button id="lnGlClear" class="grow" title="Every glitch effect back to 0">Clear</button></div>
+        <div class="subhead">Tear</div>
+        <div id="lngsl-glSlices"></div>
+        <div id="lngsl-glSliceSize"></div>
+        <div id="lngsl-glWave"></div>
+        <div id="lngsl-glWaveFreq"></div>
+        <div id="lngsl-glBlocks"></div>
+        <div id="lngsl-glBlockSize"></div>
+        <div id="lngsl-glSort"></div>
+        <div class="subhead">Signal</div>
+        <div id="lngsl-glSplit"></div>
+        <div id="lngsl-glInterlace"></div>
+        <div id="lngsl-glTracking"></div>
+        <div id="lngsl-glScanlines"></div>
+        <div id="lngsl-glNoise"></div>
+        <div class="subhead">Colour</div>
+        <div id="lngsl-glCrush"></div>
+        <div class="row"><span class="label">Channel swap</span><select id="lnGlSwap" class="grow"><option value="none">None</option><option value="rbg">R B G</option><option value="grb">G R B</option><option value="gbr">G B R</option><option value="brg">B R G</option><option value="bgr">B G R</option></select></div>
+        <p class="hint">Rows tear sideways and wrap round the picture; nothing moves up or down, so every tile matches the preview. The seed fixes the pattern: the preview, the layer and the live view all match.</p>
+      </div>
     </div>
   </div>
 
@@ -966,6 +1098,211 @@
     <div class="body">
       <p class="hint">The line art is one layer, “… Line Art”, right above the source. Select it and press the button below to change it later.</p>
       <div class="row btnrow"><button id="lnLoad">Edit selected Line Art layer</button></div>
+    </div>
+  </div>
+ </div>
+ </div>
+
+
+ <div id="ditherTool" class="tool hidden">
+ <div id="dtTop">
+  <div class="ctlHead" id="dtPreviewHead"><span class="chev">▾</span><span class="ctlLabel">Preview</span></div>
+  <div id="dtPreviewWrap"><img id="dtPreview" alt=""><div id="dtPreviewMsg">Select a layer to begin</div></div>
+  <div class="pvGrip" id="dtPreviewGrip" title="Drag to make the preview taller or shorter"><div></div></div>
+  <div class="row zoomBar" id="dtZoomBar" title="Drag the preview to move around. In Fit, click a spot to zoom in there."></div>
+ </div>
+ <div id="dtScroller">
+  <div class="ctlHead" id="dtCtlHead" title="Show or hide the controls under the preview (more room for the settings)"><span class="chev">▾</span><span class="ctlLabel">Controls</span></div>
+  <div id="dtCtlBody">
+  <div class="row">
+    <select id="dtSource" class="grow">
+      <option value="layer" selected>Source: Selected layer</option>
+      <option value="merged">Source: Visible (merged)</option>
+    </select>
+    <button id="dtRefresh" title="Re-read the document">↻</button>
+  </div>
+  <div class="row hidden" id="dtArtboardRow"><select id="dtArtboard" class="grow" title="Which artboard to work on. Auto follows the source layer."><option value="auto">Artboard: auto (follows the layer)</option></select></div>
+  <div id="dtStatus"></div>
+  <div id="dtEditBox" class="editing hidden">
+    <div id="dtEditLabel" style="margin-bottom:5px"></div>
+    <div class="row btnrow"><button id="dtUpdate" class="primary">Update dither</button><button id="dtStopEdit">Done</button></div>
+  </div>
+  <div class="row"><button id="dtRandom" class="grow" title="A random look: palette, algorithm, pixel size and shape. Your hand edits stay.">Randomize</button><button id="dtUndo" style="flex:0 0 auto" title="Undo the last change in this tab" disabled>↶ Undo</button><button id="dtResetAll" style="flex:0 0 auto" title="Every setting in this tab back to its default">Reset all</button></div>
+  <div class="row"><span class="label">Output</span><select id="dtOutput" class="grow" title="One pixel layer, or a group with a layer for every colour (each transparent elsewhere), ready for screen printing, riso or recolouring"><option value="one">One layer</option><option value="colors">A layer per colour (group)</option></select></div>
+  <div class="row"><button id="dtApply" class="primary grow" title="Adds a Dither layer above the source. The source layer is not changed.">Add dither layer</button></div>
+  <div class="row"><button id="dtLive" class="grow" title="Places the dither as a smart object above the source and opens its contents. Changes update it live; Save & close puts the final result into your document.">Open live smart object</button></div>
+  <div class="row"><button id="dtExportSvg" class="grow" title="Save the dither as a vector .svg file: one path per colour, square cells merged into runs">Export SVG…</button></div>
+  </div>
+
+  <div class="section" data-section="dtLook">
+    <div class="head"><span class="chev">▾</span>Look</div>
+    <div class="body">
+      <div class="row"><select id="dtPreset" class="grow"></select><button id="dtPresetReset" style="flex:0 0 auto" title="Back to the chosen look, without your changes">Reset</button></div>
+      <div class="row"><input type="text" id="dtPresetName" placeholder="Preset name"><button id="dtPresetSave">Save</button><button id="dtPresetDelete" title="Delete the selected preset">Delete</button></div>
+      <div class="row btnrow"><button id="dtPresetExport">Export presets…</button><button id="dtPresetImport">Import…</button></div>
+      <p class="hint">A look sets the palette, algorithm, pixels and tone. Your hand edits stay.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="dtPixels">
+    <div class="head"><span class="chev">▾</span>Pixels</div>
+    <div class="body">
+      <div id="dsl-pixel"></div>
+      <div class="row"><span class="label">Shape</span><select id="dtShape" class="grow"><option value="square">Squares</option><option value="circle">Dots</option><option value="diamond">Diamonds</option><option value="hline">Horizontal lines (scanlines)</option><option value="vline">Vertical lines</option><option value="plus">Crosses</option></select></div>
+      <div id="dsl-gap"></div>
+      <div class="row"><span class="label">Behind</span><select id="dtBgMode" class="grow" title="What shows in the gaps between the shapes and in empty cells"><option value="transparent">Transparent</option><option value="color">A colour</option></select></div>
+      <div class="row" id="dtBgRow"><span class="label">Colour</span><div class="swatchInk" id="dtBgSwatch"></div><input type="text" class="hexInk" id="dtBgHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+      <p class="hint">Each cell is one colour. Big cells with gaps make LED walls, halftone dots and CRT lines; the gap and the shape are drawn smoothly at any size.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="dtColors">
+    <div class="head"><span class="chev">▾</span>Colours</div>
+    <div class="body">
+      <div class="row"><span class="label">Mode</span><select id="dtMode" class="grow">
+        <option value="tone">Palette along the brightness (gradient map)</option>
+        <option value="palette">Nearest palette colour</option>
+        <option value="gray">Grey levels (or two colours)</option>
+        <option value="rgb">Levels per RGB channel</option>
+      </select></div>
+      <p class="hint" id="dtModeHint"></p>
+      <div id="dtPalRows">
+        <div class="row"><span class="label">Colours from</span><select id="dtPaletteFrom" class="grow"><option value="own">My palette</option><option value="image">The picture (found automatically)</option></select></div>
+        <div id="dtAutoRows">
+      <div id="dsl-autoCount"></div>
+          <div class="row"><button id="dtAutoKeep" class="grow" title="Copy the colours found in the picture into your palette, to change them one by one">Use these as my palette</button></div>
+        </div>
+        <div id="dtOwnRows">
+          <div class="row"><span class="label">Palette</span><select id="dtPalPreset" class="grow" title="Replace the palette with a ready-made one"></select></div>
+        </div>
+        <div id="dtPalette" class="palRow" title="Click a colour to select it; click it again to change it"></div>
+        <div id="dtPalEditRows">
+          <div class="row"><span class="label">Selected</span><div class="swatchInk" id="dtSelSwatch" title="Change this colour"></div><input type="text" class="hexInk" id="dtSelHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"><button id="dtSelLeft" style="flex:0 0 auto" title="Move it left (darker end)">◀</button><button id="dtSelRight" style="flex:0 0 auto" title="Move it right (lighter end)">▶</button></div>
+          <div class="row"><button id="dtPalAdd" class="grow" title="Add a colour after the selected one">+ Add</button><button id="dtPalDel" class="grow" title="Remove the selected colour">− Remove</button><button id="dtPalSort" class="grow" title="Sort the colours from dark to light">Sort</button><button id="dtPalRev" class="grow" title="Reverse the order (in the gradient map: light becomes dark)">Reverse</button></div>
+          <div class="row"><button id="dtPalPick" class="grow" title="Then click the preview: each click adds the colour of the picture there">Pick colours from the preview</button></div>
+        </div>
+        <div class="row" id="dtMetricRow"><span class="label">Nearest by</span><select id="dtMetric" class="grow" title="How the closeness of two colours is measured"><option value="oklab">Perception (OKLab)</option><option value="weighted">Weighted RGB</option><option value="rgb">Plain RGB</option></select></div>
+        <div class="row"><span class="label">Empty colour</span><select id="dtClear" class="grow" title="One palette colour can be left empty (transparent): the paper shows through"></select></div>
+      </div>
+      <div id="dtGrayRows">
+      <div id="dsl-grayLevels"></div>
+        <div class="row"><span class="label">Dark</span><div class="swatchInk" id="dtGrayDarkSwatch"></div><input type="text" class="hexInk" id="dtGrayDarkHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div class="row"><span class="label">Light</span><div class="swatchInk" id="dtGrayLightSwatch"></div><input type="text" class="hexInk" id="dtGrayLightHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+      </div>
+      <div id="dtRgbRows">
+      <div id="dsl-rgbLevels"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" data-section="dtAlgo">
+    <div class="head"><span class="chev">▾</span>Dither</div>
+    <div class="body">
+      <div class="row"><span class="label">Algorithm</span><select id="dtAlgo" class="grow"></select></div>
+      <p class="hint" id="dtAlgoHint"></p>
+      <div id="dsl-amount"></div>
+      <div id="dtDiffRows">
+        <div class="row" id="dtSerpRow"><label title="Every other row runs right to left: fewer diagonal streaks"><input type="checkbox" id="dtSerpentine"> Serpentine (fewer streaks)</label></div>
+      <div id="dsl-errThreshold"></div>
+      <div id="dsl-jitter"></div>
+      </div>
+      <div id="dtKernelRows">
+        <div class="subhead">Where the error goes (your own weights)</div>
+      <div id="dsl-k0"></div>
+      <div id="dsl-k1"></div>
+      <div id="dsl-k2"></div>
+      <div id="dsl-k3"></div>
+      <div id="dsl-k4"></div>
+      <div id="dsl-k5"></div>
+      <div id="dsl-k6"></div>
+      <div id="dsl-k7"></div>
+      </div>
+      <div id="dtPatternRows">
+      <div id="dsl-patternScale"></div>
+      <div id="dsl-patternAngle"></div>
+      </div>
+      <div id="dtScreenRows">
+      <div id="dsl-screenSize"></div>
+        <div class="row"><span class="label">Dot</span><select id="dtScreenShape" class="grow"><option value="round">Round</option><option value="ellipse">Ellipse</option><option value="square">Square</option><option value="diamond">Diamond</option><option value="line">Lines</option><option value="cross">Cross</option><option value="ring">Rings</option></select></div>
+      </div>
+      <div class="row"><button id="dtSeed" class="grow" title="Another random pattern (noise, grain, where ordered patterns start, palettes from the picture)">New random pattern</button></div>
+    </div>
+  </div>
+
+  <div class="section" data-section="dtAdjust">
+    <div class="head"><span class="chev">▾</span>Adjust</div>
+    <div class="body">
+      <div id="dsl-brightness"></div>
+      <div id="dsl-contrast"></div>
+      <div id="dsl-gamma"></div>
+      <div id="dsl-saturation"></div>
+      <div id="dsl-hue"></div>
+      <div id="dsl-red"></div>
+      <div id="dsl-green"></div>
+      <div id="dsl-blue"></div>
+      <div id="dsl-blur"></div>
+      <div id="dsl-sharpen"></div>
+      <div id="dsl-grain"></div>
+      <div class="row"><label><input type="checkbox" id="dtInvert"> Invert</label></div>
+      <p class="hint">Applied to the picture before it is dithered, at the cell size. Double-click a slider's name to reset it.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="dtAlpha">
+    <div class="head"><span class="chev">▾</span>Transparency</div>
+    <div class="body">
+      <div class="row"><span class="label">Edges</span><select id="dtAlphaMode" class="grow"><option value="keep">Keep the layer's shape</option><option value="dither">Dither the soft edges too</option><option value="ignore">Fill everything (ignore transparency)</option></select></div>
+      <p class="hint">Cut-outs stay cut out. Dithered edges break soft masks into pixels, like the rest.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="dtEdit">
+    <div class="head"><span class="chev">▾</span>Edit pixels</div>
+    <div class="body">
+      <div class="row"><button id="dtPaintBtn" class="grow" title="Then click or drag on the preview (Option/Alt-drag still moves the view)">Paint on the preview</button></div>
+      <div class="row"><span class="label">Tool</span><select id="dtBrushTool" class="grow"><option value="paint">Pencil (the selected palette colour)</option><option value="erase">Eraser (empty)</option><option value="restore">Restore the dither</option></select></div>
+      <div class="row" id="dtToolColorRow"><span class="label">Colour</span><div class="swatchInk" id="dtToolSwatch" title="The pencil's colour (click to change)"></div><input type="text" class="hexInk" id="dtToolHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+      <div id="dsl-brush"></div>
+      <div class="row"><label><input type="checkbox" id="dtBrushRound" checked> Round brush</label></div>
+      <div class="row"><button id="dtEditUndo" class="grow" title="Remove the last stroke">Undo stroke</button><button id="dtEditClear" class="grow" title="Remove every hand edit">Clear edits</button></div>
+      <p class="hint" id="dtEditInfo">Fix single pixels by hand: draw with a palette colour, erase or bring the dither back. Edits stay when you change the look and follow the picture when the pixel size changes.</p>
+    </div>
+  </div>
+
+  <div class="section" data-section="dtGlitch">
+    <div class="head"><span class="chev">▾</span>Glitch</div>
+    <div class="body">
+      <div class="row"><label class="grow"><input type="checkbox" id="dtGlOn"> Glitch</label><button id="dtGlRandom" title="A random mix of glitch effects (the rest of the look stays)">Random glitch</button></div>
+      <div id="dtGlBody">
+        <div class="row" id="dtGlWhereRow"><span class="label">Glitch</span><select id="dtGlWhere" class="grow" title="On the result, or on the picture before it becomes pixels (the glitch is then drawn in the effect's own style)"><option value="after">The result</option><option value="before">The picture, before pixels</option></select></div>
+        <div class="row"><button id="dtGlSeed" class="grow" title="Another random pattern of the same effects">New seed</button><button id="dtGlClear" class="grow" title="Every glitch effect back to 0">Clear</button></div>
+        <div class="subhead">Tear</div>
+        <div id="dtgsl-glSlices"></div>
+        <div id="dtgsl-glSliceSize"></div>
+        <div id="dtgsl-glWave"></div>
+        <div id="dtgsl-glWaveFreq"></div>
+        <div id="dtgsl-glBlocks"></div>
+        <div id="dtgsl-glBlockSize"></div>
+        <div id="dtgsl-glSort"></div>
+        <div class="subhead">Signal</div>
+        <div id="dtgsl-glSplit"></div>
+        <div id="dtgsl-glInterlace"></div>
+        <div id="dtgsl-glTracking"></div>
+        <div id="dtgsl-glScanlines"></div>
+        <div id="dtgsl-glNoise"></div>
+        <div class="subhead">Colour</div>
+        <div id="dtgsl-glCrush"></div>
+        <div class="row"><span class="label">Channel swap</span><select id="dtGlSwap" class="grow"><option value="none">None</option><option value="rbg">R B G</option><option value="grb">G R B</option><option value="gbr">G B R</option><option value="brg">B R G</option><option value="bgr">B G R</option></select></div>
+        <p class="hint">Rows tear sideways and wrap round the picture; nothing moves up or down, so every tile matches the preview. The seed fixes the pattern: the preview, the layer and the live view all match.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" data-section="dtLayers">
+    <div class="head"><span class="chev">▾</span>Layers</div>
+    <div class="body">
+      <p class="hint">The dither is one layer (or a group), “… Dither”, right above the source. Select it and press the button below to change it later.</p>
+      <div class="row btnrow"><button id="dtLoad">Edit selected Dither layer</button></div>
     </div>
   </div>
  </div>
@@ -1077,6 +1414,41 @@
     </div>
   </div>
 
+  <div class="section" data-section="mpNames">
+    <div class="head"><span class="chev">▾</span>Names</div>
+    <div class="body">
+      <div class="row"><label title="Names of cities, districts, lakes, peaks and points of interest, from the map"><input type="checkbox" id="mp_namesOn"> <b>Names on the map</b></label></div>
+      <div class="sub" id="mp_namesRows">
+        <div class="row"><label><input type="checkbox" id="mp_namesPlaces"> Cities, towns and districts</label></div>
+        <div class="row"><label><input type="checkbox" id="mp_namesWater"> Lakes, bays and seas</label></div>
+        <div class="row"><label><input type="checkbox" id="mp_namesPeaks"> Mountain peaks</label></div>
+        <div class="row" id="mpPeakTextRow"><span class="label">Peaks show</span><select id="mpNamesPeakText" class="grow" title="What each peak's label says. The ▲ comes with “Marks at points of interest and peaks”."><option value="both">Name and height</option><option value="name">Name only</option><option value="height">Height only</option><option value="none">Just the ▲</option></select></div>
+        <div class="row"><label title="Museums, stations, churches, shops, cafés… The most important come first."><input type="checkbox" id="mp_namesPoi"> Points of interest</label></div>
+        <div class="row"><span class="label">Font</span><div id="mpFontPicker" class="picker grow" title="Click to choose a font"><span id="mpFontCurrent" class="grow">Built-in (Menlo)</span><span id="mpFontChev">▾</span></div></div>
+        <div id="mpFontPanel" class="hidden">
+          <div class="row"><input type="text" id="mpFontSearch" placeholder="Search (optional)…"></div>
+          <div id="mpFontList" class="fontListBox"></div>
+        </div>
+        <p class="hint">Any installed font, each letter as wide as it is. Photoshop draws the characters once, then they're cached.</p>
+        <div class="row"><span class="label">Language</span><select id="mpNamesLang" class="grow" title="English and Latin letters leave out names the map has only in another script"><option value="local">Local names</option><option value="en">English</option><option value="latin">Latin letters</option></select></div>
+        <div id="msl-namesSize"></div>
+        <div id="msl-namesMax"></div>
+        <div id="msl-namesGap"></div>
+        <div id="msl-namesTracking"></div>
+        <div class="row"><label><input type="checkbox" id="mp_namesUpper"> Place names in capitals</label></div>
+        <div class="row"><label><input type="checkbox" id="mp_namesDots"> Marks: a dot at points of interest, ▲ at peaks</label></div>
+        <div class="row"><span class="label">Colour</span><div class="swatchInk" id="mp_namesColorSwatch"></div><input type="text" class="hexInk" id="mp_namesColorHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div class="row"><span class="label">Water names</span><div class="swatchInk" id="mp_namesWaterColorSwatch"></div><input type="text" class="hexInk" id="mp_namesWaterColorHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+        <div class="row"><label title="An outline around the letters keeps them readable over streets"><input type="checkbox" id="mp_namesHalo"> Outline</label></div>
+        <div id="mp_namesHaloRows">
+          <div class="row"><span class="label">Outline colour</span><div class="swatchInk" id="mp_namesHaloColorSwatch"></div><input type="text" class="hexInk" id="mp_namesHaloColorHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
+          <div id="msl-namesHaloWidth"></div>
+        </div>
+      </div>
+      <p class="hint">Names that would overlap are left out, the most important first (cities before districts before points of interest). They get their own layer, “Names”. Characters the built-in font lacks (Cyrillic, Greek…) are rendered by Photoshop the first time.</p>
+    </div>
+  </div>
+
   <div class="section" data-section="mpBg">
     <div class="head"><span class="chev">▾</span>Background and credit</div>
     <div class="body">
@@ -1086,6 +1458,35 @@
       <div class="sub" id="mp_creditRows">
         <div class="row"><span class="label">Colour</span><div class="swatchInk" id="mp_creditSwatch"></div><input type="text" class="hexInk" id="mp_creditHex" style="width:62px;flex:0 1 62px;font-family:Menlo,monospace"></div>
         <div id="msl-creditSize"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" data-section="mpGlitch">
+    <div class="head"><span class="chev">▾</span>Glitch</div>
+    <div class="body">
+      <div class="row"><label class="grow"><input type="checkbox" id="mpGlOn"> Glitch</label><button id="mpGlRandom" title="A random mix of glitch effects (the rest of the look stays)">Random glitch</button></div>
+      <div id="mpGlBody">
+        <div class="row" id="mpGlWhereRow"><span class="label">Glitch</span><select id="mpGlWhere" class="grow" title="On the result, or on the picture before it becomes a map (the glitch is then drawn in the effect's own style)"><option value="after">The result</option><option value="before">The picture, before a map</option></select></div>
+        <div class="row"><button id="mpGlSeed" class="grow" title="Another random pattern of the same effects">New seed</button><button id="mpGlClear" class="grow" title="Every glitch effect back to 0">Clear</button></div>
+        <div class="subhead">Tear</div>
+        <div id="mpgsl-glSlices"></div>
+        <div id="mpgsl-glSliceSize"></div>
+        <div id="mpgsl-glWave"></div>
+        <div id="mpgsl-glWaveFreq"></div>
+        <div id="mpgsl-glBlocks"></div>
+        <div id="mpgsl-glBlockSize"></div>
+        <div id="mpgsl-glSort"></div>
+        <div class="subhead">Signal</div>
+        <div id="mpgsl-glSplit"></div>
+        <div id="mpgsl-glInterlace"></div>
+        <div id="mpgsl-glTracking"></div>
+        <div id="mpgsl-glScanlines"></div>
+        <div id="mpgsl-glNoise"></div>
+        <div class="subhead">Colour</div>
+        <div id="mpgsl-glCrush"></div>
+        <div class="row"><span class="label">Channel swap</span><select id="mpGlSwap" class="grow"><option value="none">None</option><option value="rbg">R B G</option><option value="grb">G R B</option><option value="gbr">G B R</option><option value="brg">B R G</option><option value="bgr">B G R</option></select></div>
+        <p class="hint">Rows tear sideways and wrap round the picture; nothing moves up or down, so every tile matches the preview. The seed fixes the pattern: the preview, the layer and the live view all match.</p>
       </div>
     </div>
   </div>

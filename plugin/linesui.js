@@ -7,8 +7,11 @@ const { core, imaging, constants } = require("photoshop");
 const uxp = require("uxp");
 const lfs = uxp.storage.localFileSystem, formats = uxp.storage.formats;
 const Lines = require("./lines.js");
+const { CHARSETS } = require("./charsets.js");
 const MapHeights = require("./map.js");
 const { makeSlider, onDoubleClick, SLIDER_HTML } = require("./slider.js");
+const Glitch = require("./glitch.js");
+const { setupGlitchUI } = require("./glitchui.js");
 const { createViewer } = require("./viewer.js");
 const { makePresetBox } = require("./presetbox.js");
 const { makeHistory } = require("./history.js");
@@ -36,6 +39,12 @@ const SLIDERS = {
   indexEvery: ["Index line every", 0, 20, 1, (v) => (Math.round(v) ? Math.round(v) + "" : "off"), "Every Nth line is drawn thicker, like the index contours of a map."],
   indexWidth: ["Index width", 1, 5, 0.1, (v) => "×" + v.toFixed(1), "How much thicker the index lines are."],
   lineAngle: ["Angle", -180, 180, 1, deg, "Direction of the gradient: 90° runs from the bottom (start) to the top (end)."],
+  lineGradFrom: ["Start", 0, 1, 0.01, pct, "Where the low (start) colour begins: the part of the height below it stays that colour."],
+  lineGradTo: ["End", 0, 1, 0.01, pct, "Where the high (end) colour is reached: the part above it stays that colour."],
+  lineGradMid: ["Middle at", 0.05, 0.95, 0.01, pct, "Where the middle colour sits between the start and the end."],
+  lineGradCurve: ["Curve", -1, 1, 0.01, signed, "Plus: more of the high colour. Minus: more of the low colour."],
+  lineGradSteps: ["Steps", 0, 24, 1, (v) => (Math.round(v) >= 2 ? Math.round(v) + "" : "smooth"), "Hard colour bands instead of a smooth blend."],
+  lineGradRepeat: ["Repeats", 1, 20, 1, (v) => "×" + Math.round(v), "Runs the colours this many times from low to high."],
   sampleSat: ["Saturation", 0, 2, 0.01, pct, "Saturation of the colours sampled from the image."],
   sampleBright: ["Brightness", -1, 1, 0.01, signed, "Lighter or darker sampled colours."],
   lineOpacity: ["Opacity", 0, 1, 0.01, pct, "Opacity of the lines."],
@@ -52,17 +61,40 @@ const SLIDERS = {
   ptSize: ["Size", 4, 200, 0.5, "px", "Height of the characters on the lines."],
   ptSpacing: ["Spacing", 0.5, 4, 0.01, (v) => "×" + v.toFixed(2), "Space between the characters along a line (×1 = like monospaced text)."],
   ptRoom: ["Room", 0, 3, 0.01, (v) => (v > 0 ? "×" + v.toFixed(2) : "off"), "No characters where the lines run closer together than this (× the size), so the text doesn't pile up on steep slopes."],
+  mzSpacing: ["Spacing", 2, 60, 0.5, "px", "Space between the lines where the height is lowest (dark areas, or far in a depth map)."],
+  mzRange: ["Contrast", 1, 12, 0.1, (v) => "×" + v.toFixed(1), "How much wider apart the lines are where the height is highest (light areas): ×1 = the same everywhere."],
+  mzCurve: ["Balance", 0.25, 4, 0.01, (v) => v.toFixed(2), "Above 1: more of the picture gets the close lines. Below 1: more gets the wide ones."],
+  pcSpacing: ["Spacing", 1, 60, 0.1, "px", "Distance between neighbouring points before any are left out. Smaller = more points."],
+  pcJitter: ["Scatter", 0, 1, 0.01, pct, "0 = points on a regular grid, 100% = scattered at random."],
+  pcToneDensity: ["Density from tone", -1, 1, 0.01, signed, "Plus: more points where the source is dark. Minus: where it is light."],
+  pcHeightDensity: ["Density from height", -1, 1, 0.01, signed, "Plus: more points high up (near, in a depth map). Minus: low down."],
+  pcCut: ["Cut below", 0, 1, 0.01, (v) => (v > 0 ? pct(v) : "off"), "No points lower than this height: drops the background of a depth map."],
+  pcDepth: ["Depth", 0, 1.5, 0.01, pct, "How far the highest points come towards you (× the picture's long side)."],
+  pcYaw: ["Turn", -90, 90, 1, deg, "Turns the view left or right."],
+  pcPitch: ["Tilt", -90, 90, 1, deg, "Tilts the view up or down."],
+  pcPersp: ["Perspective", 0, 1, 0.01, (v) => (v > 0 ? pct(v) : "flat"), "0 = flat (no perspective); more = near points spread out and grow, like a wide-angle lens."],
+  pcZoom: ["Zoom", 0.2, 3, 0.01, (v) => "×" + v.toFixed(2), "The size of the cloud in the picture."],
+  pcSizeNear: ["Near points", 0, 2, 0.01, (v) => "×" + v.toFixed(2), "How much bigger near points are: ×1 = as the perspective gives, 0 = all the same size."],
+  pcFog: ["Fog", 0, 1, 0.01, pct, "Far points fade out."],
   ptLineOpacity: ["Lines under", 0, 1, 0.01, pct, "The lines themselves under the text: 0 = only the text."],
+  prLength: ["Stream length", 2, 60, 1, (v) => Math.round(v) + " chars", "How many characters a stream of rain has (on average)."],
+  prLengthVar: ["Length varies", 0, 1, 0.01, pct, "How much the streams' lengths differ."],
+  prGaps: ["Gaps", 0, 4, 0.01, (v) => "×" + v.toFixed(2), "The empty stretch after each stream, × its length. 0 = streams touch."],
+  prFade: ["Tail fade", 0, 1, 0.01, pct, "The tail of each stream fades out: 0 = every character as bright as the head."],
 };
 const CONTOUR_ONLY = ["offset", "declutter", "indexEvery", "indexWidth"];
 const RIDGE_ONLY = ["rows", "amp"];
+const MAZE_ONLY = ["mzSpacing", "mzRange", "mzCurve"];
+const POINTS_ONLY = ["pcSpacing", "pcJitter", "pcToneDensity", "pcHeightDensity", "pcCut"];
 // setting → swatch/hex id prefix
-const COLOURS = { lineColor: "lnLine", lineA: "lnLineA", lineMid: "lnLineMid", lineB: "lnLineB", indexColor: "lnIndex", bgColor: "lnBg", bgColor2: "lnBg2", bandA: "lnBandA", bandMid: "lnBandMid", bandB: "lnBandB", labelColor: "lnLabel", ptMsgColor: "lnPtMsg" };
-const CHECKS = { lnInvert: "invert", lnEqualize: "equalize", lnFollow: "followShape", lnSeaFloor: "seaFloor", lnRidgeLocal: "ridgeLocal", lnLineMidOn: "lineMidOn", lnIndexColorOn: "indexColorOn", lnBandMidOn: "bandMidOn", lnLabelsOn: "labelsOn", lnLabelUphill: "labelUphill", lnLabelGap: "labelGap", lnLabelColorOn: "labelColorOn", lnTextOn: "textOn", lnPtRotate: "ptRotate", lnPtVertical: "ptVertical", lnPtReadable: "ptReadable", lnPtMsgColorOn: "ptMsgColorOn" };
+const COLOURS = { lineColor: "lnLine", lineA: "lnLineA", lineMid: "lnLineMid", lineB: "lnLineB", indexColor: "lnIndex", bgColor: "lnBg", bgColor2: "lnBg2", bandA: "lnBandA", bandMid: "lnBandMid", bandB: "lnBandB", labelColor: "lnLabel", ptMsgColor: "lnPtMsg", prColor: "lnPr", prHeadColor: "lnPrHead" };
+const CHECKS = { lnInvert: "invert", lnEqualize: "equalize", lnFollow: "followShape", lnSeaFloor: "seaFloor", lnRidgeLocal: "ridgeLocal", lnLineMidOn: "lineMidOn", lnIndexColorOn: "indexColorOn", lnBandMidOn: "bandMidOn", lnLabelsOn: "labelsOn", lnLabelUphill: "labelUphill", lnLabelGap: "labelGap", lnLabelColorOn: "labelColorOn", lnTextOn: "textOn", lnPtRotate: "ptRotate", lnPtVertical: "ptVertical", lnPtReadable: "ptReadable", lnPtMsgColorOn: "ptMsgColorOn", lnPrReverse: "prReverse", lnPrColorOn: "prColorOn", lnPrHead: "prHead", lnLineGradMirror: "lineGradMirror", lnLineGradReverse: "lineGradReverse" };
 // The picture's own settings: where the height comes from. Presets and Randomize leave them alone.
-const PICTURE_KEYS = ["heightFrom", "heightLayer", "mapPlace", "mapLat", "mapLon", "mapName", "mapWidthKm", "seaFloor", "mapInterval", "invert", "equalize", "followShape"];
-// The text on the lines: kept by looks (and Randomize) that don't set it.
-const TEXT_KEYS = Object.keys(Lines.DEFAULTS).filter((k) => k === "textOn" || k === "textMode" || /^pt[A-Z]/.test(k));
+// The lines you chose (ptPicks) belong to the picture too.
+const PICTURE_KEYS = ["heightFrom", "heightLayer", "mapPlace", "mapLat", "mapLon", "mapName", "mapWidthKm", "seaFloor", "mapInterval", "invert", "equalize", "followShape", "ptPicks"];
+// The text on the lines and its rain: kept by looks (and Randomize) that don't set them.
+const TEXT_KEYS = Object.keys(Lines.DEFAULTS).filter((k) => k === "textOn" || k === "textMode" || (/^p[tr][A-Z]/.test(k) && k !== "ptPicks"));
+const PICK_MODES = { text: "own text", rain: "Matrix rain", line: "line only", hide: "hidden" };
 // Colour sets for Randomize: background, line, gradient start / middle / end
 const PALETTES = [
   ["#f6f1e3", "#5a3a1e", "#5e8c61", "#e9dfb4", "#f8f4ee"], ["#ffffff", "#111111", "#1b3a4b", "#c1666b", "#e8c170"],
@@ -71,7 +103,7 @@ const PALETTES = [
   ["#f1faee", "#1d3557", "#1d3557", "#457b9d", "#a8dadc"], ["#000000", "#ffffff", "#264653", "#e9c46a", "#e76f51"],
   ["#eae2b7", "#3d405b", "#3d405b", "#81b29a", "#f2cc8f"], ["#1a1a1a", "#ff6b35", "#004e89", "#ff6b35", "#f7c59f"],
 ];
-const SELECTS = { lnStyle: "style", lnHeightFrom: "heightFrom", lnLineFrom: "lineFrom", lnBgMode: "bgMode", lnBands: "bands", lnLabelUnits: "labelUnits", lnTextMode: "textMode", lnPtWhich: "ptWhich" };
+const SELECTS = { lnPcShape: "pcShape", lnStyle: "style", lnHeightFrom: "heightFrom", lnLineFrom: "lineFrom", lnBgMode: "bgMode", lnBands: "bands", lnLabelUnits: "labelUnits", lnTextMode: "textMode", lnPtWhich: "ptWhich", lnPtSet: "ptSet" };
 
 module.exports = function setupLines(h) {
   const { $, loadJSON, saveJSON, errMsg, createLayer, bitDepth, isGray, checkDoc, askColor, selectLayer, docBaseName } = h;
@@ -90,6 +122,8 @@ module.exports = function setupLines(h) {
   let field = null; // {key, F}
   let mapData = null; // {key, grid}: the map region's heights at the analysis size
   const sliderEls = {};
+  let pickerSync = null; // shows the font in the font picker
+  let picking = false, curPick = 0, pickShown = -1; // choosing lines on the preview; the chosen line the panel shows
 
   function status(msg, isErr) { const el = $("lnStatus"); el.textContent = msg || ""; el.style.color = isErr ? "#ff7070" : ""; }
   // every change is saved and noted for ↶ Undo (slider drags make one step per pause)
@@ -101,10 +135,26 @@ module.exports = function setupLines(h) {
   const save = () => { saveJSON("gf:lines:last", L); hist.note(); };
   // the glyphs: the built-in atlas, or one that also has the characters typed for the text on the lines
   let textAtlas = null;
-  const atlas = () => (L.textOn && textAtlas) || (h.baseAtlas ? h.baseAtlas() : null);
+  const atlas = () => (Lines.textChars(L) && textAtlas) || (h.baseAtlas ? h.baseAtlas() : null);
+  const markAtlas = () => (L.ptFont && h.baseAtlas ? h.baseAtlas() : null); // height labels stay in the built-in font
+  // The glitch: on the picture before the lines (glitchImg on the analysis image), or on the result (draw)
+  const glitchBefore = (s) => s.glWhere === "before" && Glitch.active(s);
+  function glitchImg(img, frame, s) {
+    if (!img || !glitchBefore(s)) return img;
+    const d = new Uint8Array(img.data);
+    Glitch.apply(d, img.w, img.h, 0, 0, img.w / frame.w, frame.w, frame.h, s);
+    return { w: img.w, h: img.h, data: d };
+  }
+  const draw = (F, s, rect, z, frame, cache) => (!glitchBefore(s) && Glitch.active(s)
+    ? Glitch.renderWith((r, zz) => Lines.render(F, s, r, zz, atlas(), markAtlas()), rect, z, frame.w, frame.h, s, cache)
+    : Lines.render(F, s, rect, z, atlas(), markAtlas()));
+  const pvStrips = new Map(); // the glitch's full-width strips for the preview
+  let glitchUI = null;
   async function readyText() { // outside executeAsModal: may render the font in Photoshop
-    if (!L.textOn || !h.atlasFor) return;
-    try { textAtlas = await h.atlasFor(Lines.textChars(L)); } catch (e) { console.error(e); textAtlas = null; }
+    const chars = Lines.textChars(L);
+    if (!chars || !h.atlasFor) return;
+    try { textAtlas = await h.atlasFor(chars, L.ptFont || "", L.ptFontName || ""); }
+    catch (e) { console.error(e); textAtlas = null; if (L.ptFont) status(`Couldn't render ${L.ptFontName || L.ptFont}: ${errMsg(e)}. Using the built-in font.`, true); }
   }
   const live = createLive({ btn: $("lnLive"), label: "Line art", status, errMsg });
   const isGroup = (l) => l && (l.kind === constants.LayerKind.GROUP || String(l.kind) === "group");
@@ -194,10 +244,10 @@ module.exports = function setupLines(h) {
     $("lnMapInfo").textContent = !where ? "No area yet: choose one in the Map tab."
       : `${where} · ${L.mapWidthKm < 10 ? L.mapWidthKm.toFixed(1) : Math.round(L.mapWidthKm)} km wide${g ? ` · ${Math.round(L.seaFloor ? g.min : Math.max(0, g.min))}–${Math.round(g.max)} m` : ""}`;
   }
-  const fieldKey = (readKey, mapKey) => [readKey, mapKey, L.invert, L.equalize, L.smooth, L.seaFloor, L.mapInterval > 0, L.shade > 0].join("|");
+  const fieldKey = (readKey, mapKey) => [readKey, mapKey, L.invert, L.equalize, L.smooth, L.seaFloor, L.mapInterval > 0, L.shade > 0, glitchBefore(L) ? Glitch.keyOf(L) : ""].join("|");
   function fieldFor(readKey, frame, mapHeights) {
     const key = fieldKey(readKey, mapHeights ? mapData.key : "");
-    if (!field || field.key !== key) field = { key, F: Lines.prepare(reads.img, mapHeights || reads.height, L, frame.w, frame.h) };
+    if (!field || field.key !== key) field = { key, F: Lines.prepare(glitchImg(reads.img, frame, L), mapHeights || reads.height, L, frame.w, frame.h) };
     return field.F;
   }
 
@@ -241,8 +291,10 @@ module.exports = function setupLines(h) {
     const t0 = Date.now(), F = fieldFor(readKey, frame, heights);
     if (!pv || pv.srcKey !== srcKey) viewer.setCentre(frame.w / 2, frame.h / 2);
     pv = { doc, src, srcKey, frame, F, prepMs: Date.now() - t0 };
+    if ((L.ptPicks || []).length) fillPickList(); // (the heights of the chosen lines)
+    pvStrips.clear(); // the settings may have changed
     await viewer.refresh();
-    if (live.on && live.info().sourceDocId === doc.id) { const s = JSON.parse(JSON.stringify(L)); live.update((v) => Lines.render(F, s, v, 1, atlas())); }
+    if (live.on && live.info().sourceDocId === doc.id) { const s = JSON.parse(JSON.stringify(L)); const c = new Map(), fr = pv.frame; live.update((v) => draw(F, s, v, 1, fr, c)); }
   }
 
   // ---------- live smart object ----------
@@ -260,7 +312,7 @@ module.exports = function setupLines(h) {
     let so = null;
     try {
       so = await live.open({
-        doc, frame, name: `${src.name.replace(OUT_RE, "").trim() || docBaseName(doc)} Line Art`, reuse: isSmart(old) ? old : null, draw: (v) => Lines.render(F, s, v, 1, atlas()),
+        doc, frame, name: `${src.name.replace(OUT_RE, "").trim() || docBaseName(doc)} Line Art`, reuse: isSmart(old) ? old : null, draw: ((c) => (v) => draw(F, s, v, 1, frame, c))(new Map()),
         place: async (layer) => { // right above the source (or at the top)
           const sl = src.layerId != null ? findLayerById(doc, src.layerId) : null, board = frame.artboardId != null ? findLayerById(doc, frame.artboardId) : null;
           if (sl) await layer.move(sl, constants.ElementPlacement.PLACEBEFORE);
@@ -277,7 +329,8 @@ module.exports = function setupLines(h) {
   // The preview of frame rect `rect` at scale z, as RGB (over the source, as the layer would sit above it).
   async function renderRegion(rect, z) {
     if (!pv) return null;
-    const t0 = Date.now(), px = Lines.render(pv.F, L, rect, z, atlas()), W = Math.max(1, Math.round(rect.w * z)), H = Math.max(1, Math.round(rect.h * z));
+    const s = picking && L.ptPicks[curPick] ? Object.assign({}, L, { _pickHi: curPick }) : L; // the chosen line outlined while choosing
+    const t0 = Date.now(), px = draw(pv.F, s, rect, z, pv.frame, pvStrips), W = Math.max(1, Math.round(rect.w * z)), H = Math.max(1, Math.round(rect.h * z));
     const rgb = Lines.composite(px, Lines.sourceRGB(pv.F, rect, z), W * H);
     status(`${L.heightFrom === "map" ? mapLabel(pv.F) : pv.src.layerId == null ? "Visible image" : "“" + pv.src.name + "”"}${L.heightFrom === "layer" ? " · height from a layer" : ""} · ${Date.now() - t0 + pv.prepMs} ms`);
     return { rgb, w: W, h: H };
@@ -314,7 +367,7 @@ module.exports = function setupLines(h) {
           if (update && isSmart(layer)) throw new Error("This Line Art is a smart object: change it with Open live smart object.");
           const r = await readSources(doc, src, frame);
           if (heights && mapData.key !== mapKeyOf(frame)) throw new Error("The area changed while the map was loading. Press Apply again.");
-          const F = Lines.prepare(r.img, heights || r.height, L, frame.w, frame.h);
+          const F = Lines.prepare(glitchImg(r.img, frame, L), heights || r.height, L, frame.w, frame.h), strips = new Map();
           if (!layer) {
             const sl = src.layerId != null ? findLayerById(doc, src.layerId) : null;
             if (sl) await selectLayer(sl); // the new layer appears above the selection
@@ -333,7 +386,7 @@ module.exports = function setupLines(h) {
             for (let ty = 0; ty < frame.h; ty += TILE) for (let tx = 0; tx < frame.w; tx += TILE) {
               status(`Drawing lines… tile ${++k}/${nT}`);
               const tw = Math.min(TILE, frame.w - tx), th = Math.min(TILE, frame.h - ty);
-              const px = Lines.render(F, L, { x: tx, y: ty, w: tw, h: th }, 1, atlas());
+              const px = draw(F, L, { x: tx, y: ty, w: tw, h: th }, 1, frame, strips);
               const id = await makeImageData(convertOut(new Uint8Array(px.buffer), tw * th, depth, gray), tw, th, gray, profile);
               try { await imaging.putPixels({ documentID: doc.id, layerID: layer.id, imageData: id, replace: k === 1, targetBounds: { left: frame.x + tx, top: frame.y + ty }, commandName: "Line art" }); }
               finally { id.dispose(); }
@@ -360,7 +413,7 @@ module.exports = function setupLines(h) {
     if (!pv) return;
     try {
       const { src, F } = pv;
-      const svg = Lines.toSVG(F, L, atlas());
+      const svg = Lines.toSVG(F, L, atlas(), markAtlas());
       const name = `${src.name.replace(OUT_RE, "").trim() || docBaseName(doc)}-line-art.svg`;
       const file = await lfs.getFileForSaving(name, { types: ["svg"] });
       if (!file) return;
@@ -400,13 +453,21 @@ module.exports = function setupLines(h) {
     for (const [id, k] of Object.entries(SELECTS)) setSel(id, L[k]);
     for (const [id, k] of Object.entries(CHECKS)) setChk(id, L[k]);
     for (const [k, id] of Object.entries(COLOURS)) { $(id + "Swatch").style.backgroundColor = L[k]; $(id + "Hex").value = L[k]; }
-    const ridges = L.style === "ridges", map = L.heightFrom === "map", interval = map && L.mapInterval > 0, grad = L.lineFrom === "height" || L.lineFrom === "across";
-    for (const k of CONTOUR_ONLY) show("lsl-" + k, !ridges);
+    const ridges = L.style === "ridges", maze = L.style === "maze", points = L.style === "points", contours = !ridges && !maze && !points;
+    const map = L.heightFrom === "map", interval = map && L.mapInterval > 0, grad = L.lineFrom === "height" || L.lineFrom === "across";
+    for (const k of CONTOUR_ONLY) show("lsl-" + k, contours);
     for (const k of RIDGE_ONLY) show("lsl-" + k, ridges);
+    for (const k of MAZE_ONLY) show("lsl-" + k, maze);
+    for (const k of POINTS_ONLY) show("lsl-" + k, points);
+    show("lnMzSeedRow", maze);
+    show("lnPcSeedRow", points);
+    show("lnViewBox", points);
+    const wl = sliderEls.lineWidth && sliderEls.lineWidth.label;
+    if (wl && wl.textContent !== (points ? "Point size" : "Line width")) wl.textContent = points ? "Point size" : "Line width";
     show("lnRidgeLocalRow", ridges);
-    show("lsl-levels", !ridges && !interval);
-    show("lsl-mapInterval", !ridges && map);
-    show("lsl-indexWidth", !ridges && !!L.indexEvery);
+    show("lsl-levels", contours && !interval);
+    show("lsl-mapInterval", contours && map);
+    show("lsl-indexWidth", contours && !!L.indexEvery);
     show("lnHeightLayerRow", L.heightFrom === "layer");
     show("lnMapBox", map);
     show("lnDepthHint", !map);
@@ -415,12 +476,16 @@ module.exports = function setupLines(h) {
     show("lnLineGradRows", grad);
     show("lnLineMidRow", grad && L.lineMidOn);
     show("lsl-lineAngle", L.lineFrom === "across");
+    show("lsl-lineGradMid", L.lineMidOn);
+    show("lnLineGradMirrorRow", L.lineGradRepeat > 1);
     show("lnSampleRows", L.lineFrom === "image");
-    show("lnIndexBox", !ridges && !!L.indexEvery);
+    show("lnIndexBox", contours && !!L.indexEvery);
     show("lnIndexColorRow", L.indexColorOn);
     show("lnBgColorRow", L.bgMode !== "transparent");
     show("lnBgGradRows", L.bgMode === "gradient");
-    show("lnBandsBox", !ridges);
+    show("lnBandsBox", contours || maze);
+    show("lnShadeBox", contours);
+    show("lnLabelsBox", contours);
     show("lnBandRows", L.bands !== "none");
     show("lnBandMidBox", L.bands === "steps" || L.bands === "smooth");
     show("lnBandMidRow", L.bandMidOn);
@@ -431,14 +496,41 @@ module.exports = function setupLines(h) {
     show("lnMarkRows", L.labelsOn || L.peaks > 0);
     show("lnLabelColorRow", L.labelColorOn);
     show("lnUnitsRow", map);
-    show("lnTextBox", !ridges);
+    show("lnTextBox", contours);
     show("lnTextRows", L.textOn);
     show("lnPtTextRows", L.textMode === "text");
-    show("lnPtWhichRow", !!L.indexEvery);
+    show("lnPtSetRows", L.textMode === "set");
     show("lnPtMsgColorRow", L.ptMsgColorOn);
+    show("lnPtTurnRows", L.textMode !== "direction");
     if ($("lnPtText").value !== L.ptText) $("lnPtText").value = L.ptText;
     refreshTextApply();
+    // single lines
+    const picks = L.ptPicks || [];
+    if (curPick >= picks.length) curPick = Math.max(0, picks.length - 1);
+    show("lnPicksBox", contours);
+    show("lnPickRows", picks.length > 0);
+    fillPickList();
+    const pk = picks[curPick];
+    if (pk) {
+      setSel("lnPickMode", pk.mode); setChk("lnPickAll", pk.all); setChk("lnPickColorOn", pk.colorOn);
+      $("lnPickSwatch").style.backgroundColor = pk.color; $("lnPickHex").value = pk.color;
+      if (pickShown !== curPick) { $("lnPickText").value = pk.text || ""; pickShown = curPick; }
+    }
+    show("lnPickTextRows", !!pk && pk.mode === "text");
+    show("lnPickColorRow", !!pk && pk.colorOn);
+    refreshPickApply();
+    const pb = $("lnPickBtn"), pbl = picking ? "Done choosing" : "Choose lines on the preview";
+    if (pb.textContent !== pbl) pb.textContent = pbl;
+    pb.classList.toggle("primary", picking);
+    // Matrix rain on the lines
+    show("lnRainBox", contours && ((L.textOn && L.textMode === "rain") || picks.some((p) => p.mode === "rain")));
+    show("lnPrColorRow", L.prColorOn);
+    show("lnPrHeadRow", L.prHead);
+    if ($("lnPrChars").value !== L.prChars) $("lnPrChars").value = L.prChars;
+    refreshRainApply();
+    if (pickerSync) pickerSync();
     showMapInfo();
+    if (glitchUI) glitchUI.sync();
     if (h.refreshFields) h.refreshFields();
   }
   // A look (built-in or saved): every setting from it, except the picture's own (PICTURE_KEYS).
@@ -458,19 +550,24 @@ module.exports = function setupLines(h) {
   function randomize() {
     const R = Math.random, pick = (a) => a[Math.floor(R() * a.length)], between = (a, b) => a + (b - a) * R(), round = (v, d) => Math.round(v * d) / d;
     const [bg, line, a, m, b] = pick(PALETTES), dark = Lines.hexToRgb(bg).reduce((x, y) => x + y) < 300;
-    const ridges = R() < 0.25, lineFrom = pick(["own", "own", "image", "height", "across"]);
+    const roll = R(), style = roll < 0.2 ? "ridges" : roll < 0.35 ? "maze" : roll < 0.5 ? "points" : "contours", ridges = style !== "contours";
+    const lineFrom = pick(["own", "own", "image", "height", "across"]);
     const st = {
-      style: ridges ? "ridges" : "contours",
+      style,
+      mzSpacing: round(between(5, 14), 2), mzRange: round(between(2, 7), 10), mzCurve: round(between(0.7, 1.5), 100),
+      pcSpacing: round(between(5, 14), 10), pcJitter: R() < 0.8 ? 1 : round(R(), 100), pcToneDensity: round(between(-0.3, 0.8), 100), pcHeightDensity: 0,
+      pcDepth: round(between(0.15, 0.5), 100), pcYaw: Math.round(between(-40, 40)), pcPitch: Math.round(between(-25, 30)), pcPersp: round(between(0.2, 0.8), 100),
+      pcZoom: 0.85, pcSizeNear: 1, pcFog: round(between(0, 0.6), 100), pcShape: R() < 0.8 ? "round" : "square",
       levels: Math.round(between(15, 120)), offset: round(R(), 100), declutter: R() < 0.3 ? round(between(1, 6), 2) : 0,
       rows: Math.round(between(30, 110)), amp: round(between(3, 14), 10), ridgeLocal: R() < 0.8,
       smooth: round(between(3, 18), 2),
-      lineWidth: round(between(0.8, 4), 10), toneWeight: R() < 0.4 ? round(between(-0.5, 1), 100) : 0, heightWeight: R() < 0.3 ? round(between(-0.8, 0.8), 100) : 0,
+      lineWidth: style === "points" ? round(between(2, 6), 10) : round(between(0.8, 4), 10), toneWeight: R() < 0.4 ? round(between(-0.5, 1), 100) : 0, heightWeight: R() < 0.3 ? round(between(-0.8, 0.8), 100) : 0,
       indexEvery: R() < 0.4 ? pick([4, 5, 10]) : 0, indexWidth: round(between(1.5, 3), 10),
       lineFrom, lineColor: line, lineA: a, lineMid: m, lineMidOn: R() < 0.5, lineB: b, lineAngle: Math.round(between(-180, 180)),
       sampleSat: round(between(0.8, 1.6), 100), sampleBright: dark ? round(between(0, 0.4), 100) : round(between(-0.4, 0), 100),
       lineOpacity: 1, indexColorOn: false,
       bgMode: R() < 0.2 ? "gradient" : "color", bgColor: bg, bgColor2: pick([a, m, b]), bgAngle: Math.round(between(-180, 180)),
-      bands: ridges || R() < 0.6 ? "none" : pick(["steps", "smooth", "alternate"]), bandA: a, bandMid: m, bandMidOn: R() < 0.5, bandB: b, bandOpacity: round(between(0.4, 1), 100),
+      bands: style === "maze" ? (R() < 0.3 ? "alternate" : "none") : ridges || R() < 0.6 ? "none" : pick(["steps", "smooth", "alternate"]), bandA: a, bandMid: m, bandMidOn: R() < 0.5, bandB: b, bandOpacity: round(between(0.4, 1), 100),
       shade: !ridges && R() < 0.3 ? round(between(0.3, 0.8), 100) : 0, shadeAngle: 135, shadeRelief: round(between(2, 6), 10),
     };
     applyLook(st);
@@ -482,6 +579,55 @@ module.exports = function setupLines(h) {
     if (b.textContent !== label) b.textContent = label;
   }
   function setColour(k, hex) { L[k] = hex; sync(); schedule(0); }
+  function refreshRainApply() {
+    const pending = $("lnPrChars").value !== L.prChars, b = $("lnPrApply"), label = pending ? "Apply characters" : "Applied";
+    b.disabled = !pending; b.classList.toggle("primary", pending);
+    if (b.textContent !== label) b.textContent = label;
+  }
+
+  // ---------- single lines (L.ptPicks) ----------
+  const curPk = () => (L.ptPicks || [])[curPick];
+  function refreshPickApply() {
+    const pk = curPk(), pending = !!pk && $("lnPickText").value !== (pk.text || ""), b = $("lnPickApply"), label = pending ? "Apply text" : "Applied";
+    b.disabled = !pending; b.classList.toggle("primary", pending);
+    if (b.textContent !== label) b.textContent = label;
+  }
+  function fillPickList() {
+    const sel = $("lnPickList"), picks = L.ptPicks || [], info = pv && pv.F && picks.length ? Lines.picksInfo(pv.F, L) : [];
+    const html = picks.map((p, i) => {
+      const f = info[i], where = !f ? "line" : !f.found ? "no line here now" : pv.F.metres ? `line at ${f.height} ${L.labelUnits === "ft" ? "ft" : "m"}` : `line ${f.height}`;
+      return `<option value="${i}">${i + 1}. ${where}${p.all ? " (all at this height)" : ""} · ${PICK_MODES[p.mode] || p.mode}</option>`;
+    }).join("");
+    if (sel.innerHTML !== html) sel.innerHTML = html;
+    sel.value = String(curPick);
+    if (sel.ddUpdate) sel.ddUpdate();
+  }
+  // Click on the preview: chooses the contour line nearest the click (or selects it when it's chosen already).
+  const pickEditor = {
+    down(p) {
+      if (!pv || !pv.F) return;
+      if (["ridges", "maze", "points"].includes(L.style)) return status("Single lines work on contour lines (Style ▸ Contours).", true);
+      const hit = Lines.lineAt(pv.F, L, p.x, p.y);
+      if (!hit || hit.d > Math.max(pv.frame.w, pv.frame.h) * 0.04) return status("No contour line there: click closer to a line.", true);
+      const info = Lines.picksInfo(pv.F, L), had = info.findIndex((f) => f.line === hit.line);
+      if (had >= 0) curPick = had;
+      else {
+        L.ptPicks = (L.ptPicks || []).concat([{ x: hit.x / pv.frame.w, y: hit.y / pv.frame.h, all: false, mode: "text", text: "", colorOn: false, color: "#e63946" }]);
+        curPick = L.ptPicks.length - 1;
+      }
+      pickShown = -1;
+      sync(); schedule(0);
+      status(had >= 0 ? `Line ${curPick + 1} selected.` : `Chose the line ${pv.F.metres ? "at " + hit.height + " " + (L.labelUnits === "ft" ? "ft" : "m") : hit.height}. Set what it gets under Single lines.`);
+    },
+    move() {}, up() {},
+  };
+  function setPicking(on) {
+    picking = !!on;
+    if (viewer) { viewer.setEditor(picking ? pickEditor : null); viewer.refresh(); }
+    sync();
+    if (picking) status("Click a contour line in the preview to choose it. Option/Alt-drag moves the view.");
+  }
+  function changePick(fn) { const pk = curPk(); if (!pk) return; fn(pk); L.ptPicks = L.ptPicks.slice(); sync(); schedule(0); }
 
   function build() {
     for (const [key, [label, min, max, step, fmt, tip]] of Object.entries(SLIDERS)) {
@@ -489,10 +635,10 @@ module.exports = function setupLines(h) {
       host.innerHTML = `<div class="row" title="${tip}"><span class="label" title="${tip} Double-click the name or the handle to reset.">${label}</span>${SLIDER_HTML}<span class="val"></span></div>`;
       const val = host.querySelector(".val"), px = fmt === "px";
       const reset = () => { L[key] = Lines.DEFAULTS[key]; sync(); schedule(); };
-      const input = makeSlider(host.querySelector(".slider"), min, max, step, (v) => { L[key] = v; val.textContent = px ? fmtPx(v) : fmt(v); if (key === "indexEvery" || key === "mapInterval" || key === "peaks") sync(); schedule(); }, reset);
+      const input = makeSlider(host.querySelector(".slider"), min, max, step, (v) => { L[key] = v; val.textContent = px ? fmtPx(v) : fmt(v); if (key === "indexEvery" || key === "mapInterval" || key === "peaks" || key === "lineGradRepeat") sync(); schedule(); }, reset);
       onDoubleClick(host.querySelector(".label"), reset);
       onDoubleClick(val, reset);
-      sliderEls[key] = { input, val, fmt, px };
+      sliderEls[key] = { input, val, fmt, px, label: host.querySelector(".label") };
     }
     makePresetBox({
       $, loadJSON, saveJSON, setSelect: h.setSelect, status, errMsg, lfs, formats,
@@ -520,9 +666,59 @@ module.exports = function setupLines(h) {
     for (const [id, k] of Object.entries(CHECKS)) h.onCheck($(id), (v) => { L[k] = v; sync(); schedule(0); });
     const applyText = () => { L.ptText = $("lnPtText").value; sync(); schedule(0); };
     $("lnPtText").addEventListener("input", refreshTextApply);
-    $("lnPtText").addEventListener("keydown", (e) => { if (e.key === "Enter") setTimeout(applyText, 0); }); // Enter applies
+    $("lnPtText").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) setTimeout(applyText, 0); }); // ⌘/Ctrl+Enter applies (Enter = a new row)
+    $("lnPtRows").addEventListener("click", () => { // one row per line height, with the height written out
+      const hs = pv && pv.F ? Lines.lineHeights(pv.F, L) : [];
+      if (!hs.length) { status("No contour lines to list yet."); return; }
+      const rows = String(L.ptText || "").split(/\r?\n/).filter((r) => r.trim()), first = rows[0] || "%h";
+      L.ptText = hs.map((hgt, i) => (rows.length === hs.length ? rows[i] : first).replace(/%h/g, hgt)).join("\n");
+      $("lnPtText").value = L.ptText; h.refreshFields && h.refreshFields();
+      sync(); schedule(0);
+      status(hs.length + " rows, one per line height, lowest first. Change any row and apply.");
+    });
+    $("lnPtSetReseed").addEventListener("click", () => { L.ptSeed = Math.floor(Math.random() * 99999) + 1; schedule(0); });
     $("lnPtApply").addEventListener("click", applyText);
+    const fontPicker = h.makeFontPicker ? h.makeFontPicker("ln", () => ({ font: L.ptFont, name: L.ptFontName }), (ps, name) => { L.ptFont = ps; L.ptFontName = name; sync(); schedule(0); }) : null;
+    pickerSync = () => fontPicker && fontPicker.fill();
     $("lnPtReseed").addEventListener("click", () => { L.ptSeed = Math.floor(Math.random() * 99999) + 1; schedule(0); });
+    $("lnMzSeed").addEventListener("click", () => { L.mzSeed = Math.floor(Math.random() * 99999) + 1; schedule(0); });
+    // Matrix rain on the lines
+    const applyRain = () => { L.prChars = $("lnPrChars").value; sync(); schedule(0); };
+    $("lnPrChars").addEventListener("input", refreshRainApply);
+    $("lnPrChars").addEventListener("keydown", (e) => { if (e.key === "Enter") setTimeout(applyRain, 0); });
+    $("lnPrApply").addEventListener("click", applyRain);
+    $("lnPrPreset").addEventListener("change", () => {
+      const id = $("lnPrPreset").value;
+      if (!id) return;
+      const cs = CHARSETS.find((c) => c.id === id);
+      $("lnPrChars").value = id === "matrix" ? Lines.DEFAULTS.prChars : Array.from(new Set(Array.from(cs ? cs.chars : ""))).filter((ch) => ch.trim()).join("");
+      $("lnPrPreset").value = "";
+      h.refreshFields && h.refreshFields();
+      applyRain();
+    });
+    $("lnPrSeed").addEventListener("click", () => { L.prSeed = Math.floor(Math.random() * 99999) + 1; schedule(0); });
+    // single lines
+    $("lnPickBtn").addEventListener("click", () => setPicking(!picking));
+    $("lnPickList").addEventListener("change", () => { curPick = Number($("lnPickList").value) || 0; pickShown = -1; sync(); if (picking) viewer.refresh(); });
+    $("lnPickMode").addEventListener("change", () => changePick((pk) => { pk.mode = $("lnPickMode").value; }));
+    h.onCheck($("lnPickAll"), (v) => changePick((pk) => { pk.all = v; }));
+    h.onCheck($("lnPickColorOn"), (v) => changePick((pk) => { pk.colorOn = v; }));
+    const applyPickText = () => changePick((pk) => { pk.text = $("lnPickText").value; });
+    $("lnPickText").addEventListener("input", refreshPickApply);
+    $("lnPickText").addEventListener("keydown", (e) => { if (e.key === "Enter") setTimeout(applyPickText, 0); });
+    $("lnPickApply").addEventListener("click", applyPickText);
+    $("lnPickSwatch").addEventListener("click", async () => {
+      const pk = curPk();
+      if (!pk) return;
+      try { const v = await askColor(pk.color); if (v) changePick((p) => { p.color = v; }); } catch (e) { console.error(e); status("Colour picker unavailable — type a hex value instead.", true); }
+    });
+    $("lnPickHex").addEventListener("change", () => {
+      const v = $("lnPickHex").value.trim().replace(/^#?/, "#");
+      if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) { const [r, g, b] = Lines.hexToRgb(v); changePick((p) => { p.color = "#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1); }); } else sync();
+    });
+    $("lnPickDel").addEventListener("click", () => { if (!curPk()) return; L.ptPicks = L.ptPicks.filter((_, i) => i !== curPick); pickShown = -1; sync(); schedule(0); status("Removed. ↶ Undo brings it back."); });
+    $("lnPickClear").addEventListener("click", () => { L.ptPicks = []; pickShown = -1; sync(); schedule(0); status("No chosen lines. ↶ Undo brings them back."); });
+    $("lnPcSeed").addEventListener("click", () => { L.pcSeed = Math.floor(Math.random() * 99999) + 1; schedule(0); });
     $("lnMapEdit").addEventListener("click", () => h.showTab && h.showTab("map"));
     $("lnHeightLayer").addEventListener("change", () => { const v = $("lnHeightLayer").value; L.heightLayer = v ? Number(v) : null; schedule(0); });
     for (const [k, id] of Object.entries(COLOURS)) {
@@ -541,13 +737,15 @@ module.exports = function setupLines(h) {
       wrap: $("lnPreviewWrap"), img: $("lnPreview"), msg: $("lnPreviewMsg"), bar: $("lnZoomBar"), grip: $("lnPreviewGrip"), head: $("lnPreviewHead"), storeKey: "gf:zoom:lines", onLayout: () => h.fitLayout(true),
       docSize: () => (pv ? { w: pv.frame.w, h: pv.frame.h } : null), render: renderRegion,
       onError: (e) => { console.error(e); status(errMsg(e), true); },
+      onEditToggle: () => setPicking(!picking), editTitle: "Choose contour lines: click a line in the preview to give it its own text, rain or colour",
     });
+    glitchUI = setupGlitchUI({ prefix: "ln", $, get: () => L, changed: () => schedule(), onCheck: h.onCheck, before: true });
     $("lnApply").addEventListener("click", () => apply(false));
     $("lnLive").addEventListener("click", toggleLive);
     $("lnUse").addEventListener("click", () => {
       if (!pv || !pv.F) return status("Wait for the preview first.", true);
-      const label = L.style === "ridges"
-        ? `Ridge lines (${Math.round(L.rows || 25)} rows)`
+      const label = L.style === "ridges" ? `Ridge lines (${Math.round(L.rows || 25)} rows)`
+        : L.style === "maze" ? "Labyrinth" : L.style === "points" ? "Point cloud"
         : `Contour lines (${Math.round(L.levels || 40)} lines)`;
       if (h.useLines) h.useLines({ label });
     });
@@ -573,7 +771,7 @@ module.exports = function setupLines(h) {
     renderForAscii(frame, z) {
       if (!pv || !pv.F) return null;
       const s = Object.assign({}, L, { bgMode: "transparent" }), rect = { x: frame.x - pv.frame.x, y: frame.y - pv.frame.y, w: frame.w, h: frame.h };
-      const px = Lines.render(pv.F, s, rect, z, atlas());
+      const px = draw(pv.F, s, rect, z, pv.frame);
       return { data: new Uint8Array(px.buffer, px.byteOffset, px.byteLength), w: Math.max(1, Math.round(frame.w * z)), h: Math.max(1, Math.round(frame.h * z)) };
     },
     useLook, randomize, undo: () => hist.undo(), toggleLive, live: () => live,

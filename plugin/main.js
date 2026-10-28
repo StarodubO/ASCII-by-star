@@ -13,6 +13,7 @@ const setupInk = require("./inkui.js");
 const setupLines = require("./linesui.js");
 const setupMap = require("./mapui.js");
 const setupTextArt = require("./textart.js");
+const setupDither = require("./ditherui.js");
 const { makeSlider, trackDrag, onDoubleClick, SLIDER_HTML } = require("./slider.js");
 const { enhanceAllSelects } = require("./dropdown.js");
 const { enhanceAllFields, refreshFields } = require("./fields.js");
@@ -37,11 +38,12 @@ let editing = null; // {docId, layerId, tag, name, sourceLayerId}
 let live = null; // live preview window {docId, layerId, sourceDocId, scale}
 let gridCache = { key: null, src: null, grid: null, cs: null, geo: null };
 let looks = null; // the Look presets (presetbox.js; saved ones in gf:userPresets)
-let tab = loadJSON("gf:tab", "ascii"); // "ascii" | "text" | "ink" | "lines"
+let tab = loadJSON("gf:tab", "ascii"); // "ascii" | "text" | "ink" | "lines" | "map" | "dither"
 let ink = null; // the Ink bleed tab (inkui.js)
 let lines = null; // the Lines tab (linesui.js)
 let mapTab = null; // the Map tab (mapui.js)
 let textTab = null; // the Text art tab (textart.js)
+let ditherTab = null; // the Dither tab (ditherui.js)
 
 // ---------- utils ----------
 function loadJSON(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
@@ -264,25 +266,31 @@ async function saveCachedFontAtlas(key, meta, data) {
   } catch (e) { console.error("font cache", e); }
 }
 
-async function buildFontAtlas(fontPS, chars, key) {
-  const F = 40, cw0 = Math.round(F * 1.4), cellH = Math.round(F * 1.2), base = Math.round(F * 0.92), cols = 16;
-  const rows = Math.ceil(chars.length / cols), W = cols * cw0, H = rows * cellH;
-  const boxes = [];
+// opts.measure: also measure every character's advance (the width it takes in running text) and where its pen
+// origin sits in the cell (meta.adv, meta.ox), for proportional text (Lines text, Map names). An advance is the
+// right edge of ch + "H" minus that of "H" alone, typed at the same spot below the glyph rows.
+async function buildFontAtlas(fontPS, chars, key, opts) {
+  const F = 40, cw0 = Math.round(F * 1.4), cellH = Math.round(F * 1.2), base = Math.round(F * 0.92), cols = 16, measure = !!(opts && opts.measure);
+  const rows = Math.ceil(chars.length / cols), W = Math.max(cols * cw0, measure ? F * 4 : 0), H = rows * cellH, docH = H + (measure ? cellH * 2 : 0);
+  const boxes = [], ends = [], label = (opts && opts.label) || S.fontName || fontPS;
+  let endH = 0;
   let pixels = null, comps = 3;
   busy = true;
   try {
     await core.executeAsModal(async () => {
-      const tmp = await app.documents.add({ width: W, height: H, resolution: 72, mode: "RGBColorMode", depth: 8, fill: "white", name: "ASCII by Star font" });
+      const tmp = await app.documents.add({ width: W, height: docH, resolution: 72, mode: "RGBColorMode", depth: 8, fill: "white", name: "ASCII by Star font" });
       try {
         const black = new app.SolidColor(); black.rgb.hexValue = "000000";
         for (let i = 0; i < chars.length; i++) {
           const ch = chars[i], c = i % cols, r = Math.floor(i / cols);
-          if (i % 8 === 0) status(`Rendering font ${S.fontName || fontPS}… ${i}/${chars.length}`);
+          if (i % 8 === 0) status(`Rendering font ${label}… ${i}/${chars.length}`);
+          if (measure) { const m = await tmp.createTextLayer({ contents: ch + "H", fontSize: F, fontName: fontPS, textColor: black, position: { x: F, y: H + base } }); ends.push(m.boundsNoEffects.right); }
           if (ch === " ") { boxes.push(null); continue; }
           const layer = await tmp.createTextLayer({ contents: ch, fontSize: F, fontName: fontPS, textColor: black, position: { x: c * cw0 + Math.round(cw0 * 0.2), y: r * cellH + base } });
           const b = layer.boundsNoEffects;
           boxes.push(b && b.right > b.left ? { l: b.left, r: b.right } : null);
         }
+        if (measure) endH = (await tmp.createTextLayer({ contents: "H", fontSize: F, fontName: fontPS, textColor: black, position: { x: F, y: H + base } })).boundsNoEffects.right;
         const res = await imaging.getPixels({ documentID: tmp.id, applyAlpha: true });
         pixels = await res.imageData.getData({ chunky: true }); comps = res.imageData.components; res.imageData.dispose();
       } finally { await tmp.closeWithoutSaving(); }
@@ -304,6 +312,10 @@ async function buildFontAtlas(fontPS, chars, key) {
     }
   }
   const meta = { cellW, cellH, fontSize: F, chars };
+  if (measure) {
+    meta.adv = chars.map((ch, i) => Math.max(0, ends[i] - endH));
+    meta.ox = chars.map((ch, i) => { const b = boxes[i]; return b ? (i % cols) * cw0 + Math.round(cw0 * 0.2) - Math.round((b.l + b.r) / 2 - cellW / 2) : 0; });
+  }
   await saveCachedFontAtlas(key, meta, data);
   const a = Engine.prepareAtlas(meta, data); a.id = key;
   return a;
@@ -311,14 +323,31 @@ async function buildFontAtlas(fontPS, chars, key) {
 
 // Makes `atlas` match the chosen font and character set; renders the font first if needed.
 // An atlas that has `chars`: the built-in one, or Menlo (Consolas on Windows) rendered by Photoshop for
-// characters it lacks (the Text art tab's preview). Cached like the custom fonts.
-async function atlasFor(chars) {
+// characters it lacks (the Text art tab's preview). font (a PostScript name): that font instead, measured for
+// proportional text (atlas.adv); label: its name for the status line. Cached like the custom fonts.
+async function atlasFor(chars, font, label) {
   if (!baseAtlas) throw new Error("The glyphs are still loading.");
   const set = Array.from(new Set(Array.from(" " + chars))).filter((c) => c !== "\n" && c !== "\r" && c !== "\t");
-  if (set.every((c) => baseAtlas.index.has(c))) return baseAtlas;
-  const key = MONO_FONT + "|" + set.join("");
-  if (!fontAtlases.has(key)) fontAtlases.set(key, (await loadCachedFontAtlas(key)) || (await buildFontAtlas(MONO_FONT, set, key)));
+  if (!font && set.every((c) => baseAtlas.index.has(c))) return baseAtlas;
+  const key = font ? font + "|adv|" + set.join("") : MONO_FONT + "|" + set.join("");
+  if (!fontAtlases.has(key)) fontAtlases.set(key, (await loadCachedFontAtlas(key)) || (await buildFontAtlas(font || MONO_FONT, set, key, font ? { measure: true, label } : null)));
   return fontAtlases.get(key);
+}
+// A font picker for another tab (picker.js, the ASCII tab's list): ids prefix p (p+"FontPicker", "FontCurrent",
+// "FontChev", "FontPanel", "FontSearch", "FontList"); get() → {font, name}; set(ps, name).
+const tabFontPickers = [];
+function makeFontPicker(p, get, set, onToggle) {
+  const fp = makePicker({
+    ids: { button: p + "FontPicker", current: p + "FontCurrent", chev: p + "FontChev", panel: p + "FontPanel", search: p + "FontSearch", list: p + "FontList" },
+    label: () => (get().font ? get().name || get().font : "Built-in (Menlo)"), items: fontItems, selected: () => get().font || "",
+    onPick: (ps, it) => {
+      if (ps) saveJSON("gf:recentFonts", [ps].concat(loadJSON("gf:recentFonts", []).filter((x) => x !== ps)).slice(0, 8));
+      set(ps || "", ps ? (it ? it.label : ps) : ""); fp.fill();
+    },
+    none: () => "No installed font matches", onToggle: () => { fitLayout(true); if (onToggle) onToggle(); },
+  });
+  tabFontPickers.push(fp);
+  return fp;
 }
 // The Text art tab's "Use with effects": the art becomes the ASCII tab's picture.
 function useArt(art, font) {
@@ -1397,7 +1426,7 @@ let markHidden = loadJSON("gf:markHidden", false); // preview only: show where h
 let extraOpen = false; // the box for messages and a fill on a built-in character set, opened by its button
 
 // Sections with a badge (plugin/icons/sections/<id>.png, made by tools/make_section_icons.swift)
-const SECTION_ICONS = new Set(["taStyle", "taText", "taFont", "taLayout", "taShape", "look", "chars", "outline", "rain", "depth", "edit", "grid", "tone", "color", "shadow", "cells", "glitch", "output", "batch", "inkType", "inkInk", "inkPaper", "inkLayers", "lnStyle", "lnHeight", "lnLines", "lnWidth", "lnColour", "lnUnder", "lnLabels", "lnLayers", "mpArea", "mpLook", "mpAreas", "mpLines", "mpBg", "mpLayers"]);
+const SECTION_ICONS = new Set(["taStyle", "taText", "taFont", "taLayout", "taShape", "look", "chars", "outline", "rain", "depth", "edit", "grid", "tone", "color", "shadow", "cells", "glitch", "output", "batch", "inkType", "inkInk", "inkPaper", "inkLayers", "lnStyle", "lnHeight", "lnLines", "lnWidth", "lnColour", "lnUnder", "lnLabels", "lnLayers", "mpArea", "mpLook", "mpAreas", "mpLines", "mpBg", "mpLayers", "dtLook", "dtPixels", "dtColors", "dtAlgo", "dtAdjust", "dtAlpha", "dtEdit", "dtLayers", "dtGlitch", "lnGlitch", "mpGlitch"]);
 function buildUI() {
   for (const [key, [label, min, max, step, fmt]] of Object.entries(SLIDERS)) {
     const host = $("sl-" + key);
@@ -1539,7 +1568,7 @@ function buildUI() {
   });
 
   // the controls under each preview can fold away, leaving more room for the settings
-  for (const id of ["ctl", "textCtl", "inkCtl", "lnCtl", "mpCtl"]) {
+  for (const id of ["ctl", "textCtl", "inkCtl", "lnCtl", "mpCtl", "dtCtl"]) {
     const head = $(id + "Head"), body = $(id + "Body"), key = "gf:" + id + "Folded";
     const apply = (f) => { body.classList.toggle("hidden", f); head.querySelector(".chev").textContent = f ? "▸" : "▾"; head.querySelector(".ctlLabel").textContent = f ? "Controls (source, apply, live smart object)" : "Controls"; fitLayout(true); };
     head.addEventListener("click", () => { const f = !body.classList.contains("hidden"); saveJSON(key, f); apply(f); });
@@ -1557,7 +1586,7 @@ function setupSections() {
   const restripe = (box) => sectionsOf(box).forEach((sec, i) => sec.classList.toggle("alt", i % 2 === 1)); // light and dark bands alternate
   const orderKey = (box) => "gf:sectionOrder:" + box.id;
   const fold = (sec, f) => { collapsed[sec.dataset.section] = f; sec.classList.toggle("collapsed", f); sec.querySelector(".chev").textContent = f ? "▸" : "▾"; };
-  for (const [box, controls] of [[$("scroller"), $("ctlBody")], [$("textScroller"), $("textCtlBody")], [$("inkScroller"), $("inkCtlBody")], [$("lnScroller"), $("lnCtlBody")], [$("mpScroller"), $("mpCtlBody")]]) {
+  for (const [box, controls] of [[$("scroller"), $("ctlBody")], [$("textScroller"), $("textCtlBody")], [$("inkScroller"), $("inkCtlBody")], [$("lnScroller"), $("lnCtlBody")], [$("mpScroller"), $("mpCtlBody")], [$("dtScroller"), $("dtCtlBody")]]) {
     const secs = sectionsOf(box), original = secs.map((x) => x.dataset.section), last = secs[secs.length - 1], after = last ? last.nextSibling : null;
     const place = (order) => { // order: section ids; ones not listed keep their usual place after them
       const byId = new Map(secs.map((x) => [x.dataset.section, x]));
@@ -1737,7 +1766,7 @@ function fontItems(q) {
   const rec = recent.map((ps) => allFonts.find((f) => f.ps === ps)).filter(Boolean);
   return [{ id: "", label: "Built-in (Menlo, fastest)" }].concat(rec.concat(allFonts.filter((f) => !recent.includes(f.ps))).map(it));
 }
-const fillFontSelect = () => { if (fontPicker) fontPicker.fill(); };
+const fillFontSelect = () => { if (fontPicker) fontPicker.fill(); for (const fp of tabFontPickers) fp.fill(); };
 function setFont(ps, name) {
   S.font = ps || ""; S.fontName = ps ? name || ps : "";
   if (ps) saveJSON("gf:recentFonts", [ps].concat(loadJSON("gf:recentFonts", []).filter((x) => x !== ps)).slice(0, 8));
@@ -1765,13 +1794,14 @@ let lastH = -1, lastTop = -1;
 function fitLayout(force) {
   const H = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0;
   if (!H) return;
-  const ids = TAB_IDS[tab], top = $(ids.top), other = tab === "ink" ? ink : tab === "lines" ? lines : tab === "map" ? mapTab : tab === "text" ? textTab : null;
+  const ids = TAB_IDS[tab], top = $(ids.top), other = tab === "ink" ? ink : tab === "lines" ? lines : tab === "map" ? mapTab : tab === "text" ? textTab : tab === "dither" ? ditherTab : null;
   const setH = (el, prop, px) => { const v = px + "px"; if (el.style[prop] !== v) el.style[prop] = v; };
   const v = tab === "ascii" ? viewer : other && other.viewer;
   if (v) v.layout(H);
   if (!force && H === lastH && top.offsetHeight === lastTop) return;
   lastH = H; lastTop = top.offsetHeight;
-  setH($(ids.scroller), "height", Math.max(60, H - ($("tabs").offsetHeight || 0) - top.offsetHeight));
+  const menuH = tabMenuOpen ? $("tabMenu").offsetHeight || 0 : 0;
+  setH($(ids.scroller), "height", Math.max(60, H - ($("tabs").offsetHeight || 0) - menuH - top.offsetHeight));
   if (other) other.relayout(); else if (viewer) viewer.relayout(); // keep the preview centred in the new size
 }
 
@@ -1782,7 +1812,61 @@ const TAB_IDS = {
   ink: { top: "inkTop", scroller: "inkScroller", btn: "tabInk", tool: "inkTool" },
   lines: { top: "lnTop", scroller: "lnScroller", btn: "tabLines", tool: "lnTool" },
   map: { top: "mpTop", scroller: "mpScroller", btn: "tabMap", tool: "mapTool" },
+  dither: { top: "dtTop", scroller: "dtScroller", btn: "tabDither", tool: "ditherTool" },
 };
+let tabMenuOpen = false;
+const TAB_NAMES = { ascii: "ASCII", text: "Text art", ink: "Ink bleed", lines: "Lines", map: "Map", dither: "Dither" };
+// Which tabs show and in what order (☰ menu): {order: [ids], hidden: [ids]}.
+const tabPrefs = () => {
+  const p = loadJSON("gf:tabs", {}), all = Object.keys(TAB_IDS);
+  const order = (Array.isArray(p.order) ? p.order.filter((k) => TAB_IDS[k]) : []).concat(all.filter((k) => !(p.order || []).includes(k)));
+  const hidden = (Array.isArray(p.hidden) ? p.hidden : []).filter((k) => TAB_IDS[k]);
+  return { order, hidden: hidden.length >= all.length ? [] : hidden };
+};
+const visibleTabs = () => { const p = tabPrefs(); return p.order.filter((k) => !p.hidden.includes(k)); };
+function layoutTabs() {
+  const p = tabPrefs(), bar = $("tabs");
+  for (const k of p.order) { const b = $(TAB_IDS[k].btn); bar.appendChild(b); b.classList.toggle("hidden", p.hidden.includes(k)); }
+  if (p.hidden.includes(tab)) showTab(visibleTabs()[0]);
+}
+function setupTabMenu() {
+  const menu = $("tabMenu"), list = $("tabMenuList"), btn = $("tabMenuBtn");
+  const open = (on) => { tabMenuOpen = on; menu.classList.toggle("hidden", !on); btn.classList.toggle("on", on); if (on) fill(); fitLayout(true); };
+  function fill() {
+    const p = tabPrefs();
+    list.innerHTML = "";
+    for (const k of p.order) {
+      const row = document.createElement("div"), box = document.createElement("span"), name = document.createElement("span"), grip = document.createElement("span");
+      row.className = "tmRow"; row.dataset.tab = k;
+      box.className = "chevBtn"; box.textContent = p.hidden.includes(k) ? " " : "✓"; box.title = p.hidden.includes(k) ? "Show this tab" : "Hide this tab";
+      name.className = "tmName"; name.textContent = TAB_NAMES[k];
+      if (p.hidden.includes(k)) name.style.opacity = "0.45";
+      grip.className = "sgrip"; grip.textContent = "⠿"; grip.title = "Drag to move this tab";
+      row.appendChild(box); row.appendChild(name); row.appendChild(grip);
+      const toggle = () => {
+        const q = tabPrefs(), on = q.hidden.includes(k);
+        if (!on && visibleTabs().length <= 1) return; // keep one tab
+        q.hidden = on ? q.hidden.filter((x) => x !== k) : q.hidden.concat([k]);
+        saveJSON("gf:tabs", q); layoutTabs(); fill();
+      };
+      box.addEventListener("click", toggle); name.addEventListener("click", toggle);
+      trackDrag(grip, {
+        down: (e) => { row.classList.add("dragging"); if (e.preventDefault) e.preventDefault(); },
+        move: (e) => {
+          const rows = Array.from(list.childNodes).filter((x) => x !== row);
+          const target = rows.find((x) => { const r = x.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+          if (target !== row.nextSibling && (target || list.lastChild !== row)) list.insertBefore(row, target || null);
+        },
+        up: () => { row.classList.remove("dragging"); const q = tabPrefs(); q.order = Array.from(list.childNodes).map((x) => x.dataset.tab); saveJSON("gf:tabs", q); layoutTabs(); },
+      });
+      list.appendChild(row);
+    }
+  }
+  btn.addEventListener("click", () => open(!tabMenuOpen));
+  $("tabMenuClose").addEventListener("click", () => open(false));
+  $("tabMenuReset").addEventListener("click", () => { saveJSON("gf:tabs", {}); layoutTabs(); fill(); });
+  layoutTabs();
+}
 function showTab(t) {
   tab = TAB_IDS[t] ? t : "ascii";
   saveJSON("gf:tab", tab);
@@ -1792,6 +1876,7 @@ function showTab(t) {
   if (lines) { if (tab === "lines") lines.activate(); else lines.deactivate(); }
   if (mapTab) { if (tab === "map") mapTab.activate(); else mapTab.deactivate(); }
   if (textTab) { if (tab === "text") textTab.activate(); else textTab.deactivate(); }
+  if (ditherTab) { if (tab === "dither") ditherTab.activate(); else ditherTab.deactivate(); }
   if (tab === "ascii") { if (src) src.stale = true; schedulePreview(0); }
 }
 
@@ -1808,6 +1893,7 @@ function onPsEvent(evt, desc) {
   if (tab === "ink") { if (src) src.stale = true; if (ink) ink.onPsEvent(evt, desc); return; }
   if (tab === "lines") { if (src) src.stale = true; if (lines) lines.onPsEvent(evt, desc); return; }
   if (tab === "map") { if (src) src.stale = true; if (mapTab) mapTab.onPsEvent(evt, desc); return; }
+  if (tab === "dither") { if (src) src.stale = true; if (ditherTab) ditherTab.onPsEvent(evt, desc); return; }
   if (tab === "text") { if (src) src.stale = true; return; } // the lettering doesn't depend on the document
   if (busy) return;
   const a = activeDoc();
@@ -1826,11 +1912,14 @@ async function init() {
   buildUI();
   syncUI();
   ink = setupInk({ $, loadJSON, saveJSON, errMsg, toRGBA8, makeImageData, convertOut, createLayer, findLayers, findLayerById, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck, refreshFields });
-  lines = setupLines({ $, loadJSON, saveJSON, errMsg, setSelect, baseAtlas: () => baseAtlas, mapArea: () => mapTab && mapTab.area(), showTab, createLayer, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck, refreshFields, useLines, atlasFor });
-  mapTab = setupMap({ $, loadJSON, saveJSON, errMsg, setSelect, baseAtlas: () => baseAtlas, createLayer, bitDepth, isGray, activeDoc, askColor, docBaseName, fitLayout, onCheck, refreshFields, onAreaToLines: () => { lines.useMap(); showTab("lines"); } });
+  lines = setupLines({ $, loadJSON, saveJSON, errMsg, setSelect, baseAtlas: () => baseAtlas, mapArea: () => mapTab && mapTab.area(), showTab, createLayer, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck, refreshFields, useLines, atlasFor, makeFontPicker });
+  mapTab = setupMap({ $, loadJSON, saveJSON, errMsg, setSelect, baseAtlas: () => baseAtlas, atlasFor, makeFontPicker, createLayer, bitDepth, isGray, activeDoc, askColor, docBaseName, fitLayout, onCheck, refreshFields, onAreaToLines: () => { lines.useMap(); showTab("lines"); } });
   textTab = setupTextArt({ $, loadJSON, saveJSON, errMsg, setSelect, fitLayout, onCheck, refreshFields, atlasFor, baseAtlas: () => baseAtlas, useArt });
+  ditherTab = setupDither({ $, loadJSON, saveJSON, errMsg, setSelect, createLayer, bitDepth, isGray, checkDoc, activeDoc, askColor, selectLayer, docBaseName, fitLayout, onCheck, refreshFields });
   for (const k of Object.keys(TAB_IDS)) $(TAB_IDS[k].btn).addEventListener("click", () => showTab(k));
+  if (tabPrefs().hidden.includes(tab)) tab = visibleTabs()[0];
   showTab(tab);
+  setupTabMenu();
   window.addEventListener("resize", () => fitLayout(true));
   setInterval(() => fitLayout(false), 400);
   fitLayout(true);

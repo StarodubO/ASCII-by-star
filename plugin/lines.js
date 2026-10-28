@@ -5,6 +5,8 @@
 // computed from document coordinates alone, so tiles, strips and previews match exactly.
 "use strict";
 const Engine = require("./engine.js"); // the Custom text syntax (parseCustom) for text on the lines
+const { CHARSETS } = require("./charsets.js"); // character sets for textMode "set"
+const Glitch = require("./glitch.js"); // gl… settings (applied in linesui)
 
 const REF = 3000; // sizes are px on a 3000 px long side
 const ANALYSIS = 1600; // long side of the height field
@@ -12,7 +14,7 @@ const SETTINGS_VERSION = 2;
 
 const DEFAULTS = {
   version: SETTINGS_VERSION,
-  style: "contours", // contours | ridges
+  style: "contours", // contours | ridges | maze (a labyrinth whose lines crowd where the height is low) | points (a 3D point cloud)
   // ---- height ----
   heightFrom: "source", // source = the source's brightness | layer = another layer (a depth map) | map = a map region
   heightLayer: null, // that layer's id
@@ -31,6 +33,25 @@ const DEFAULTS = {
   rows: 70, // ridge lines
   amp: 4, // ridge height in row spacings
   ridgeLocal: true, // lift each ridge from its own lowest point (off: from the lowest point overall)
+  // ---- labyrinth (maze) ----
+  mzSpacing: 9, // px: between the lines where the height is lowest (dark)
+  mzRange: 5, // × that spacing where the height is highest (light)
+  mzCurve: 1, // >1: more of the picture gets the close lines; <1: more gets the wide ones
+  mzSeed: 1, // another labyrinth
+  // ---- point cloud (points) ----
+  pcSpacing: 10, // px: between neighbouring points before any are left out
+  pcJitter: 1, // 0 = a regular grid, 1 = scattered
+  pcToneDensity: 0.6, // -1..1: more points where the source is dark (negative: where it is light)
+  pcHeightDensity: 0, // -1..1: more points high up (negative: low down)
+  pcCut: 0, // 0..1: no points below this height (the background of a depth map)
+  pcDepth: 0.3, // × the long side: how far the highest points come forward
+  pcYaw: -25, pcPitch: 15, // degrees: the view turns left/right, up/down
+  pcPersp: 0.5, // 0 = flat (orthographic) … 1 = strong perspective
+  pcZoom: 0.9, // the cloud's size in the frame
+  pcSizeNear: 1, // 0..2: near points bigger (1 = as perspective gives)
+  pcFog: 0, // 0..1: far points fade out
+  pcShape: "round", // round | square
+  pcSeed: 1, // other places for the points
   // ---- width ----
   lineWidth: 2.5, // px
   toneWeight: 0, // -1..1: thicker where the source is dark (negative: where it is light)
@@ -41,6 +62,9 @@ const DEFAULTS = {
   lineFrom: "own", // own | image (sampled) | height (gradient low → high) | across (gradient at lineAngle)
   lineColor: "#111111",
   lineA: "#1b3a4b", lineMid: "#c1666b", lineMidOn: false, lineB: "#e8c170", lineAngle: 90,
+  // the gradient's shape (height and across): the part of the height it spans, where the middle colour sits, a curve
+  // (−1..1: more of the low or the high colour), hard steps (0 = smooth), repeats (mirrored = back and forth), reversed
+  lineGradFrom: 0, lineGradTo: 1, lineGradMid: 0.5, lineGradCurve: 0, lineGradSteps: 0, lineGradRepeat: 1, lineGradMirror: true, lineGradReverse: false,
   sampleSat: 1, sampleBright: 0, // sampled colours: saturation ×, brightness −1..1
   lineOpacity: 1,
   indexColorOn: false, indexColor: "#000000",
@@ -67,8 +91,11 @@ const DEFAULTS = {
   peakSpacing: 500, // px: the least distance between two spot heights
   // ---- text on the lines (contours) ----
   textOn: false, // write characters along the contour lines (see pathGlyphs)
-  textMode: "text", // text = ptText along each line, turned with it | direction = - / | \ from the line's direction, upright
-  ptText: "%h m · ", // Custom text syntax: [A|B] items, [?A|B] at random, {msg} / {msg*N} hidden messages; %h = the line's height
+  ptFont: "", ptFontName: "", // the text's font (PostScript name; "" = the built-in Menlo); spaced by each letter's width
+  textMode: "text", // text = ptText along each line, turned with it | set = ptSet's characters at random | direction = - / | \ from the line's direction, upright
+  ptText: "%h m · ", // Custom text syntax: [A|B] items, [?A|B] at random, {msg} / {msg*N} hidden messages; %h = the line's height.
+  // Several rows: one per height, lowest line first, repeating (an empty row leaves that height without text)
+  ptSet: "bourke", // textMode "set": a charsets.js id
   ptSize: 28, // px: height of the characters
   ptSpacing: 1, // × the character width
   ptWhich: "all", // all | index | others: the lines that get text (the rest stay lines)
@@ -79,7 +106,22 @@ const DEFAULTS = {
   ptRoom: 0.8, // × size: no characters where the lines are closer together than this (0 = everywhere)
   ptSeed: 1, // [?random] items and where the {messages} go
   ptMsgColorOn: true, ptMsgColor: "#e63946", // the {messages}' own colour (off: the line's)
+  // lines you chose on the preview (see pickedLines): [{x, y (fractions of the frame), all (every line at that
+  // height), mode: text (own text, or the text above when empty) | rain | line (no text) | hide, text, colorOn, color}]
+  ptPicks: [],
+  // Matrix rain on the lines (textMode "rain", or a chosen line set to rain): streams of random characters along
+  // each line, brightest at the head
+  prChars: String.fromCharCode(...Array.from({ length: 56 }, (_, i) => 0xff66 + i)) + "0123456789", // Custom text syntax; picked at random
+  prLength: 12, // characters per stream
+  prLengthVar: 0.5, // 0..1: how much the lengths vary
+  prGaps: 0.6, // × a stream's length: the empty stretch after it
+  prFade: 0.7, // 0..1: the tail fades out (0 = no fade)
+  prHead: false, prHeadColor: "#ffffff", // the head (the leading character) in its own colour
+  prColorOn: false, prColor: "#00ff41", // the rain's own colour (off: the line's)
+  prReverse: false, // the streams run the other way along the lines
+  prSeed: 1,
 };
+Object.assign(DEFAULTS, Glitch.DEFAULTS); // gl…: the glitch, on the result or on the picture before the lines (linesui)
 
 const STYLES = [
   { id: "topo", name: "Topographic map", s: { style: "contours", labelsOn: true, peaks: 5, levels: 40, lineWidth: 2.5, indexEvery: 5, indexWidth: 2, smooth: 10, declutter: 0, toneWeight: 0, heightWeight: 0, lineFrom: "own", bands: "none", shade: 0, lineColor: "#5a3a1e", bgColor: "#f6f1e3", bgMode: "color" } },
@@ -89,6 +131,12 @@ const STYLES = [
   { id: "sampled", name: "Image colours", s: { style: "contours", levels: 80, lineWidth: 2.2, indexEvery: 0, smooth: 6, declutter: 0, toneWeight: 0.5, heightWeight: 0, lineFrom: "image", sampleSat: 1.3, sampleBright: 0, bands: "none", shade: 0, bgColor: "#0b0b0e", bgMode: "color" } },
   { id: "neon", name: "Neon gradient", s: { style: "contours", levels: 50, lineWidth: 2, indexEvery: 0, smooth: 9, declutter: 0, toneWeight: 0, heightWeight: 0.4, lineFrom: "height", lineA: "#3a0ca3", lineMid: "#f72585", lineMidOn: true, lineB: "#4cc9f0", bands: "none", shade: 0, bgMode: "gradient", bgColor: "#07071a", bgColor2: "#1b0b2e", bgAngle: 90 } },
   { id: "hypso", name: "Coloured bands", s: { style: "contours", levels: 18, lineWidth: 1.6, indexEvery: 0, smooth: 12, declutter: 0, toneWeight: 0, heightWeight: 0, lineFrom: "own", bands: "steps", bandA: "#2f5d50", bandMidOn: false, bandB: "#f1e6c8", bandOpacity: 1, shade: 0, lineColor: "#1d2a24", bgMode: "color" } },
+  { id: "maze", name: "Labyrinth", s: { style: "maze", mzSpacing: 9, mzRange: 5, mzCurve: 1, smooth: 6, lineWidth: 2, toneWeight: 0, heightWeight: 0, lineFrom: "own", lineColor: "#111111", bgColor: "#ffffff", bgMode: "color", bands: "none" } },
+  { id: "mazeFilled", name: "Labyrinth, filled", s: { style: "maze", mzSpacing: 7, mzRange: 5, mzCurve: 1, smooth: 6, lineWidth: 0, toneWeight: 0, heightWeight: 0, lineFrom: "own", lineColor: "#111111", bgColor: "#f4efe6", bgMode: "color", bands: "alternate", bandA: "#1d1d1f", bandB: "#f4efe6", bandOpacity: 1 } },
+  { id: "cloud", name: "Point cloud", s: { style: "points", pcSpacing: 9, pcJitter: 1, pcToneDensity: 0.3, pcHeightDensity: 0, pcCut: 0, pcDepth: 0.3, pcYaw: -25, pcPitch: 15, pcPersp: 0.5, pcZoom: 0.9, pcSizeNear: 1, pcFog: 0.35, pcShape: "round", lineWidth: 4, toneWeight: 0, heightWeight: 0, lineFrom: "height", lineA: "#3a0ca3", lineMid: "#f72585", lineMidOn: true, lineB: "#4cc9f0", bgMode: "color", bgColor: "#05050c" } },
+  { id: "cloudImage", name: "Point cloud, image colours", s: { style: "points", pcSpacing: 6, pcJitter: 1, pcToneDensity: 0, pcHeightDensity: 0, pcCut: 0, pcDepth: 0.25, pcYaw: 20, pcPitch: -10, pcPersp: 0.4, pcZoom: 0.9, pcSizeNear: 1, pcFog: 0.3, pcShape: "round", lineWidth: 3.5, toneWeight: 0, heightWeight: 0, lineFrom: "image", sampleSat: 1.2, sampleBright: 0.1, bgMode: "color", bgColor: "#000000" } },
+  { id: "rain", name: "Matrix rain on the lines", s: { style: "contours", levels: 45, lineWidth: 1, indexEvery: 0, smooth: 8, declutter: 0, toneWeight: 0, heightWeight: 0, lineFrom: "own", lineColor: "#0f5f2a", bands: "none", shade: 0, bgColor: "#000000", bgMode: "color",
+    textOn: true, textMode: "rain", ptWhich: "all", ptSize: 26, ptSpacing: 1, ptRoom: 0.8, ptLineOpacity: 0.25, ptRotate: true, ptVertical: true, ptReadable: true, prLength: 14, prLengthVar: 0.5, prGaps: 0.7, prFade: 0.75, prHead: true, prHeadColor: "#d8ffe0", prColorOn: true, prColor: "#00ff41", prReverse: false } },
   { id: "ridges", name: "Ridge lines", s: { style: "ridges", rows: 55, amp: 8, ridgeLocal: true, lineWidth: 2.2, smooth: 8, toneWeight: 0, heightWeight: 0, lineFrom: "own", lineColor: "#ffffff", bgColor: "#000000", bgMode: "color" } },
 ];
 
@@ -228,11 +276,24 @@ function sampleRGB(F, x, y, out) {
 }
 
 // A colour between a and b (and through m when it's given) at t (0..1), into out.
-function ramp(a, m, b, t, out) {
+function ramp(a, m, b, t, out, mid) {
   t = clamp01(t);
-  if (m) { if (t < 0.5) { b = m; t *= 2; } else { a = m; t = t * 2 - 1; } }
+  if (m && mid !== undefined && mid !== 0.5) { if (t < mid) { b = m; t /= mid; } else { a = m; t = (t - mid) / (1 - mid); } }
+  else if (m) { if (t < 0.5) { b = m; t *= 2; } else { a = m; t = t * 2 - 1; } }
   for (let c = 0; c < 3; c++) out[c] = a[c] + (b[c] - a[c]) * t;
   return out;
+}
+// The line gradient's shape: position 0..1 (height or across) → position along the colours (lineGrad… settings).
+function gradShape(s) {
+  const from = s.lineGradFrom, to = s.lineGradTo, rep = Math.max(1, s.lineGradRepeat), steps = Math.round(s.lineGradSteps), k = Math.pow(4, -s.lineGradCurve);
+  if (from === 0 && to === 1 && rep === 1 && !steps && !s.lineGradCurve && !s.lineGradReverse) return (t) => t;
+  return (t) => {
+    t = to === from ? (t >= to ? 1 : 0) : clamp01((t - from) / (to - from));
+    if (rep > 1) { const u = t * rep; t = s.lineGradMirror ? (Math.floor(u) % 2 ? 1 - (u - Math.floor(u)) : u - Math.floor(u)) : u >= rep ? 1 : u - Math.floor(u); }
+    if (k !== 1) t = Math.pow(t, k);
+    if (steps >= 2) t = Math.min(steps - 1, Math.floor(t * steps)) / (steps - 1);
+    return s.lineGradReverse ? 1 - t : t;
+  };
 }
 // Position along a gradient at `angle` (degrees, 90 = bottom to top) over the frame: 0..1.
 function across(F, angle) {
@@ -258,7 +319,7 @@ function context(F, s, z) {
   const c = {
     pxOut, base: s.lineWidth * pxOut,
     line: rgb(s.lineColor), lineA: rgb(s.lineA), lineMid: s.lineMidOn ? rgb(s.lineMid) : null, lineB: rgb(s.lineB),
-    index: s.indexColorOn ? rgb(s.indexColor) : null, lineAcross: across(F, s.lineAngle),
+    index: s.indexColorOn ? rgb(s.indexColor) : null, lineAcross: across(F, s.lineAngle), shape: gradShape(s), mid: s.lineGradMid,
     bg: rgb(s.bgColor), bg2: rgb(s.bgColor2), bgAcross: across(F, s.bgAngle),
     bandA: rgb(s.bandA), bandMid: s.bandMidOn ? rgb(s.bandMid) : null, bandB: rgb(s.bandB),
     tmp: [0, 0, 0], gaps: [],
@@ -281,18 +342,21 @@ function lineColour(F, s, c, x, y, ax, ay, h, isIndex) {
     }
     return o;
   }
-  if (s.lineFrom === "height") return ramp(c.lineA, c.lineMid, c.lineB, h, c.tmp);
-  if (s.lineFrom === "across") return ramp(c.lineA, c.lineMid, c.lineB, c.lineAcross(x, y), c.tmp);
+  if (s.lineFrom === "height") return ramp(c.lineA, c.lineMid, c.lineB, c.shape(h), c.tmp, c.mid);
+  if (s.lineFrom === "across") return ramp(c.lineA, c.lineMid, c.lineB, c.shape(c.lineAcross(x, y)), c.tmp, c.mid);
   return c.line;
 }
 
 // Renders document rect `rect` (frame px) at scale z into RGBA (round(rect.w·z) × round(rect.h·z)).
 // Output pixel (i, j) is the document point rect.x + (i + 0.5)/z, rect.y + (j + 0.5)/z. atlas: the glyph
 // atlas for height labels (engine.js prepareAtlas); without it no labels are drawn.
-function render(F, s, rect, z, atlas) {
+// markAtlas: the atlas for height labels when it differs (the built-in one while the text has its own font).
+function render(F, s, rect, z, atlas, markAtlas) {
   const W = Math.max(1, Math.round(rect.w * z)), Hh = Math.max(1, Math.round(rect.h * z));
   const out = new Uint8ClampedArray(W * Hh * 4), c = context(F, s, z), col = [0, 0, 0];
-  c.marks = atlas && s.style !== "ridges" ? marksIn(F, s, atlas, rect) : [];
+  const contours = s.style !== "ridges" && s.style !== "maze" && s.style !== "points";
+  const mAtlas = markAtlas || atlas;
+  c.marks = mAtlas && contours ? marksIn(F, s, mAtlas, rect) : [];
   c.gaps = s.labelGap ? c.marks : [];
   if (s.bgMode !== "transparent") {
     for (let j = 0; j < Hh; j++) {
@@ -304,10 +368,13 @@ function render(F, s, rect, z, atlas) {
     }
   }
   if (s.style === "ridges") renderRidges(F, s, c, rect, z, W, Hh, out);
+  else if (s.style === "maze") renderMaze(F, s, c, rect, z, W, Hh, out);
+  else if (s.style === "points") renderPoints(F, s, c, rect, z, W, Hh, out);
   else renderContours(F, s, c, rect, z, W, Hh, out);
-  if (atlas && s.textOn && s.style !== "ridges") drawPathText(F, s, c, atlas, rect, z, W, Hh, out);
-  if (c.marks.length) drawMarks(F, s, c, atlas, rect, z, W, Hh, out);
-  if (s.followShape && !F.metres) { // nothing where the source is transparent
+  if (atlas && contours && textWanted(s)) drawPathText(F, s, c, atlas, rect, z, W, Hh, out, mAtlas);
+  if (c.marks.length) drawMarks(F, s, c, mAtlas, rect, z, W, Hh, out);
+  if (contours && s._pickHi != null) drawPickHighlight(F, s, rect, z, W, Hh, out); // preview only: the chosen line
+  if (s.followShape && !F.metres && s.style !== "points") { // (the cloud leaves out its points there instead) // nothing where the source is transparent
     const k = F.k;
     for (let j = 0; j < Hh; j++) {
       const ay = (rect.y + (j + 0.5) / z) * k;
@@ -332,7 +399,7 @@ function levelsOf(F, s) {
 function renderContours(F, s, c, rect, z, W, Hh, out) {
   const k = F.k, { n, base: f0 } = levelsOf(F, s), every = Math.round(s.indexEvery) | 0, gapMin = s.declutter * c.pxOut;
   const band = [0, 0, 0], grad = (n * k) / z; // |∇f| in output px = |∇H| per analysis px × grad
-  const shading = s.shade > 0, L = c.light, opaque = s.bgMode !== "transparent", textLines = s.textOn ? textOnLine(s) : null;
+  const shading = s.shade > 0, L = c.light, opaque = s.bgMode !== "transparent", textLines = s.textOn ? textOnLine(s) : null, picks = pickedLines(F, s);
   for (let j = 0; j < Hh; j++) {
     const y = rect.y + (j + 0.5) / z, ay = y * k;
     for (let i = 0; i < W; i++) {
@@ -359,12 +426,14 @@ function renderContours(F, s, c, rect, z, W, Hh, out) {
       if (s.toneWeight) wpx *= weightOf(s.toneWeight, bilinear(F.tone, F.w, F.h, ax, ay));
       if (s.heightWeight) wpx *= weightOf(s.heightWeight, h);
       if (d > wpx / 2 + 1) continue;
+      const pk = picks ? pickAt(picks, lv, x, y, (wpx / 2 + 1) / z) : null; // a line you chose
+      if (pk && pk.mode === "hide") continue;
       let cov = coverage(d, wpx) * s.lineOpacity;
       if (c.gaps.length) cov *= 1 - gapAt(c.gaps, x, y, z);
       if (gapMin > 0 && !isIndex) cov *= clamp01((1 / g - gapMin * 0.6) / (gapMin * 0.4)); // crowded lines fade out
-      if (textLines && textLines(isIndex)) cov *= s.ptLineOpacity; // the text draws these lines
+      if (pk ? pk.mode === "text" || pk.mode === "rain" : textLines && textLines(isIndex)) cov *= s.ptLineOpacity; // the text draws these lines
       if (cov <= 0) continue;
-      over(out, o, lineColour(F, s, c, x, y, ax, ay, h, isIndex), cov);
+      over(out, o, pk && pk.colorOn ? pk.rgb : lineColour(F, s, c, x, y, ax, ay, h, isIndex), cov);
     }
   }
 }
@@ -416,6 +485,192 @@ function renderRidges(F, s, c, rect, z, W, Hh, out) {
   }
 }
 
+// ---------- labyrinth ----------
+// A Turing pattern (the stripes of reaction–diffusion) whose stripe width follows the height: low (dark) ground
+// gets close lines, high (light) ground wide ones. Grown once per field on its own grid (cached on F) by
+// repeated difference-of-Gaussians: a pixel turns on where its near neighbourhood is brighter than its wider
+// one, at the scale its height asks for. The lines are the stripes' edges (u = 0), drawn per pixel like contours.
+
+// Gaussian blur of A (w × h) with sigma in cells, in place: recursive filter (Young & van Vliet), any sigma at
+// the same cost.
+function gaussIIR(A, w, h, sigma, tmp) {
+  if (!(sigma >= 0.5)) return A;
+  const q = sigma >= 2.5 ? 0.98711 * sigma - 0.9633 : 3.97156 - 4.14554 * Math.sqrt(1 - 0.26891 * sigma);
+  const q2 = q * q, q3 = q2 * q, b0 = 1.57825 + 2.44413 * q + 1.4281 * q2 + 0.422205 * q3;
+  const b1 = (2.44413 * q + 2.85619 * q2 + 1.26661 * q3) / b0, b2 = -(1.4281 * q2 + 1.26661 * q3) / b0, b3 = (0.422205 * q3) / b0, B = 1 - (b1 + b2 + b3);
+  const line = (o, len, step) => {
+    let p1 = A[o], p2 = p1, p3 = p1;
+    for (let i = 0; i < len; i++) { const v = B * A[o + i * step] + b1 * p1 + b2 * p2 + b3 * p3; tmp[i] = v; p3 = p2; p2 = p1; p1 = v; }
+    p1 = p2 = p3 = tmp[len - 1];
+    for (let i = len - 1; i >= 0; i--) { const v = B * tmp[i] + b1 * p1 + b2 * p2 + b3 * p3; A[o + i * step] = v; p3 = p2; p2 = p1; p1 = v; }
+  };
+  for (let y = 0; y < h; y++) line(y * w, w, 1);
+  for (let x = 0; x < w; x++) line(x, h, w);
+  return A;
+}
+const hash01 = (a, b, seed) => {
+  let x = Math.imul(a ^ Math.imul(b, 0x27d4eb2d) ^ Math.imul(seed, 0x165667b1), 0x85ebca6b);
+  x ^= x >>> 13; x = Math.imul(x, 0xc2b2ae35); x ^= x >>> 16;
+  return (x >>> 0) / 4294967296;
+};
+const MAZE_CELLS = 1100; // the labyrinth grid's long side at most
+const MAZE_MIN_PERIOD = 7; // cells per stripe pair at the finest
+// The labyrinth of field F: {w, h, cell (document px per cell), U (−1..1), gx, gy (per cell)}.
+function mazeField(F, s) {
+  const key = [s.mzSpacing, s.mzRange, s.mzCurve, s.mzSeed].join("|");
+  if (F._maze && F._maze.key === key) return F._maze;
+  const docPx = F.docLong / REF, period = 2 * Math.max(1, s.mzSpacing) * docPx; // document px per stripe pair (two lines)
+  const cell = Math.max(period / 9, F.docLong / MAZE_CELLS, 0.75); // (no finer than the document needs)
+  const w = Math.max(8, Math.ceil(F.fw / cell)), h = Math.max(8, Math.ceil(F.fh / cell)), n = w * h;
+  const pMin = Math.max(MAZE_MIN_PERIOD, period / cell), range = Math.max(1, s.mzRange), ratio = Math.SQRT2;
+  const L = Math.max(1, Math.ceil(Math.log(range) / Math.log(ratio) - 1e-9) + 1); // scales: pMin·√2^l
+  // each cell's scale (fractional level) from the height under it
+  const lev = new Float32Array(n), k = F.k, curve = Math.max(0.05, s.mzCurve || 1);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const t = clamp01(bilinear(F.H, F.w, F.h, (x + 0.5) * cell * k, (y + 0.5) * cell * k));
+    lev[y * w + x] = Math.min(L - 1, (Math.pow(t, curve) * Math.log(range)) / Math.log(ratio));
+  }
+  let U = new Float32Array(n);
+  const seed = Math.round(s.mzSeed) | 0;
+  for (let i = 0; i < n; i++) U[i] = hash01(i % w, (i / w) | 0, seed) * 2 - 1;
+  // blurs at sigma = 0.18·period of scale l; the wide blur of scale l (2× sigma) is the near blur of l + 2
+  const S = 0.18, blurs = [], tmp = new Float32Array(Math.max(w, h)), d = new Float32Array(n);
+  for (let l = 0; l < L + 2; l++) blurs.push(new Float32Array(n));
+  for (let it = 0; it < 20; it++) {
+    for (let l = 0; l < L + 2; l++) { blurs[l].set(U); gaussIIR(blurs[l], w, h, S * pMin * Math.pow(ratio, l), tmp); }
+    let ss = 0;
+    for (let i = 0; i < n; i++) {
+      const f = lev[i], l0 = Math.floor(f), t = f - l0, l1 = Math.min(L - 1, l0 + 1);
+      const v = (blurs[l0][i] - blurs[l0 + 2][i]) * (1 - t) + (blurs[l1][i] - blurs[l1 + 2][i]) * t;
+      d[i] = v; ss += v * v;
+    }
+    const g = 1.5 / (Math.sqrt(ss / n) + 1e-9);
+    for (let i = 0; i < n; i++) U[i] = Math.tanh(g * d[i]);
+  }
+  gaussIIR(U, w, h, 0.6, tmp); // rounder edges to trace
+  const [gx, gy] = gradient(U, w, h);
+  return (F._maze = { key, w, h, cell, U, gx, gy });
+}
+function renderMaze(F, s, c, rect, z, W, Hh, out) {
+  const M = mazeField(F, s), k = F.k, inv = 1 / M.cell, grad = inv / z; // |∇u| per output px = per cell × grad
+  const band = [0, 0, 0];
+  for (let j = 0; j < Hh; j++) {
+    const y = rect.y + (j + 0.5) / z, my = y * inv, ay = y * k;
+    for (let i = 0; i < W; i++) {
+      const x = rect.x + (i + 0.5) / z, mx = x * inv, ax = x * k, o = (j * W + i) * 4;
+      const u = cubic(M.U, M.w, M.h, mx, my), h = bilinear(F.H, F.w, F.h, ax, ay);
+      if (s.bands !== "none") { // the stripes filled: alternate = the two sides, otherwise a gradient by height on the stripes
+        if (s.bands === "alternate") { const t = clamp01(0.5 + u * 4); for (let ch = 0; ch < 3; ch++) band[ch] = c.bandB[ch] + (c.bandA[ch] - c.bandB[ch]) * t; }
+        else ramp(c.bandA, c.bandMid, c.bandB, h, band);
+        over(out, o, band, s.bands === "alternate" ? s.bandOpacity : s.bandOpacity * clamp01(0.5 + u * 4));
+      }
+      if (!(c.base > 0)) continue;
+      const g = Math.hypot(bilinear(M.gx, M.w, M.h, mx, my), bilinear(M.gy, M.w, M.h, mx, my)) * grad;
+      if (g < 1e-6) continue;
+      const dist = Math.abs(u) / g;
+      let wpx = c.base;
+      if (s.toneWeight) wpx *= weightOf(s.toneWeight, bilinear(F.tone, F.w, F.h, ax, ay));
+      if (s.heightWeight) wpx *= weightOf(s.heightWeight, h);
+      if (dist > wpx / 2 + 1) continue;
+      const cov = coverage(dist, wpx) * s.lineOpacity;
+      if (cov > 0) over(out, o, lineColour(F, s, c, x, y, ax, ay, h, false), cov);
+    }
+  }
+}
+
+// ---------- point cloud ----------
+// Points scattered over the frame (denser where the settings ask), each lifted towards the viewer by its height
+// and seen through a turned camera. Built once per field and settings (cached on F) in document px, sorted far
+// to near and binned, so every tile draws the same points in the same order.
+const PC_BIN = 64; // document px
+function pointCloud(F, s, c) {
+  const key = JSON.stringify([s.pcSpacing, s.pcJitter, s.pcToneDensity, s.pcHeightDensity, s.pcCut, s.pcDepth, s.pcYaw, s.pcPitch, s.pcPersp, s.pcZoom, s.pcSizeNear, s.pcFog, s.pcSeed, s.followShape,
+    s.lineWidth, s.toneWeight, s.heightWeight, s.lineFrom, s.lineColor, s.lineA, s.lineMid, s.lineMidOn, s.lineB, s.lineAngle, s.sampleSat, s.sampleBright,
+    s.lineGradFrom, s.lineGradTo, s.lineGradMid, s.lineGradCurve, s.lineGradSteps, s.lineGradRepeat, s.lineGradMirror, s.lineGradReverse]);
+  if (F._cloud && F._cloud.key === key) return F._cloud;
+  const docPx = F.docLong / REF, k = F.k, cx = F.fw / 2, cy = F.fh / 2;
+  let sp = Math.max(0.5, s.pcSpacing * docPx);
+  while ((F.fw / sp) * (F.fh / sp) > 4e6) sp *= 1.1; // at most ~4 million candidates
+  const nx = Math.ceil(F.fw / sp), ny = Math.ceil(F.fh / sp), seed = Math.round(s.pcSeed) | 0;
+  const yaw = (s.pcYaw * Math.PI) / 180, pitch = (s.pcPitch * Math.PI) / 180, cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), spt = Math.sin(pitch);
+  const depth = s.pcDepth * F.docLong, persp = clamp01(s.pcPersp), D = F.docLong * (0.6 + 6 * (1 - persp) * (1 - persp)), zoom = s.pcZoom;
+  const X = [], Y = [], Z = [], R = [], Hs = [], SX = [], SY = [];
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const jx = s.pcJitter * (hash01(i, j, seed * 3 + 1) - 0.5), jy = s.pcJitter * (hash01(i, j, seed * 3 + 2) - 0.5);
+    const x = (i + 0.5 + jx) * sp, y = (j + 0.5 + jy) * sp;
+    if (x >= F.fw || y >= F.fh) continue;
+    const ax = x * k, ay = y * k;
+    if (s.followShape && !F.metres && bilinear(F.alpha, F.w, F.h, ax, ay) < 0.5) continue;
+    const h = clamp01(cubic(F.H, F.w, F.h, ax, ay));
+    if (h < s.pcCut) continue;
+    let keep = 1;
+    if (s.pcToneDensity) { const t = bilinear(F.tone, F.w, F.h, ax, ay); keep *= s.pcToneDensity > 0 ? 1 - s.pcToneDensity * (1 - t) : 1 + s.pcToneDensity * t; }
+    if (s.pcHeightDensity) keep *= s.pcHeightDensity > 0 ? 1 - s.pcHeightDensity * (1 - h) : 1 + s.pcHeightDensity * h;
+    if (hash01(i, j, seed * 3 + 3) >= keep) continue;
+    // camera space: x right, y down, z away from the viewer; high ground comes forward
+    const px0 = x - cx, py0 = y - cy, pz0 = -(h - 0.5) * depth;
+    const px1 = px0 * cyw + pz0 * syw, pz1 = -px0 * syw + pz0 * cyw;
+    const py2 = py0 * cp - pz1 * spt, pz2 = py0 * spt + pz1 * cp;
+    const f = persp > 0 ? D / Math.max(D * 0.05, D + pz2) : 1;
+    let r = s.lineWidth * docPx * 0.5 * zoom * Math.pow(f, s.pcSizeNear);
+    if (s.toneWeight) r *= weightOf(s.toneWeight, bilinear(F.tone, F.w, F.h, ax, ay));
+    if (s.heightWeight) r *= weightOf(s.heightWeight, h);
+    if (!(r > 0)) continue;
+    X.push(cx + px1 * f * zoom); Y.push(cy + py2 * f * zoom); Z.push(pz2); R.push(r); Hs.push(h); SX.push(x); SY.push(y);
+  }
+  const n = X.length, order = new Uint32Array(n);
+  for (let i = 0; i < n; i++) order[i] = i;
+  order.sort((a, b) => Z[b] - Z[a] || a - b); // far first
+  let zmin = Infinity, zmax = -Infinity;
+  for (let i = 0; i < n; i++) { zmin = Math.min(zmin, Z[i]); zmax = Math.max(zmax, Z[i]); }
+  const P = { key, n, X: new Float32Array(n), Y: new Float32Array(n), R: new Float32Array(n), A: new Float32Array(n), C: new Uint8Array(n * 3), rMax: 0 };
+  for (let q = 0; q < n; q++) {
+    const i = order[q], col = lineColour(F, s, c, X[i], Y[i], SX[i] * k, SY[i] * k, Hs[i], false);
+    P.X[q] = X[i]; P.Y[q] = Y[i]; P.R[q] = R[i]; P.rMax = Math.max(P.rMax, R[i]);
+    P.A[q] = s.pcFog > 0 && zmax > zmin ? 1 - s.pcFog * ((Z[i] - zmin) / (zmax - zmin)) : 1; // far = faint
+    P.C[q * 3] = col[0]; P.C[q * 3 + 1] = col[1]; P.C[q * 3 + 2] = col[2];
+  }
+  // bins of PC_BIN document px over the frame (points outside it are dropped from the bins)
+  const bw = Math.ceil(F.fw / PC_BIN), bh = Math.ceil(F.fh / PC_BIN), counts = new Uint32Array(bw * bh + 1), binOf = new Int32Array(n);
+  for (let q = 0; q < n; q++) {
+    const bx = Math.floor(P.X[q] / PC_BIN), by = Math.floor(P.Y[q] / PC_BIN);
+    binOf[q] = bx >= 0 && by >= 0 && bx < bw && by < bh ? by * bw + bx : -1;
+    if (binOf[q] >= 0) counts[binOf[q] + 1]++;
+  }
+  for (let b = 0; b < bw * bh; b++) counts[b + 1] += counts[b];
+  const fillAt = counts.slice(), items = new Uint32Array(counts[bw * bh]);
+  for (let q = 0; q < n; q++) if (binOf[q] >= 0) items[fillAt[binOf[q]]++] = q; // in depth order within each bin
+  Object.assign(P, { bw, bh, start: counts, items });
+  return (F._cloud = P);
+}
+function renderPoints(F, s, c, rect, z, W, Hh, out) {
+  const P = pointCloud(F, s, c), reach = P.rMax + 2 / z, col = [0, 0, 0];
+  const bx0 = Math.max(0, Math.floor((rect.x - reach) / PC_BIN)), bx1 = Math.min(P.bw - 1, Math.floor((rect.x + rect.w + reach) / PC_BIN));
+  const by0 = Math.max(0, Math.floor((rect.y - reach) / PC_BIN)), by1 = Math.min(P.bh - 1, Math.floor((rect.y + rect.h + reach) / PC_BIN));
+  const list = [];
+  for (let by = by0; by <= by1; by++) for (let bx = bx0; bx <= bx1; bx++) {
+    const b = by * P.bw + bx;
+    for (let t = P.start[b]; t < P.start[b + 1]; t++) list.push(P.items[t]);
+  }
+  list.sort((a, b) => a - b); // the global far-to-near order
+  const square = s.pcShape === "square";
+  for (const q of list) {
+    const r = P.R[q] * z, px = (P.X[q] - rect.x) * z - 0.5, py = (P.Y[q] - rect.y) * z - 0.5, a = P.A[q] * s.lineOpacity;
+    if (a <= 0) continue;
+    const i0 = Math.max(0, Math.floor(px - r - 1)), i1 = Math.min(W - 1, Math.ceil(px + r + 1)), j0 = Math.max(0, Math.floor(py - r - 1)), j1 = Math.min(Hh - 1, Math.ceil(py + r + 1));
+    if (i0 > i1 || j0 > j1) continue;
+    col[0] = P.C[q * 3]; col[1] = P.C[q * 3 + 1]; col[2] = P.C[q * 3 + 2];
+    const small = r < 0.5 ? (Math.PI * r * r) / (square ? Math.PI / 4 : 1) : 0; // a dot under a pixel: its area
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      let cov;
+      if (small) cov = i === Math.round(px) && j === Math.round(py) ? Math.min(1, square ? 4 * r * r : small) : 0;
+      else if (square) cov = clamp01(r + 0.5 - Math.abs(i - px)) * clamp01(r + 0.5 - Math.abs(j - py));
+      else cov = clamp01(r + 0.5 - Math.hypot(i - px, j - py));
+      if (cov > 0) over(out, (j * W + i) * 4, col, cov * a);
+    }
+  }
+}
+
 // ---------- height labels and spot heights ----------
 // Labels are placed once for the whole frame (cached on the field), in document px, so every tile and preview
 // draws the same ones. A label sits on a calm stretch of its line (the line stays inside the label's box),
@@ -431,7 +686,9 @@ function glyphMetrics(atlas) {
     for (let y = 0; y < atlas.cellH; y++) for (let x = 0; x < atlas.cellW; x++) if (atlas.data[g * atlas.cellW * atlas.cellH + y * atlas.cellW + x] > 96) { top = Math.min(top, y); bottom = Math.max(bottom, y + 1); }
   }
   if (bottom <= top) { top = 0; bottom = atlas.cellH; }
-  return (atlas._digits = { top, cap: bottom - top, adv: atlas.cellW });
+  let adv = atlas.cellW;
+  if (atlas.adv) { let sum = 0, cnt = 0; atlas.chars.forEach((ch, g) => { if (ch.trim()) { sum += atlas.adv[g]; cnt++; } }); if (cnt) adv = sum / cnt; } // a measured font: its mean advance
+  return (atlas._digits = { top, cap: bottom - top, adv });
 }
 // The height a level (or a point's f value) stands for: metres or feet on a map, the level number otherwise.
 function heightText(F, s, f) {
@@ -579,6 +836,7 @@ const hashT = (seed, a, b) => {
 };
 // Which lines get text: (isIndex) → bool.
 function textOnLine(s) {
+  if (s.ptWhich === "picked") return () => false; // only the lines you chose (ptPicks)
   const index = (Math.round(s.indexEvery) | 0) > 0;
   if (s.ptWhich === "index" && index) return (isIndex) => isIndex;
   if (s.ptWhich === "others" && index) return (isIndex) => !isIndex;
@@ -617,11 +875,128 @@ function walker(pts, closed) {
   };
   return { len, at };
 }
+// ---------- lines you chose ----------
+// Each pick is the contour piece nearest its point (x, y: fractions of the frame), so it follows its line when
+// the settings move the lines a little; with `all`, every piece at that line's height. A piece you chose wins
+// over a whole height. {list, one: poly index → pick, level: lv → pick, …}, cached on F; null without picks.
+function pickedLines(F, s) {
+  const picks = s.ptPicks;
+  if (!picks || !picks.length) return null;
+  const polys = contourPolylines(F, s), key = F._polys.key + "|" + JSON.stringify(picks);
+  if (F._picks && F._picks.key === key) return F._picks;
+  const one = new Map(), level = new Map(), lvs = new Set();
+  const list = picks.map((p) => Object.assign({}, p, { rgb: hexToRgb(p.color || "#e63946") }));
+  for (const p of list) {
+    const near = nearestLine(polys, p.x * F.fw, p.y * F.fh);
+    p.line = near ? near.i : -1;
+    if (!near) continue;
+    p.lv = polys[near.i].lv;
+    if (p.all) { if (!level.has(p.lv)) level.set(p.lv, p); } else if (!one.has(near.i)) { one.set(near.i, p); lvs.add(p.lv); }
+  }
+  // the single pieces' segments in buckets, to tell per pixel which piece of a height a line pixel belongs to
+  const B = 48, bw = Math.ceil(F.fw / B) + 1, bh = Math.ceil(F.fh / B) + 1, buckets = new Map();
+  const bx = (x) => Math.min(bw - 1, Math.max(0, Math.floor(x / B))), by = (y) => Math.min(bh - 1, Math.max(0, Math.floor(y / B)));
+  for (const i of one.keys()) {
+    const P = polys[i], m = P.pts.length / 2, segN = P.closed ? m : m - 1;
+    for (let a = 0; a < segN; a++) {
+      const b = (a + 1) % m, x0 = P.pts[a * 2], y0 = P.pts[a * 2 + 1], x1 = P.pts[b * 2], y1 = P.pts[b * 2 + 1];
+      for (let yy = by(Math.min(y0, y1)); yy <= by(Math.max(y0, y1)); yy++) for (let xx = bx(Math.min(x0, x1)); xx <= bx(Math.max(x0, x1)); xx++) {
+        const k = yy * bw + xx; let arr = buckets.get(k); if (!arr) buckets.set(k, (arr = [])); arr.push(i, a);
+      }
+    }
+  }
+  F._picks = { key, list, one, level, lvs, polys, B, bw, bh, buckets, bx, by, slack: 1.5 / F.k };
+  return F._picks;
+}
+// The nearest contour piece to document point (x, y): {i, d, x, y (the nearest point on it)} or null.
+function nearestLine(polys, x, y) {
+  let best = null;
+  polys.forEach((P, i) => {
+    const m = P.pts.length / 2, segN = P.closed ? m : m - 1;
+    for (let a = 0; a < segN; a++) {
+      const b = (a + 1) % m, q = segPoint(P.pts[a * 2], P.pts[a * 2 + 1], P.pts[b * 2], P.pts[b * 2 + 1], x, y), d = Math.hypot(q[0] - x, q[1] - y);
+      if (!best || d < best.d) best = { i, d, x: q[0], y: q[1] };
+    }
+  });
+  return best;
+}
+function segPoint(x0, y0, x1, y1, x, y) {
+  const dx = x1 - x0, dy = y1 - y0, l2 = dx * dx + dy * dy, t = l2 > 0 ? Math.max(0, Math.min(1, ((x - x0) * dx + (y - y0) * dy) / l2)) : 0;
+  return [x0 + dx * t, y0 + dy * t];
+}
+// The pick a line pixel at level lv, document point (x, y) belongs to (r: the line's half width in document px).
+function pickAt(P, lv, x, y, r) {
+  if (P.lvs.has(lv)) {
+    const reach = r + P.slack, x0 = P.bx(x - reach), x1 = P.bx(x + reach), y0 = P.by(y - reach), y1 = P.by(y + reach);
+    let best = Infinity, who = null;
+    for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) {
+      const arr = P.buckets.get(yy * P.bw + xx);
+      if (!arr) continue;
+      for (let q = 0; q < arr.length; q += 2) {
+        const Pl = P.polys[arr[q]];
+        if (Pl.lv !== lv) continue;
+        const m = Pl.pts.length / 2, a = arr[q + 1], b = (a + 1) % m, p = segPoint(Pl.pts[a * 2], Pl.pts[a * 2 + 1], Pl.pts[b * 2], Pl.pts[b * 2 + 1], x, y), d = Math.hypot(p[0] - x, p[1] - y);
+        if (d < best) { best = d; who = arr[q]; }
+      }
+    }
+    if (who !== null && best <= reach) return P.one.get(who);
+  }
+  return P.level.get(lv) || null;
+}
+// The pick of contour piece i (at level lv), or null.
+const pickOf = (P, i, lv) => (P ? P.one.get(i) || P.level.get(lv) || null : null);
+// Whether any characters go on the lines: the text on the lines, or a chosen line with text or rain.
+function textWanted(s) {
+  return !!s.textOn || (s.ptPicks || []).some((p) => p && (p.mode === "text" || p.mode === "rain"));
+}
+const rainWanted = (s) => (s.textOn && s.textMode === "rain") || (s.ptPicks || []).some((p) => p && p.mode === "rain");
+// The rain's characters.
+function rainChars(s) {
+  const p = Engine.parseCustom(String(s.prChars || "")), all = p.text + (p.fill ? p.fill.items.join("") : "");
+  const set = Array.from(new Set(Array.from(all))).filter((ch) => ch.trim());
+  return set.length ? set : ["0", "1"];
+}
+// textMode "set": the set's characters (no blanks).
+function setChars(s) {
+  const cs = CHARSETS.find((c) => c.id === s.ptSet) || CHARSETS.find((c) => c.id === "bourke");
+  return Array.from(new Set(Array.from(cs.chars))).filter((ch) => ch.trim());
+}
+// ptText's rows: one text per height, lowest line first (trailing empty rows dropped; one row = every line).
+function textRows(s) {
+  const rows = String(s.ptText || "").split(/\r?\n/);
+  while (rows.length > 1 && !rows[rows.length - 1].trim()) rows.pop();
+  return rows;
+}
 // The characters the text needs (for an atlas that has them all).
 function textChars(s) {
-  if (!s.textOn) return "";
-  if (s.textMode === "direction") return "-\\|/";
-  return String(s.ptText || "").replace(/%h/g, "") + "0123456789-";
+  let t = "";
+  if (s.textOn && s.textMode === "direction") t = "-\\|/";
+  else if (s.textOn && s.textMode === "set") t = setChars(s).join("");
+  else if (s.textOn && s.textMode !== "rain") t = textRows(s).join("").replace(/%h/g, "") + "0123456789-";
+  const own = (s.ptPicks || []).filter((p) => p && p.mode === "text" && p.text).map((p) => p.text).join("");
+  if (own) t += own.replace(/%h/g, "") + "0123456789-";
+  if (rainWanted(s)) t += rainChars(s).join("");
+  if (s.ptPicks && s.ptPicks.some((p) => p && p.mode === "text" && !p.text) && s.textMode === "text") t += textRows(s).join("").replace(/%h/g, "") + "0123456789-";
+  if (t && s.ptFont) t += "0123456789"; // (a font's size is set by its digits)
+  return t;
+}
+// Preview only: the chosen line s.ptPicks[s._pickHi] drawn over everything in a bright colour.
+function drawPickHighlight(F, s, rect, z, W, Hh, out) {
+  const P = pickedLines(F, s), p = P && P.list[s._pickHi];
+  if (!p || p.line < 0) return;
+  const lines = p.all ? P.polys.filter((l) => l.lv === p.lv) : [P.polys[p.line]], half = 1.6 / z, col = [255, 43, 214];
+  for (const l of lines) {
+    const m = l.pts.length / 2, segN = l.closed ? m : m - 1;
+    for (let a = 0; a < segN; a++) {
+      const b = (a + 1) % m, x0 = l.pts[a * 2], y0 = l.pts[a * 2 + 1], x1 = l.pts[b * 2], y1 = l.pts[b * 2 + 1];
+      const i0 = Math.max(0, Math.floor((Math.min(x0, x1) - half - rect.x) * z)), i1 = Math.min(W - 1, Math.ceil((Math.max(x0, x1) + half - rect.x) * z));
+      const j0 = Math.max(0, Math.floor((Math.min(y0, y1) - half - rect.y) * z)), j1 = Math.min(Hh - 1, Math.ceil((Math.max(y0, y1) + half - rect.y) * z));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const x = rect.x + (i + 0.5) / z, y = rect.y + (j + 0.5) / z, q = segPoint(x0, y0, x1, y1, x, y), d = Math.hypot(q[0] - x, q[1] - y) * z;
+        if (d < 2.2) { const o = (j * W + i) * 4; out[o] = col[0]; out[o + 1] = col[1]; out[o + 2] = col[2]; out[o + 3] = 255; }
+      }
+    }
+  }
 }
 // What one line writes: next() → a character (" " = a gap) and whether it belongs to a {message}.
 // Plain text repeats; with a [ ] fill the plain text comes once at the start, then the fill items repeat.
@@ -646,18 +1021,50 @@ function lineStream(spec, heightStr, seed, lineNo, msgs) {
 }
 // The layout: every character's centre (x, y, document px), direction (cos, sin), glyph, height and flags
 // (1 index line, 2 message), plus buckets for finding the ones near a rect. Cached on F.
-function pathGlyphs(F, s, atlas) {
+function pathGlyphs(F, s, atlas, markAtlas) {
+  const mAtlas = markAtlas || atlas; // the labels' glyphs (for the gaps under them)
   const polys = contourPolylines(F, s);
-  const key = [F._polys.key, s.textMode, s.ptText, s.ptSize, s.ptSpacing, s.ptWhich, s.ptRotate, s.ptVertical, s.ptReadable, s.ptRoom, s.ptSeed, s.labelUnits,
-    s.labelGap, s.labelsOn, s.labelEvery, s.labelSpacing, s.labelSize, s.labelUphill, s.peaks, s.peakSpacing].join("|");
-  if (F._pt && F._pt.key === key && F._pt.atlas === atlas) return F._pt;
+  const picks = pickedLines(F, s), rain = rainWanted(s);
+  const key = [F._polys.key, s.textOn, s.textMode, s.ptText, s.textMode === "set" ? s.ptSet : "", s.ptSize, s.ptSpacing, s.ptWhich, s.ptRotate, s.ptVertical, s.ptReadable, s.ptRoom, s.ptSeed, s.labelUnits,
+    s.labelGap, s.labelsOn, s.labelEvery, s.labelSpacing, s.labelSize, s.labelUphill, s.peaks, s.peakSpacing, picks ? picks.key : "",
+    rain ? [s.prChars, s.prLength, s.prLengthVar, s.prGaps, s.prFade, s.prHead, s.prHeadColor, s.prColorOn, s.prColor, s.prReverse, s.prSeed].join("/") : ""].join("|");
+  if (F._pt && F._pt.key === key && F._pt.atlas === atlas && F._pt.mAtlas === mAtlas) return F._pt;
   const gm = glyphMetrics(atlas), docPx = F.docLong / REF, size = Math.max(1, s.ptSize) * docPx, sc = size / gm.cap;
   const vert = !!s.ptVertical && s.textMode !== "direction"; // vertical type: stacked at the cap height plus some leading
-  const adv = Math.max(0.2, s.ptSpacing) * (vert ? gm.cap * 1.35 : gm.adv) * sc, which = textOnLine(s), dir = s.textMode === "direction", k = F.k;
-  const { n } = levelsOf(F, s), room = s.ptRoom * size, gaps = s.labelGap ? (s.labelsOn || s.peaks > 0 ? placeMarks(F, s, atlas) : []) : [];
-  const spec = dir ? null : Engine.parseCustom(s.ptText);
-  const X = [], Y = [], C = [], S = [], G = [], Hs = [], FL = [], p = [0, 0], q0 = [0, 0], q1 = [0, 0];
-  const lines = polys.map((P, i) => ({ P, i, w: which(P.isIndex) ? walker(P.pts, P.closed) : null }));
+  const prop = !!atlas.adv && !vert && s.textMode !== "direction"; // proportional text (a measured font)
+  const adv = Math.max(0.2, s.ptSpacing) * (vert ? gm.cap * 1.35 : gm.adv) * sc, which = s.textOn ? textOnLine(s) : () => false, dir = s.textMode === "direction", k = F.k;
+  const { n } = levelsOf(F, s), room = s.ptRoom * size, gaps = s.labelGap ? (s.labelsOn || s.peaks > 0 ? placeMarks(F, s, mAtlas) : []) : [];
+  // the text of each height: ptText's rows (or the set's characters at random), lowest line first, repeating
+  const rows = textRows(s), minLv = polys.reduce((m, P) => Math.min(m, P.lv), Infinity);
+  const specs = dir || s.textMode === "rain" ? [] : s.textMode === "set" ? [{ text: "", messages: [], fill: { items: setChars(s), random: true, sep: "" } }]
+    : rows.map((r) => (rows.length > 1 && !r.trim() ? null : Engine.parseCustom(r)));
+  const specAt = (lv) => (specs.length ? specs[(((lv - minLv) % specs.length) + specs.length) % specs.length] : null), own = new Map(); // own: a chosen line's text → its spec
+  const X = [], Y = [], C = [], S = [], G = [], Hs = [], FL = [], A = [], K = [], OX = [], p = [0, 0], q0 = [0, 0], q1 = [0, 0];
+  // each line: what it writes (kind "text" with its spec, "dir" or "rain"; null = no characters)
+  const lines = polys.map((P, i) => {
+    const pk = pickOf(picks, i, P.lv);
+    let kind = null, sp = null;
+    if (pk ? pk.mode === "rain" : which(P.isIndex) && s.textMode === "rain") kind = "rain";
+    else if (pk && pk.mode === "text" && pk.text) { kind = "text"; if (!own.has(pk.text)) own.set(pk.text, Engine.parseCustom(pk.text)); sp = own.get(pk.text); }
+    else if (pk ? pk.mode === "text" : which(P.isIndex)) {
+      kind = dir ? "dir" : s.textMode === "rain" ? "rain" : "text"; sp = specAt(P.lv);
+      if (kind === "text" && !sp) kind = null; // an empty row: no text at this height
+    }
+    return { P, i, pk, kind, spec: sp, w: kind ? walker(P.pts, P.closed) : null };
+  });
+  // a character's place at arc length d along line l (half: half its advance; sign: the way the text runs):
+  // centre, direction and whether it can show there (Room: not on a line you chose; label gaps)
+  const slotAt = (l, d, half, sign) => {
+    const w = l.w;
+    w.at(d, p); w.at(d - half, q0); w.at(d + half, q1);
+    let tx = (q1[0] - q0[0]) * sign, ty = (q1[1] - q0[1]) * sign;
+    const tl = Math.hypot(tx, ty), ax = p[0] * k, ay = p[1] * k;
+    let ok = tl > 1e-9;
+    if (ok) { tx /= tl; ty /= tl; }
+    if (ok && room > 0 && !l.pk) { const g = Math.hypot(bilinear(F.gx, F.w, F.h, ax, ay), bilinear(F.gy, F.w, F.h, ax, ay)) * n * k; if (g > 0 && 1 / g < room) ok = false; }
+    if (ok && gaps.length && gapAt(gaps, p[0], p[1], 1e9) > 0) ok = false;
+    return { x: p[0], y: p[1], tx, ty, ok };
+  };
   // 1. the slots of every line: centre, direction and whether a character can show there
   for (const l of lines) {
     const { P, w } = l;
@@ -665,8 +1072,8 @@ function pathGlyphs(F, s, atlas) {
     if (!w || w.len < adv * 2) continue;
     // runs of the line and which way the text goes along each: [t0, t1, sign]. Readable: the text always runs
     // left to right and turns round where the line does (with some hysteresis); uphill: one way, tops uphill.
-    const runs = [];
-    if (s.ptReadable || dir) {
+    const runs = []; // (Room leaves a line you chose alone: it gets its text wherever it goes)
+    if (s.ptReadable || l.kind === "dir") {
       const step = adv / 2, N = Math.max(1, Math.floor(w.len / step));
       let sign = 0, from = 0;
       for (let a = 0; a <= N; a++) {
@@ -687,31 +1094,28 @@ function pathGlyphs(F, s, atlas) {
       const tx = q1[0] - p[0], ty = q1[1] - p[1], ax = p[0] * k, ay = p[1] * k;
       runs.push([0, w.len, ty * bilinear(F.gx, F.w, F.h, ax, ay) - tx * bilinear(F.gy, F.w, F.h, ax, ay) < 0 ? -1 : 1]); // up = (ty, −tx) should face +f
     }
+    l.runs = runs;
     for (const [t0, t1, sign] of runs) {
       const slots = Math.floor((t1 - t0) / adv);
       if (slots < 1) continue;
       const start = t0 + (t1 - t0 - slots * adv) / 2 + adv / 2;
       for (let u = 0; u < slots; u++) {
-        const d = sign > 0 ? start + u * adv : start + (slots - 1 - u) * adv;
-        w.at(d, p); w.at(d - adv / 2, q0); w.at(d + adv / 2, q1);
-        let tx = (q1[0] - q0[0]) * sign, ty = (q1[1] - q0[1]) * sign;
-        const tl = Math.hypot(tx, ty), ax = p[0] * k, ay = p[1] * k;
-        let ok = tl > 1e-9;
-        if (ok) { tx /= tl; ty /= tl; }
-        if (ok && room > 0) { const g = Math.hypot(bilinear(F.gx, F.w, F.h, ax, ay), bilinear(F.gy, F.w, F.h, ax, ay)) * n * k; if (g > 0 && 1 / g < room) ok = false; }
-        if (ok && gaps.length && gapAt(gaps, p[0], p[1], 1e9) > 0) ok = false;
-        l.slots.push({ x: p[0], y: p[1], tx, ty, ok, first: u === 0 });
+        const d = sign > 0 ? start + u * adv : start + (slots - 1 - u) * adv, sl = slotAt(l, d, adv / 2, sign);
+        sl.first = u === 0; sl.d = d;
+        l.slots.push(sl);
       }
     }
   }
   // 2. where the {messages} go: hashed onto stretches of slots that all show (within one run), at a hashed place
   const msgsOf = new Map();
-  if (spec && spec.messages.length) {
-    let r = 0;
-    for (const msg of spec.messages) {
+  let r = 0;
+  for (const sp of Array.from(new Set(specs)).concat(Array.from(own.values()))) {
+    if (!sp || !sp.messages.length) continue;
+    for (const msg of sp.messages) {
       const chars = Array.from(msg.text), need = chars.length;
       const fits = []; // [line, first slot of a free stretch, its length]
       for (const l of lines) {
+        if (l.spec !== sp) continue;
         let a = -1; // start of the current stretch
         for (let j = 0; j <= l.slots.length; j++) {
           const sl = l.slots[j];
@@ -727,21 +1131,72 @@ function pathGlyphs(F, s, atlas) {
     }
   }
   // 3. the characters: each line's text runs through all its slots; the ones that show become glyphs
+  const rainSet = rain ? rainChars(s) : null, headRgb = hexToRgb(s.prHeadColor), rainRgb = s.prColorOn ? hexToRgb(s.prColor) : null;
   for (const l of lines) {
     if (!l.slots.length) continue;
-    const next = dir ? null : lineStream(spec, heightText(F, s, l.P.lv), s.ptSeed, l.i, msgsOf.get(l.i));
+    const upright = l.kind === "dir" || !s.ptRotate, ownRgb = l.pk && l.pk.colorOn ? l.pk.rgb : null;
+    const put = (sl, g, fl, a, rgb, ox) => {
+      // the glyph's x axis (cos, sin): along the line, or for vertical type across it (its down then runs along the line)
+      const co = upright ? 1 : vert ? sl.ty : sl.tx, si = upright ? 0 : vert ? -sl.tx : sl.ty, o = ox || 0; // ox: cell centre past the character's centre, along its x axis
+      X.push(sl.x + co * o); Y.push(sl.y + si * o); C.push(co); S.push(si); G.push(g); OX.push(o);
+      Hs.push(cubic(F.H, F.w, F.h, sl.x * k, sl.y * k)); FL.push((l.P.isIndex ? 1 : 0) | fl); A.push(a); K.push(rgb);
+    };
+    if (prop && l.kind === "text") { // a measured font: each character as wide as it is, centred in each run
+      const next = lineStream(l.spec, heightText(F, s, l.P.lv), s.ptSeed, l.i, msgsOf.get(l.i)), sp = Math.max(0.2, s.ptSpacing), minA = size * 0.05;
+      for (const [t0, t1, sign] of l.runs || []) {
+        const len = t1 - t0, row = [];
+        let used = 0;
+        for (;;) {
+          const [ch, isMsg] = next(), g = atlas.index.get(ch), a = Math.max(minA, (g === undefined ? 0 : atlas.adv[g]) * sc * sp);
+          if (used + a > len) break;
+          row.push([ch, isMsg, g, a]); used += a;
+        }
+        let pen = (len - used) / 2;
+        for (const [ch, isMsg, g, a] of row) {
+          const d = sign > 0 ? t0 + pen + a / 2 : t1 - pen - a / 2;
+          pen += a;
+          if (ch === " " || g === undefined) continue;
+          const sl = slotAt(l, d, Math.max(a, adv) / 2, sign);
+          if (!sl.ok && !(isMsg && sl.tx * sl.tx + sl.ty * sl.ty > 0.5)) continue; // (a message shows wherever it landed)
+          put(sl, g, isMsg ? 2 : 0, 1, ownRgb, (atlas.cellW / 2 - atlas.ox[g] - atlas.adv[g] / 2) * sc);
+        }
+      }
+      continue;
+    }
+    if (l.kind === "rain") { // streams laid along the line by arc length, each brightest at its head
+      const len = l.w.len, mean = Math.max(1, s.prLength) * adv, streams = [];
+      let pos = -hashT(s.prSeed, l.i, 41) * mean, n = 0;
+      while (pos < len) {
+        const sl = Math.max(adv, mean * (1 - s.prLengthVar * hashT(s.prSeed, l.i * 7919 + n, 42)));
+        streams.push(pos, pos + sl);
+        pos += sl + sl * s.prGaps * (0.5 + hashT(s.prSeed, l.i * 7919 + n, 43));
+        n++;
+      }
+      l.slots.forEach((sl, u) => {
+        if (!sl.ok) return;
+        const d = l.P.closed ? ((sl.d % len) + len) % len : sl.d;
+        let a0 = -1, a1 = 0;
+        for (let q = 0; q < streams.length; q += 2) if (d >= streams[q] && d < streams[q + 1]) { a0 = streams[q]; a1 = streams[q + 1]; break; }
+        if (a0 < 0) return;
+        const t = s.prReverse ? (a1 - d) / (a1 - a0) : (d - a0) / (a1 - a0), head = (s.prReverse ? d - a0 : a1 - d) <= adv;
+        const g = atlas.index.get(rainSet[Math.floor(hashT(s.prSeed, l.i * 7919 + u, 44) * rainSet.length)]);
+        if (g === undefined) return;
+        const a = s.prFade > 0 ? Math.pow(Math.max(0, t), s.prFade * 2.5) : 1;
+        if (a < 0.02 && !head) return;
+        put(sl, g, 4, head ? 1 : a, head && s.prHead ? headRgb : rainRgb || ownRgb);
+      });
+      continue;
+    }
+    const isDir = l.kind === "dir", next = isDir ? null : lineStream(l.spec, heightText(F, s, l.P.lv), s.ptSeed, l.i, msgsOf.get(l.i));
     for (const sl of l.slots) {
-      const [ch, isMsg] = dir ? ["", false] : next();
+      const [ch, isMsg] = isDir ? ["", false] : next();
       if (!sl.ok) continue;
       let c = ch;
-      if (dir) { let a = Math.atan2(sl.ty, sl.tx); if (a < 0) a += Math.PI; c = a < Math.PI / 8 || a >= (7 * Math.PI) / 8 ? "-" : a < (3 * Math.PI) / 8 ? "\\" : a < (5 * Math.PI) / 8 ? "|" : "/"; }
+      if (isDir) { let a = Math.atan2(sl.ty, sl.tx); if (a < 0) a += Math.PI; c = a < Math.PI / 8 || a >= (7 * Math.PI) / 8 ? "-" : a < (3 * Math.PI) / 8 ? "\\" : a < (5 * Math.PI) / 8 ? "|" : "/"; }
       if (c === " ") continue;
       const g = atlas.index.get(c);
       if (g === undefined) continue;
-      const upright = dir || !s.ptRotate;
-      // the glyph's x axis (cos, sin): along the line, or for vertical type across it (its down then runs along the line)
-      X.push(sl.x); Y.push(sl.y); C.push(upright ? 1 : vert ? sl.ty : sl.tx); S.push(upright ? 0 : vert ? -sl.tx : sl.ty); G.push(g);
-      Hs.push(cubic(F.H, F.w, F.h, sl.x * k, sl.y * k)); FL.push((l.P.isIndex ? 1 : 0) | (isMsg ? 2 : 0));
+      put(sl, g, isMsg ? 2 : 0, 1, ownRgb);
     }
   }
   // buckets by centre
@@ -750,7 +1205,7 @@ function pathGlyphs(F, s, atlas) {
     const bk = Math.min(bh - 1, Math.max(0, Math.floor(Y[q] / B))) * bw + Math.min(bw - 1, Math.max(0, Math.floor(X[q] / B)));
     let a = buckets.get(bk); if (!a) buckets.set(bk, (a = [])); a.push(q);
   }
-  F._pt = { key, atlas, n: X.length, X, Y, C, S, G, Hs, FL, sc, size, B, bw, bh, buckets, r: (Math.hypot(atlas.cellW, atlas.cellH) / 2) * sc };
+  F._pt = { key, atlas, mAtlas, n: X.length, X, Y, C, S, G, Hs, FL, A, K, OX, sc, size, B, bw, bh, buckets, r: (Math.hypot(atlas.cellW, atlas.cellH) / 2) * sc };
   return F._pt;
 }
 // The characters whose box can touch rect (document px), in layout order.
@@ -764,15 +1219,15 @@ function pathGlyphsIn(P, rect) {
   }
   return out.sort((a, b) => a - b);
 }
-function drawPathText(F, s, c, atlas, rect, z, W, Hh, out) {
-  const P = pathGlyphs(F, s, atlas);
+function drawPathText(F, s, c, atlas, rect, z, W, Hh, out, markAtlas) {
+  const P = pathGlyphs(F, s, atlas, markAtlas);
   if (!P.n) return;
   const cw = atlas.cellW, gm = glyphMetrics(atlas), vc = gm.top + gm.cap / 2, sc = P.sc, k = F.k;
   const ss = Math.min(4, Math.max(1, Math.ceil(1 / (sc * z) / 1.5))), inv = 1 / (ss * ss * 255); // supersampling when the characters are small
   const msgCol = s.ptMsgColorOn ? hexToRgb(s.ptMsgColor) : null, col = [0, 0, 0], r = P.r + 1 / z;
   for (const q of pathGlyphsIn(P, rect)) {
     const x0 = P.X[q], y0 = P.Y[q], co = P.C[q], si = P.S[q], g = P.G[q], fl = P.FL[q];
-    const colour = fl & 2 && msgCol ? msgCol : lineColour(F, s, c, x0, y0, x0 * k, y0 * k, P.Hs[q], !!(fl & 1));
+    const colour = fl & 2 && msgCol ? msgCol : P.K[q] || lineColour(F, s, c, x0, y0, x0 * k, y0 * k, P.Hs[q], !!(fl & 1)), alpha = P.A[q] * s.lineOpacity;
     col[0] = colour[0]; col[1] = colour[1]; col[2] = colour[2];
     const i0 = Math.max(0, Math.floor((x0 - r - rect.x) * z)), i1 = Math.min(W - 1, Math.ceil((x0 + r - rect.x) * z));
     const j0 = Math.max(0, Math.floor((y0 - r - rect.y) * z)), j1 = Math.min(Hh - 1, Math.ceil((y0 + r - rect.y) * z));
@@ -783,7 +1238,7 @@ function drawPathText(F, s, c, atlas, rect, z, W, Hh, out) {
         const gx = (dx * co + dy * si) / sc + cw / 2, gy = (dy * co - dx * si) / sc + vc;
         if (gx > -1 && gx < cw + 1 && gy > -1 && gy < atlas.cellH + 1) acc += sampleGlyph(atlas, g, gx, gy);
       }
-      if (acc > 0) over(out, (j * W + i) * 4, col, Math.min(1, acc * inv) * s.lineOpacity);
+      if (acc > 0) over(out, (j * W + i) * 4, col, Math.min(1, acc * inv) * alpha);
     }
   }
 }
@@ -932,14 +1387,38 @@ function contourSegments(F, n, f0) {
 }
 
 // Exports the line art to an SVG vector string.
-function toSVG(F, s, atlas) {
+function toSVG(F, s, atlas, markAtlas) {
   const W = F.fw, H = F.fh, px = F.docLong / REF;
   const out = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`];
   if (s.bgMode !== "transparent") out.push(`<rect width="100%" height="100%" fill="${s.bgColor}"/>`);
 
   const c = context(F, s, 1);
 
-  if (s.style === "ridges") {
+  if (s.style === "maze") { // the stripes' edges: one path per traced line, coloured at its first point
+    const M = mazeField(F, s), k = F.k, segs = contourSegments({ w: M.w, h: M.h, H: M.U }, 0.5, 0).get(0) || [];
+    const op = s.lineOpacity < 1 ? ` stroke-opacity="${s.lineOpacity}"` : "", lw = (s.lineWidth * px).toFixed(2);
+    out.push(`<g id="labyrinth" fill="none" stroke-width="${lw}" stroke-linecap="round" stroke-linejoin="round"${op}>`);
+    if (s.lineWidth > 0) for (const poly of stitchContours(segs)) {
+      if (poly.length < 2) continue;
+      const sp = simplifyPoly(poly, 0.15), P = (q) => [(q[0] + 0.5) * M.cell, (q[1] + 0.5) * M.cell];
+      const [x0, y0] = P(sp[0]), col = rgbToHex(...lineColour(F, s, c, x0, y0, x0 * k, y0 * k, bilinear(F.H, F.w, F.h, x0 * k, y0 * k), false));
+      let d = `M${x0.toFixed(1)} ${y0.toFixed(1)}`;
+      for (let i = 1; i < sp.length; i++) { const [x, y] = P(sp[i]); d += `L${x.toFixed(1)} ${y.toFixed(1)}`; }
+      out.push(`<path d="${d}" stroke="${col}"/>`);
+    }
+    out.push(`</g>`);
+  } else if (s.style === "points") { // far to near, like the render
+    const P = pointCloud(F, s, c), square = s.pcShape === "square";
+    out.push(`<g id="points">`);
+    for (let q = 0; q < P.n; q++) {
+      const a = P.A[q] * s.lineOpacity, x = P.X[q], y = P.Y[q], r = P.R[q];
+      if (a <= 0 || x + r < 0 || y + r < 0 || x - r > W || y - r > H) continue;
+      const fill = rgbToHex(P.C[q * 3], P.C[q * 3 + 1], P.C[q * 3 + 2]), op = a < 1 ? ` fill-opacity="${a.toFixed(3)}"` : "";
+      out.push(square ? `<rect x="${(x - r).toFixed(1)}" y="${(y - r).toFixed(1)}" width="${(2 * r).toFixed(2)}" height="${(2 * r).toFixed(2)}" fill="${fill}"${op}/>`
+        : `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(2)}" fill="${fill}"${op}/>`);
+    }
+    out.push(`</g>`);
+  } else if (s.style === "ridges") {
     const k = F.k, rows = Math.max(2, Math.round(s.rows)), sp = F.fh / (rows + 1);
     const lift = s.amp * sp, R = rows + Math.ceil(Math.max(0, s.amp));
     const bgFill = s.bgMode !== "transparent" ? s.bgColor : "none";
@@ -967,18 +1446,30 @@ function toSVG(F, s, atlas) {
     const { n, base } = levelsOf(F, s);
     const offset = s.offset, every = Math.round(s.indexEvery) | 0;
     const baseW = s.lineWidth * px;
-    const segsByLevel = contourSegments(F, n, base + offset);
+    const segsByLevel = contourSegments(F, n, base + offset), picks = pickedLines(F, s);
+    // with chosen lines: their pieces apart (own colour, hidden, under text)
+    const pieceOf = new Map();
+    if (picks) for (const [i, P] of contourPolylines(F, s).entries()) { const pk = pickOf(picks, i, P.lv); if (pk) pieceOf.set(P.pts[0].toFixed(3) + "," + P.pts[1].toFixed(3) + "," + P.lv, pk); }
 
     out.push(`<g id="contours">`);
     for (const [lv, segs] of segsByLevel) {
-      const polylines = stitchContours(segs);
+      const all = stitchContours(segs);
       const isIndex = every > 0 && ((lv % every) + every) % every === 0;
+      const groups = new Map(); // pick (or null) → its pieces
+      for (const poly of all) {
+        const pk = picks && poly.length ? pieceOf.get(((poly[0][0] + 0.5) / k).toFixed(3) + "," + ((poly[0][1] + 0.5) / k).toFixed(3) + "," + lv) || null : null;
+        if (!groups.has(pk)) groups.set(pk, []);
+        groups.get(pk).push(poly);
+      }
+      for (const [pk, polylines] of groups) {
+      if (pk && pk.mode === "hide") continue;
       const lw = (isIndex ? baseW * s.indexWidth : baseW).toFixed(1);
       let color = s.lineColor;
-      if (isIndex && s.indexColorOn) color = s.indexColor;
+      if (pk && pk.colorOn) color = pk.color;
+      else if (isIndex && s.indexColorOn) color = s.indexColor;
       else if (s.lineFrom === "height") {
         const th = (lv - base - offset) / n;
-        color = rgbToHex(...ramp(c.lineA, c.lineMid, c.lineB, th, c.tmp));
+        color = rgbToHex(...ramp(c.lineA, c.lineMid, c.lineB, c.shape(th), c.tmp, c.mid));
       }
       const dParts = [];
       for (const poly of polylines) {
@@ -988,28 +1479,32 @@ function toSVG(F, s, atlas) {
         for (let i = 1; i < sp.length; i++) d += `L${((sp[i][0] + 0.5) / k).toFixed(1)} ${((sp[i][1] + 0.5) / k).toFixed(1)}`;
         dParts.push(d);
       }
-      const lineOp = s.lineOpacity * (s.textOn && textOnLine(s)(isIndex) ? s.ptLineOpacity : 1); // the text draws these lines
+      const texted = pk ? pk.mode === "text" || pk.mode === "rain" : s.textOn && textOnLine(s)(isIndex);
+      const lineOp = s.lineOpacity * (texted ? s.ptLineOpacity : 1); // the text draws these lines
       if (dParts.length && lineOp > 0) {
         const op = lineOp < 1 ? ` stroke-opacity="${lineOp}"` : "";
         out.push(`<path d="${dParts.join(" ")}" fill="none" stroke="${color}" stroke-width="${lw}" stroke-linecap="round" stroke-linejoin="round"${op}/>`);
       }
+      }
     }
     out.push(`</g>`);
 
-    if (atlas && s.textOn) { // the text on the lines: one <text> per character, turned with the line
-      const P = pathGlyphs(F, s, atlas), esc = (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[ch] || ch);
+    if (atlas && textWanted(s)) { // the text on the lines: one <text> per character, turned with the line
+      const P = pathGlyphs(F, s, atlas, markAtlas), esc = (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[ch] || ch);
       const fs = (atlas.fontSize || atlas.cellH * 0.85) * P.sc, msgCol = s.ptMsgColorOn ? s.ptMsgColor : null, op = s.lineOpacity < 1 ? ` fill-opacity="${s.lineOpacity}"` : "";
-      out.push(`<g id="text" font-family="Menlo, Consolas, monospace" font-size="${fs.toFixed(1)}" text-anchor="middle" dominant-baseline="central"${op}>`);
+      const family = s.ptFont ? `'${String(s.ptFontName || s.ptFont).replace(/['"<>&]/g, "")}', '${String(s.ptFont).replace(/['"<>&]/g, "")}', ` : "";
+      out.push(`<g id="text" font-family="${family}Menlo, Consolas, monospace" font-size="${fs.toFixed(1)}" text-anchor="middle" dominant-baseline="central"${op}>`);
       for (let q = 0; q < P.n; q++) {
-        const x = P.X[q], y = P.Y[q], col = P.FL[q] & 2 && msgCol ? msgCol : rgbToHex(...lineColour(F, s, c, x, y, x * k, y * k, P.Hs[q], !!(P.FL[q] & 1)));
+        const x = P.X[q] - P.OX[q] * P.C[q], y = P.Y[q] - P.OX[q] * P.S[q], col = P.FL[q] & 2 && msgCol ? msgCol : P.K[q] ? rgbToHex(...P.K[q]) : rgbToHex(...lineColour(F, s, c, x, y, x * k, y * k, P.Hs[q], !!(P.FL[q] & 1)));
         const deg = (Math.atan2(P.S[q], P.C[q]) * 180) / Math.PI, rot = Math.abs(deg) > 0.05 ? ` transform="rotate(${deg.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)})"` : "";
-        out.push(`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" fill="${col}"${rot}>${esc(atlas.chars[P.G[q]])}</text>`);
+        const a = P.A[q] < 1 ? ` fill-opacity="${(P.A[q] * s.lineOpacity).toFixed(3)}"` : ""; // (the rain's fade; replaces the group's opacity)
+        out.push(`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" fill="${col}"${rot}${a}>${esc(atlas.chars[P.G[q]])}</text>`);
       }
       out.push(`</g>`);
     }
 
-    if (atlas && (s.labelsOn || s.peaks > 0)) {
-      const marks = placeMarks(F, s, atlas);
+    if ((markAtlas || atlas) && (s.labelsOn || s.peaks > 0)) {
+      const marks = placeMarks(F, s, markAtlas || atlas);
       if (marks.length) {
         const col = s.labelColorOn ? s.labelColor : s.lineColor;
         out.push(`<g id="labels">`);
@@ -1031,5 +1526,25 @@ function toSVG(F, s, atlas) {
   return out.join("\n");
 }
 
-const Lines = { REF, ANALYSIS, SETTINGS_VERSION, DEFAULTS, STYLES, migrate, analysisZ, levelsOf, prepare, render, composite, sourceRGB, hexToRgb, toSVG, textChars, pathGlyphs };
+// The contour piece nearest frame point (x, y) for picking a line on the preview: {x, y (the nearest point on
+// it), d, line (its index), lv, height (its height as text)} or null.
+function lineAt(F, s, x, y) {
+  const polys = contourPolylines(F, s), near = nearestLine(polys, x, y);
+  return near ? { x: near.x, y: near.y, d: near.d, line: near.i, lv: polys[near.i].lv, height: heightText(F, s, polys[near.i].lv) } : null;
+}
+// The heights that have contour lines now, lowest first, as text (for filling ptText with one row per height).
+function lineHeights(F, s) {
+  const lvs = Array.from(new Set(contourPolylines(F, s).map((P) => P.lv))).sort((a, b) => a - b);
+  if (!lvs.length) return [];
+  const out = [];
+  for (let lv = lvs[0]; lv <= lvs[lvs.length - 1]; lv++) out.push(heightText(F, s, lv));
+  return out;
+}
+// What the chosen lines resolve to now: [{line, lv, height, found}] per pick (for the panel's list).
+function picksInfo(F, s) {
+  const P = pickedLines(F, s);
+  return P ? P.list.map((p) => ({ line: p.line, lv: p.lv, height: p.line >= 0 ? heightText(F, s, p.lv) : "", found: p.line >= 0 })) : [];
+}
+
+const Lines = { REF, ANALYSIS, SETTINGS_VERSION, DEFAULTS, STYLES, migrate, analysisZ, levelsOf, prepare, render, composite, sourceRGB, hexToRgb, toSVG, textChars, pathGlyphs, lineAt, picksInfo, lineHeights };
 if (typeof module !== "undefined") module.exports = Lines;

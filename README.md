@@ -1,6 +1,6 @@
 # ASCII by Star
 
-A Photoshop plugin that turns any image into ASCII and glyph art with a live preview, adds realistic ink bleed on paper to any layer, draws FIGlet text art, topographic line art and maps of any place on Earth.
+A Photoshop plugin that turns any image into ASCII and glyph art with a live preview, adds realistic ink bleed on paper to any layer, dithers images into any palette, draws FIGlet text art, topographic line art and maps of any place on Earth.
 
 **The most advanced ASCII art editor ever made, right inside Photoshop.** 60+ character sets and any font, 25 looks, shadows, glitch, Matrix rain, outlines and hidden messages, a live smart object, and now **hand editing of every single symbol**: paint, draw lines, rectangles and circles, or select any shape with Photoshop's own tools and rewrite it.
 
@@ -12,6 +12,8 @@ A Photoshop plugin that turns any image into ASCII and glyph art with a live pre
 3. Restart Photoshop and open **Plugins ▸ ASCII by Star**.
 
 Works with RGB and Grayscale documents at 8, 16 and 32 bits per channel, including artboard documents. Developed and tested on macOS and Windows.
+
+**Tabs:** ASCII, Ink bleed, Dither, Text art, Lines and Map. The **☰** menu left of the tabs puts them in your own order and hides the ones you don't use (**Reset** brings back the default).
 
 ## ASCII tab
 - **Characters:** 60+ character sets (classic ASCII ramps, blocks, Braille, box drawing, katakana "Matrix", runes, symbols) or your own text, in three ways:
@@ -55,6 +57,19 @@ Adds an ink-on-paper overlay to any layer (or the whole visible image) without t
 - **Paper settings:** grain size, grain, relief, fibres (amount, length, visibility, alignment, direction), laid lines and flecks, or texture scale, strength and colour.
 - A preview you can zoom (Fit to 400%), drag around, resize or hide. **Update overlay** re-renders in place and keeps your layer tweaks.
 
+## Dither tab
+Dithering with full control over every step, written for this plugin. The result goes in a new layer *“<layer> Dither”* (or a group with **a layer per colour**) and can be re-edited later.
+
+- **Pixels:** pixel size in document pixels, drawn as squares, circles, diamonds, lines or pluses with an adjustable gap, on a solid, transparent or picture background.
+- **Adjust first:** blur, sharpen, invert, channel mix, hue and saturation, brightness, contrast, gamma and grain.
+- **Colours:** a tone gradient through your palette, nearest colour from a palette (RGB, weighted or perceptual OKLab matching), greys between two colours, or levels per RGB channel. 19 built-in palettes (Game Boy, CGA, EGA, PICO-8, Commodore 64, ZX Spectrum, riso, sunset poster…), your own (edit, add and pick colours from the preview), or an automatic palette of N colours taken from the image.
+- **Algorithms:** error diffusion (Floyd–Steinberg, Atkinson, Jarvis, Stucki, Burkes, Sierra and more, or your own 8-weight kernel) with serpentine scanning, threshold and jitter; Riemersma along a Hilbert curve; ordered Bayer, clustered-dot and halftone matrices; a continuous halftone screen at any size, angle and dot shape; blue noise, white noise, interleaved gradient and golden-ratio noise. Patterns can be scaled and rotated.
+- **Edit:** paint, erase or restore single pixels on the preview with a brush; edits stay in place when the pixel size changes.
+- **Glitch** before or after dithering (see below), 16 looks, Randomize, ↶ Undo, a live smart object and **SVG** export.
+
+## Glitch in every tab
+The ASCII, Dither, Lines and Map tabs each have a **Glitch** section: slices, wave, broken blocks, pixel sort, RGB split, interlace, VHS tracking, bit crush, channel swap, scanlines and noise, with **Random glitch** and a seed, so the preview, the live view and the layer always match. In Dither and Lines it can tear the result or the picture before the effect (a dithered glitch keeps its palette). Text art gets it through **Use with effects** in the ASCII tab.
+
 ## Text art tab
 FIGlet lettering like patorjk.com's TAAG, with 332 fonts. Layouts (full, fitted, smushing), alignment, line gap, letter spacing, case, flip, invert, frames, drawing with any character or your own text, and style presets. **Try every font** previews your text in all of them. **Use with effects** sends the art to the ASCII tab, so colours, outlines, rain, shadows and glitch all work on it.
 
@@ -69,7 +84,11 @@ Contour (topographic) and ridge lines from any layer's brightness, a depth map, 
 ![Hypsometric colours](docs/lines-hypso.png)
 
 - **Height labels and spot heights** on the lines, facing uphill or readable.
-- **Text on the lines:** your text (hidden messages and fills included) written along every contour, horizontal or vertical, or direction marks `- \ | /`.
+- **Styles:** contours, ridge lines, a **labyrinth** (a Turing pattern whose stripes get wider with height) or a **3D point cloud** you can turn and tilt.
+- **Line colours** from a height gradient or across the slope, with a gradient shape: start and end, middle position, curve, hard steps, repeats (mirrored or not) and reverse.
+- **Text on the lines:** your text (hidden messages and fills included) written along every contour in any installed font, horizontal or vertical, or direction marks `- \ | /`. Each height can carry its own text (one row per height; **Row per line** fills in each line's height), or random characters from any character set (Standard long, blocks, binary…).
+- **Single lines:** click a line on the preview to give it its own text, its own colour, Matrix rain, or hide it.
+- **Matrix rain on the lines:** streams running along the contours with a fading tail and a bright head.
 - **Output:** a layer, a live smart object or vector **SVG**. **Use with effects** sends the lines to the ASCII tab.
 
 ## Map tab
@@ -78,6 +97,7 @@ A map of any place: type a name, coordinates, or paste a Google Maps link.
 ![Lviv, night style](docs/map-lviv-night.png)
 
 - Buildings, roads (with casings and major roads), rail, rivers, water, parks and bare ground from OpenStreetMap, each with its own colour, width and opacity, and style presets.
+- **Names** of places, points of interest, water and peaks, in the local language, English or Latin script and any font, placed without overlaps and with a halo. Peaks get a ▲ and can show the name and height, the name, the height, or just the mark.
 - **Drag the preview** to move around; the map is drawn past the edges so moving feels smooth.
 - **Output:** one layer per kind of feature in a group, a live smart object, or **SVG**. **Select** turns a category (e.g. all buildings) into a Photoshop selection.
 - Map data © OpenStreetMap contributors (the credit line is on by default); heights from AWS Terrain Tiles.
@@ -89,6 +109,11 @@ A map of any place: type a name, coordinates, or paste a Google Maps link.
 | Photoshop logic for the ASCII tab (pixels, layers, export, batch) | `plugin/main.js` |
 | ASCII rendering engine (pure JS, no Photoshop) | `plugin/engine.js` |
 | Ink bleed effect (pure JS) / its tab and Photoshop I/O | `plugin/ink.js` / `plugin/inkui.js` |
+| Dither effect / its tab | `plugin/dither.js` / `plugin/ditherui.js` |
+| Lines effect / its tab | `plugin/lines.js` / `plugin/linesui.js` |
+| Map data, drawing and tab | `plugin/map.js`, `plugin/features.js`, `plugin/mapui.js` |
+| Glitch for Dither, Lines and Map / its section | `plugin/glitch.js` / `plugin/glitchui.js` |
+| Section icons | `tools/section-icons/*.svg`, then `swift tools/make_section_icons.swift` |
 | Wheel-safe sliders and dropdowns | `plugin/slider.js`, `plugin/dropdown.js` |
 | Character sets | `plugin/charsets.js`, then rebuild the atlas (below) |
 | Built-in looks | `plugin/presets.js` |
@@ -105,6 +130,7 @@ swift tools/gen_atlas.swift tools/chars.json plugin
 **Tests without Photoshop:**
 - `node tools/test_engine.js test/sample.png /tmp/out` renders every preset to PNG; compare md5s between builds.
 - `node tools/test_ink.js test/sample.png /tmp/ink --check` renders every paper type and checks that tiled rendering matches a one-piece render.
+- `node tools/test_dither.js test/sample.png /tmp/dither --check`, `node tools/test_lines.js test/sample.png /tmp/lines --check` and `node tools/test_map.js "<place>" /tmp/map --check` do the same for the Dither, Lines and Map tabs (add `--set glOn=true,glSlices=0.5` to check the glitch).
 - `node tools/ui_smoke.js` checks the panel builds.
 - `test/sample.png` is drawn by `node tools/make_sample.js`.
 

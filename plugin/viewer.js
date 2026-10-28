@@ -7,7 +7,7 @@
 // is rendered until it's shown again. Both are remembered per tab.
 // setEditor(ed) turns the preview into a canvas: a click or drag calls ed.down/move/up with document px
 // (Option/Alt-drag still moves the view) and ed.hover follows the pointer. setMarks(rects) outlines document
-// rects (cells; {cls} adds a class) over the image. head: the "▾ Preview" line above it, which shows and hides it. With onEditToggle, the zoom bar gets an Edit button that calls it.
+// rects (cells; {cls} adds a class) over the image. head: the "▾ Preview" line above it, which shows and hides it. With onEditToggle, the zoom bar gets an Edit button that calls it (editTitle: its tooltip).
 "use strict";
 const { imaging } = require("photoshop");
 const { makeSlider, trackDrag, onDoubleClick, SLIDER_HTML } = require("./slider.js");
@@ -18,7 +18,7 @@ const SIZE_MIN = 0.1, SIZE_MAX = 0.8, MIN_PX = 60; // preview height: share of t
 function load(key, d) { try { const v = JSON.parse(localStorage.getItem(key)); return v === null ? d : v; } catch (e) { return d; } }
 function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) { /* not saved */ } }
 
-function createViewer({ wrap, img, msg, bar, grip, head, storeKey, render, docSize, onError, onLayout, onEditToggle, onFitDrag, bleed }) {
+function createViewer({ wrap, img, msg, bar, grip, head, storeKey, render, docSize, onError, onLayout, onEditToggle, editTitle, onFitDrag, bleed }) {
   let zoomT = Math.max(0, Math.min(1, Number(load(storeKey, 0)) || 0)); // slider position: 0 = Fit, 1 = 400%, logarithmic in between
   let sizeK = Math.max(SIZE_MIN, Math.min(SIZE_MAX, Number(load(storeKey + ":size", 0.38)) || 0.38));
   let hidden = !!load(storeKey + ":hidden", false), panelH = 0, dirty = true;
@@ -167,7 +167,7 @@ function createViewer({ wrap, img, msg, bar, grip, head, storeKey, render, docSi
     const t = editor ? "Done" : "Edit";
     if (editBtn.textContent !== t) editBtn.textContent = t;
     editBtn.classList.toggle("primary", !!editor);
-    editBtn.title = editor ? "Stop editing; clicks and drags move and zoom the preview again" : "Edit symbols: click or drag on the preview to change characters";
+    editBtn.title = editor ? "Stop editing; clicks and drags move and zoom the preview again" : editTitle || "Edit symbols: click or drag on the preview to change characters";
   }
   if (bar) {
     bar.innerHTML = `<span class="label zlabel" title="Double-click for Fit">Zoom</span>${SLIDER_HTML}<span class="val zval"></span>${onEditToggle ? '<button class="zbtn zedit"></button>' : ""}`;

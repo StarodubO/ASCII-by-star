@@ -154,7 +154,9 @@ function prepareAtlas(meta, bytes) {
     cov[g] = sum / (px * 255);
     for (let k = 0; k < 9; k++) vec[g * 9 + k] = sub[k] / (cnt[k] * 255);
   }
-  return { cellW, cellH, fontSize, chars, n, data, cov, vec, index };
+  const a = { cellW, cellH, fontSize, chars, n, data, cov, vec, index };
+  if (meta.adv) { a.adv = meta.adv; a.ox = meta.ox; } // a font measured for proportional text: advance and pen origin per glyph, cell px
+  return a;
 }
 
 // ---------- charset ----------

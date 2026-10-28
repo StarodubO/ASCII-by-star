@@ -2,6 +2,7 @@
 //   node tools/test_lines.js <src.png> <outDir> [--style id] [--height depth.png] [--long 2400] [--tile 1024] [--check]
 // --long scales the source up or down to that long side first.
 // --set key=value[,key=value…] overrides settings (numbers and true/false are parsed).
+// --picks '[{"x":0.5,"y":0.4,"mode":"rain"}, …]' chooses lines (ptPicks).
 // --map "<Google Maps link | lat, lon | place>" [--km 20] takes the height from that map region (needs the network).
 // --check also renders in one piece and reports the largest difference from the tiled render (seams).
 const fs = require("fs"), path = require("path");
@@ -39,6 +40,7 @@ const mapExtra = {};
 function overrides() {
   const o = {};
   for (const kv of String(opt("--set", "")).split(",").filter(Boolean)) { const [k, v] = kv.split("="); o[k] = v === "true" ? true : v === "false" ? false : isNaN(+v) ? v : +v; }
+  if (args.includes("--picks")) o.ptPicks = JSON.parse(opt("--picks")); // chosen lines, as JSON
   return o;
 }
 async function loadMap() {
@@ -50,10 +52,14 @@ async function loadMap() {
   Object.assign(mapExtra, { heightFrom: "map", mapWidthKm: km, equalize: false });
   console.log(`map ${at.name || at.lat + ", " + at.lon} · ${km} km · zoom ${heightImg.z} · ${heightImg.tiles} tiles · ${Math.round(heightImg.min)}–${Math.round(heightImg.max)} m · ${Date.now() - t0} ms`);
 }
+// Lines.render with the glitch on the result, as linesui draws it
+const Glitch = require("../plugin/glitch.js");
+const LR = (F, s, rect, z, cache) => (Glitch.active(s) && s.glWhere !== "before" ? Glitch.renderWith((r, zz) => Lines.render(F, s, r, zz, atlas), rect, z, src.w, src.h, s, cache) : Lines.render(F, s, rect, z, atlas));
 function renderTiled(F, s, tile) {
+  const strips = new Map();
   const W = src.w, H = src.h, full = new Uint8ClampedArray(W * H * 4);
   for (let ty = 0; ty < H; ty += tile) for (let tx = 0; tx < W; tx += tile) {
-    const tw = Math.min(tile, W - tx), th = Math.min(tile, H - ty), px = Lines.render(F, s, { x: tx, y: ty, w: tw, h: th }, 1, atlas);
+    const tw = Math.min(tile, W - tx), th = Math.min(tile, H - ty), px = LR(F, s, { x: tx, y: ty, w: tw, h: th }, 1, strips);
     for (let y = 0; y < th; y++) full.set(px.subarray(y * tw * 4, (y + 1) * tw * 4), ((ty + y) * W + tx) * 4);
   }
   return full;
@@ -64,7 +70,9 @@ for (const st of Lines.STYLES) {
   if (only && st.id !== only) continue;
   const s = Object.assign({}, Lines.DEFAULTS, st.s, heightImg ? { heightFrom: "layer" } : {}, mapExtra, args.includes("--interval") ? { mapInterval: Number(opt("--interval")) } : {}, overrides());
   let t0 = Date.now();
-  const F = Lines.prepare(small, heightImg, s, src.w, src.h);
+  let img = small;
+  if (Glitch.active(s) && s.glWhere === "before") { const d = new Uint8Array(small.data); Glitch.apply(d, small.w, small.h, 0, 0, small.w / src.w, src.w, src.h, s); img = { w: small.w, h: small.h, data: d }; }
+  const F = Lines.prepare(img, heightImg, s, src.w, src.h);
   const tPrep = Date.now() - t0;
   t0 = Date.now();
   const px = renderTiled(F, s, TILE);
@@ -73,7 +81,7 @@ for (const st of Lines.STYLES) {
   const flat = new Uint8Array(px.length);
   for (let i = 0; i < px.length; i += 4) { const a = px[i + 3] / 255; for (let c = 0; c < 3; c++) flat[i + c] = px[i + c] * a + 255 * (1 - a); flat[i + 3] = 255; }
   writePNG(path.join(outDir, st.id + ".png"), src.w, src.h, flat);
-  const pv = Lines.render(F, s, { x: 0, y: 0, w: src.w, h: src.h }, 0.3, atlas), pw = Math.round(src.w * 0.3), ph = Math.round(src.h * 0.3);
+  const pv = LR(F, s, { x: 0, y: 0, w: src.w, h: src.h }, 0.3), pw = Math.round(src.w * 0.3), ph = Math.round(src.h * 0.3);
   writePNG(path.join(outDir, st.id + "_preview.png"), pw, ph, pv);
   if (args.includes("--check")) {
     const one = renderTiled(F, s, Math.max(src.w, src.h));

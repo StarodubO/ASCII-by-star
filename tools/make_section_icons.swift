@@ -17,6 +17,9 @@ let icons: [(String, String, UInt32)] = [
   ("lnColour", "palette", 0xbe185d), ("lnUnder", "paint-bucket", 0x7c3aed), ("lnLayers", "layers", 0x475569), ("lnLabels", "hash", 0xa16207),
   ("mpArea", "map-pin", 0xdc2626), ("mpLook", "sparkles", 0x0d9488), ("mpAreas", "trees", 0x15803d), ("mpLines", "route", 0xd97706),
   ("mpBg", "image", 0x6d28d9), ("mpLayers", "layers", 0x475569),
+  ("dtLook", "sparkles", 0xe95d2b), ("dtPixels", "grid-2x2", 0x2563eb), ("dtColors", "palette", 0xb8232f), ("dtAlgo", "grip", 0x7c3aed),
+  ("dtAdjust", "sliders-horizontal", 0x737373), ("dtAlpha", "square-dashed", 0x0891b2), ("dtEdit", "pencil", 0x0d9488), ("dtLayers", "layers", 0x475569),
+  ("dtGlitch", "zap", 0xa21caf), ("lnGlitch", "zap", 0xa21caf), ("mpGlitch", "zap", 0xa21caf),
 ]
 let S = 36, inset: CGFloat = 7
 for (id, name, rgb) in icons {

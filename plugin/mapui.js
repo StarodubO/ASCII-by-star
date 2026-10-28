@@ -8,6 +8,8 @@ const lfs = uxp.storage.localFileSystem, formats = uxp.storage.formats;
 const Features = require("./features.js");
 const MapHeights = require("./map.js");
 const { makeSlider, onDoubleClick, SLIDER_HTML } = require("./slider.js");
+const Glitch = require("./glitch.js");
+const { setupGlitchUI } = require("./glitchui.js");
 const { createViewer } = require("./viewer.js");
 const { makePresetBox } = require("./presetbox.js");
 const { makeHistory } = require("./history.js");
@@ -24,13 +26,19 @@ const SLIDERS = {
   creditSize: ["Size", 8, 80, 0.5, "px", "Height of the credit line."],
   roadsCasingWidth: ["Outline width", 0, 6, 0.1, "px", "Width of the outline on each side of a road."],
   roadsTunnels: ["Tunnels", 0, 1, 0.01, pct, "Opacity of roads and railways in tunnels (0 hides them)."],
+  namesSize: ["Size", 8, 120, 0.5, "px", "Size of a village's name. Cities are bigger, districts and points of interest smaller."],
+  namesMax: ["At most", 1, 300, 1, (v) => Math.round(v) + " names", "The most names on the map (the most important ones)."],
+  namesGap: ["Room", 0, 200, 1, "px", "The least space between two names. More room = fewer names."],
+  namesTracking: ["Letter spacing", 0, 1.5, 0.01, pct, "Extra space between the letters."],
+  namesHaloWidth: ["Outline width", 0.02, 0.5, 0.01, pct, "Width of the outline around the letters, × their size."],
 };
 for (const c of Features.CATS) {
   SLIDERS[c.id + "Opacity"] = ["Opacity", 0, 1, 0.01, pct, `Opacity of ${c.name.toLowerCase()}.`];
   if (c.kind === "line") SLIDERS[c.id + "Width"] = ["Width", 0.2, 30, 0.1, "px", `Width of ${c.name.toLowerCase()} (main ones are wider, small ones thinner).`];
 }
-const COLOURS = { bgColor: "mp_bg", creditColor: "mp_credit", roadsCasingColor: "mp_roadsCasingColor", roadsMajorColor: "mp_roadsMajorColor" };
-const CHECKS = { mp_roadsMinor: "roadsMinor", mp_roadsCasing: "roadsCasing", mp_roadsMajorOn: "roadsMajorOn", mp_riversStreams: "riversStreams", mp_creditOn: "creditOn" };
+const COLOURS = { bgColor: "mp_bg", creditColor: "mp_credit", roadsCasingColor: "mp_roadsCasingColor", roadsMajorColor: "mp_roadsMajorColor", namesColor: "mp_namesColor", namesWaterColor: "mp_namesWaterColor", namesHaloColor: "mp_namesHaloColor" };
+const CHECKS = { mp_roadsMinor: "roadsMinor", mp_roadsCasing: "roadsCasing", mp_roadsMajorOn: "roadsMajorOn", mp_riversStreams: "riversStreams", mp_creditOn: "creditOn",
+  mp_namesOn: "namesOn", mp_namesPlaces: "namesPlaces", mp_namesWater: "namesWater", mp_namesPeaks: "namesPeaks", mp_namesPoi: "namesPoi", mp_namesUpper: "namesUpper", mp_namesDots: "namesDots", mp_namesHalo: "namesHalo" };
 for (const c of Features.CATS) { COLOURS[c.id + "Color"] = "mp_" + c.id; CHECKS["mp_" + c.id + "On"] = c.id + "On"; }
 // Colour sets for Randomize: background, built-up, green, bare, water, buildings, roads, outline, main roads, rail
 const PALETTES = [
@@ -65,7 +73,15 @@ module.exports = function setupMap(h) {
   });
   const save = () => { saveJSON("gf:map:last", M); hist.note(); };
   const saveArea = () => saveJSON("gf:mapArea", area);
-  const atlas = () => (h.baseAtlas ? h.baseAtlas() : null);
+  // the glyphs: the built-in atlas, or one that also has the names' characters (rendered by Photoshop once)
+  let namesAtlas = null, pickerSync = null; // pickerSync: shows the names' font in its picker
+  const atlas = () => (M.namesOn && namesAtlas) || (h.baseAtlas ? h.baseAtlas() : null);
+  const creditAtlas = () => (h.baseAtlas ? h.baseAtlas() : null); // the credit line stays in the built-in font
+  async function readyNames(P) { // outside executeAsModal
+    if (!M.namesOn || !P || !h.atlasFor) return;
+    try { namesAtlas = await h.atlasFor(Features.nameChars(P, M), M.namesFont || "", M.namesFontName || ""); }
+    catch (e) { console.error(e); namesAtlas = null; if (M.namesFont) status(`Couldn't render ${M.namesFontName || M.namesFont}: ${errMsg(e)}. Using the built-in font.`, true); }
+  }
   const live = createLive({ btn: $("mpLive"), label: "Map", status, errMsg });
   const isGroup = (l) => l && (l.kind === constants.LayerKind.GROUP || String(l.kind) === "group");
   const isMapGroup = (l) => (isGroup(l) || isSmart(l)) && GROUP_RE.test(String(l.name)); // a group, or a live smart object
@@ -135,6 +151,12 @@ module.exports = function setupMap(h) {
 
   // ---------- preview ----------
   let pvTimer = null, pvRunning = null, pvAgain = false, pv = null, viewer = null;
+  // Features.render with the glitch (part: one layer's kind or null; cache: the glitch's strips)
+  const draw = (P, s, rect, z, part, frame, cache) => (Glitch.active(s)
+    ? Glitch.renderWith((r, zz) => Features.render(P, s, r, zz, part, atlas(), creditAtlas()), rect, z, frame.w, frame.h, s, cache, String(part))
+    : Features.render(P, s, rect, z, part, atlas(), creditAtlas()));
+  const pvStrips = new Map();
+  let glitchUI = null;
   function schedule(delay) {
     save();
     if (!active) return;
@@ -160,14 +182,16 @@ module.exports = function setupMap(h) {
     const { frame } = await frameNow();
     const t0 = Date.now(), P = await featuresFor(frame, true);
     const first = !pv || pv.frame.w !== frame.w || pv.frame.h !== frame.h;
+    await readyNames(P);
     pv = { frame, P, loadMs: Date.now() - t0 };
     if (first) viewer.setCentre(frame.w / 2, frame.h / 2);
     const n = Features.counts(P, M);
     showAreaInfo(`${area.widthKm < 10 ? area.widthKm.toFixed(1) : Math.round(area.widthKm)} km wide · ${n.all} features`);
     status(`${n.roads} roads · ${n.buildings} buildings · ${n.rivers + n.water} water · ${n.rail} rail`);
+    pvStrips.clear(); // the settings may have changed
     await viewer.refresh();
     const doc = activeDoc();
-    if (live.on && doc && live.info().sourceDocId === doc.id) { const s = JSON.parse(JSON.stringify(M)), P0 = P; live.update((v) => Features.render(P0, s, v, 1, null, atlas())); }
+    if (live.on && doc && live.info().sourceDocId === doc.id) { const s = JSON.parse(JSON.stringify(M)), P0 = P, c = new Map(), fr = frame; live.update((v) => draw(P0, s, v, 1, null, fr, c)); }
   }
   // The whole map as one smart object at the top, its contents open as the live window (live.js).
   async function toggleLive() {
@@ -175,13 +199,13 @@ module.exports = function setupMap(h) {
     const doc = activeDoc();
     if (!doc) return status("Open (or make) a document for the map first: the map fills its canvas.", true);
     let frame, P;
-    try { frame = (await frameNow()).frame; P = await featuresFor(frame); } catch (e) { return status(errMsg(e), true); }
+    try { frame = (await frameNow()).frame; P = await featuresFor(frame); await readyNames(P); } catch (e) { return status(errMsg(e), true); }
     const s = JSON.parse(JSON.stringify(M)), old = editing && editing.docId === doc.id ? findLayerById(doc, editing.groupId) : null;
     busy = true;
     let so = null;
     try {
       so = await live.open({
-        doc, frame, name: `${placeName()} Map`, reuse: isSmart(old) ? old : null, draw: (v) => Features.render(P, s, v, 1, null, atlas()),
+        doc, frame, name: `${placeName()} Map`, reuse: isSmart(old) ? old : null, draw: ((c) => (v) => draw(P, s, v, 1, null, frame, c))(new Map()),
         place: async (layer) => {
           const board = frame.artboardId != null ? findLayerById(doc, frame.artboardId) : null;
           if (board && board.layers && board.layers.length) { if (board.layers[0].id !== layer.id) await layer.move(board.layers[0], constants.ElementPlacement.PLACEBEFORE); }
@@ -197,7 +221,7 @@ module.exports = function setupMap(h) {
   }
   async function renderRegion(rect, z) {
     if (!pv) return null;
-    const px = Features.render(pv.P, M, rect, z, null, atlas()), W = Math.max(1, Math.round(rect.w * z)), H = Math.max(1, Math.round(rect.h * z)), rgb = new Uint8Array(W * H * 3);
+    const px = draw(pv.P, M, rect, z, null, pv.frame, pvStrips), W = Math.max(1, Math.round(rect.w * z)), H = Math.max(1, Math.round(rect.h * z)), rgb = new Uint8Array(W * H * 3);
     for (let i = 0; i < W * H; i++) { const a = px[i * 4 + 3] / 255; for (let c = 0; c < 3; c++) rgb[i * 3 + c] = px[i * 4 + c] * a + 255 * (1 - a); }
     return { rgb, w: W, h: H };
   }
@@ -211,7 +235,7 @@ module.exports = function setupMap(h) {
     while (pvRunning) await pvRunning;
     const t0 = Date.now();
     let frame, P;
-    try { frame = (await frameNow()).frame; P = await featuresFor(frame); } catch (e) { return status(errMsg(e), true); }
+    try { frame = (await frameNow()).frame; P = await featuresFor(frame); await readyNames(P); } catch (e) { return status(errMsg(e), true); }
     busy = true;
     try {
       await core.executeAsModal(async (ctx) => {
@@ -234,14 +258,14 @@ module.exports = function setupMap(h) {
           const depth = bitDepth(doc), gray = isGray(doc);
           let profile = null;
           try { profile = doc.colorProfileName || null; } catch (e) { profile = null; }
-          const nT = Math.ceil(frame.w / TILE) * Math.ceil(frame.h / TILE);
+          const nT = Math.ceil(frame.w / TILE) * Math.ceil(frame.h / TILE), strips = new Map();
           await withoutSelection(doc, async () => {
             for (let li = 0; li < parts.length; li++) {
               let k = 0;
               for (let ty = 0; ty < frame.h; ty += TILE) for (let tx = 0; tx < frame.w; tx += TILE) {
                 status(`Drawing ${parts[li].name.toLowerCase()}… ${++k}/${nT}`);
                 const tw = Math.min(TILE, frame.w - tx), th = Math.min(TILE, frame.h - ty);
-                const px = Features.render(P, M, { x: tx, y: ty, w: tw, h: th }, 1, parts[li].id, atlas());
+                const px = draw(P, M, { x: tx, y: ty, w: tw, h: th }, 1, parts[li].id, frame, strips);
                 if (!hasAlpha(px)) continue;
                 const id = await makeImageData(convertOut(new Uint8Array(px.buffer), tw * th, depth, gray), tw, th, gray, profile);
                 try { await imaging.putPixels({ documentID: doc.id, layerID: layers[li].id, imageData: id, replace: false, targetBounds: { left: frame.x + tx, top: frame.y + ty }, commandName: "Map" }); } // replace: true would clear the tiles written before
@@ -267,7 +291,7 @@ module.exports = function setupMap(h) {
     const doc = activeDoc(), cat = $("mpSelectWhat").value;
     if (!doc) return status("Open a document first.", true);
     let frame, P;
-    try { frame = (await frameNow()).frame; P = await featuresFor(frame); } catch (e) { return status(errMsg(e), true); }
+    try { frame = (await frameNow()).frame; P = await featuresFor(frame); await readyNames(P); } catch (e) { return status(errMsg(e), true); }
     busy = true;
     try {
       await core.executeAsModal(async () => {
@@ -285,9 +309,9 @@ module.exports = function setupMap(h) {
   async function exportSVG() {
     if (!area) return status("Choose an area first: type a place or paste a Google Maps link, then press Find.", true);
     let frame, P;
-    try { frame = (await frameNow()).frame; P = await featuresFor(frame); } catch (e) { return status(errMsg(e), true); }
+    try { frame = (await frameNow()).frame; P = await featuresFor(frame); await readyNames(P); } catch (e) { return status(errMsg(e), true); }
     try {
-      const svg = Features.toSVG(P, M);
+      const svg = Features.toSVG(P, M, atlas(), creditAtlas());
       const doc = activeDoc();
       const base = doc ? docBaseName(doc) + "-" : "";
       const name = `${base}${placeName().toLowerCase().replace(/[^a-z0-9]+/g, "-")}-map.svg`;
@@ -331,6 +355,11 @@ module.exports = function setupMap(h) {
     for (const [id, k] of Object.entries(CHECKS)) { const el = $(id); el.checked = !!M[k]; if (el.syncChecked) el.syncChecked(); }
     for (const [k, id] of Object.entries(COLOURS)) { $(id + "Swatch").style.backgroundColor = M[k]; $(id + "Hex").value = M[k]; }
     const bg = $("mpBgMode"); bg.value = M.bgMode; if (bg.ddUpdate) bg.ddUpdate();
+    const lang = $("mpNamesLang"); lang.value = M.namesLang; if (lang.ddUpdate) lang.ddUpdate();
+    const pk = $("mpNamesPeakText"); pk.value = M.namesPeakText; if (pk.ddUpdate) pk.ddUpdate();
+    $("mpPeakTextRow").classList.toggle("hidden", !M.namesPeaks);
+    show("mp_namesRows", M.namesOn); show("mp_namesHaloRows", M.namesHalo);
+    if (pickerSync) pickerSync();
     if (area && !$("mpPlace").value) $("mpPlace").value = area.place || "";
     for (const c of Features.CATS) show("mp_" + c.id + "Rows", M[c.id + "On"]);
     show("mp_casingColorRow", M.roadsCasing); show("msl-roadsCasingWidth", M.roadsCasing);
@@ -338,15 +367,22 @@ module.exports = function setupMap(h) {
     show("mp_bgRow", M.bgMode !== "transparent");
     show("mp_creditRows", M.creditOn);
     showAreaInfo();
+    if (glitchUI) glitchUI.sync();
     if (h.refreshFields) h.refreshFields();
   }
-  function applyLook(st) { M = fresh(Object.assign({}, Features.DEFAULTS, st)); sync(); schedule(0); }
+  // which names show stays when a look (or Randomize) doesn't set it
+  const NAME_KEEP = ["namesFont", "namesFontName", "namesOn", "namesPlaces", "namesWater", "namesPeaks", "namesPeakText", "namesPoi", "namesLang", "namesMax"];
+  function applyLook(st) {
+    const keep = {};
+    for (const k of NAME_KEEP) if (st[k] === undefined) keep[k] = M[k];
+    M = fresh(Object.assign({}, Features.DEFAULTS, st, keep)); sync(); schedule(0);
+  }
   function randomize() {
     const R = Math.random, pick = (a) => a[Math.floor(R() * a.length)], between = (a, b) => Math.round((a + (b - a) * R()) * 10) / 10;
     const [bg, built, green, bare, water, bld, road, casing, major, rail] = pick(PALETTES);
     applyLook({
       bgMode: R() < 0.15 ? "transparent" : "color", bgColor: bg, builtColor: built, greenColor: green, bareColor: bare, waterColor: water, riversColor: water, buildingsColor: bld,
-      roadsColor: road, roadsCasingColor: casing, roadsMajorColor: major, railColor: rail, creditColor: rail,
+      roadsColor: road, roadsCasingColor: casing, roadsMajorColor: major, railColor: rail, creditColor: rail, namesColor: rail, namesWaterColor: rail, namesHaloColor: bg,
       builtOn: R() < 0.6, greenOn: R() < 0.8, bareOn: R() < 0.7, buildingsOn: R() < 0.7, roadsMinor: R() < 0.6, roadsCasing: R() < 0.5, roadsMajorOn: R() < 0.6,
       roadsWidth: between(2, 9), riversWidth: between(1.5, 6), railWidth: between(1, 4), roadsCasingWidth: between(0.6, 2), riversStreams: R() < 0.6,
     });
@@ -377,6 +413,10 @@ module.exports = function setupMap(h) {
       });
     }
     $("mpBgMode").addEventListener("change", () => { M.bgMode = $("mpBgMode").value; sync(); schedule(0); });
+    const fontPicker = h.makeFontPicker ? h.makeFontPicker("mp", () => ({ font: M.namesFont, name: M.namesFontName }), (ps, name) => { M.namesFont = ps; M.namesFontName = name; sync(); schedule(0); }) : null;
+    pickerSync = () => fontPicker && fontPicker.fill();
+    $("mpNamesLang").addEventListener("change", () => { M.namesLang = $("mpNamesLang").value; sync(); schedule(0); });
+    $("mpNamesPeakText").addEventListener("change", () => { M.namesPeakText = $("mpNamesPeakText").value; sync(); schedule(0); });
     $("mpFind").addEventListener("click", findPlace);
     $("mpPlace").addEventListener("keydown", (e) => { if (e.key === "Enter") setTimeout(findPlace, 0); });
     $("mpToLines").addEventListener("click", () => {
@@ -403,6 +443,7 @@ module.exports = function setupMap(h) {
       onFitDrag: moveArea, bleed: BLEED,
     });
     $("mpPreviewWrap").title = "Drag to move around the map (in Fit). Click to zoom in.";
+    glitchUI = setupGlitchUI({ prefix: "mp", $, get: () => M, changed: () => schedule(), onCheck: h.onCheck, before: false });
     $("mpApply").addEventListener("click", () => apply(false));
     $("mpLive").addEventListener("click", toggleLive);
     $("mpExportSvg").addEventListener("click", exportSVG);
